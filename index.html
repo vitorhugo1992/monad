@@ -31,8 +31,11 @@ const PARAMS = {
   // ?day=5|10|30 picks the day length in minutes.
   // At night cells rest (circadian clock): upkeep and ageing slow to `rest` as the sun goes down.
   diel: { dayLength: 300, dayMinutes: [5, 10, 30], start: 0.08, dayFrac: 0.65, moon: 0.01, rest: 0.12 },
-  // Nutrient pulses: deep water rises from the floor in a plume at long random intervals.
-  pulses: { firstMin: 90, firstMax: 240, gapMin: 180, gapMax: 540, amount: 60, width: 16, rise: 2.5, top: 0.3 },
+  // Wind: a slow seeded weather process. Its target changes at random intervals (calm spells common,
+  // storms rarer) and the wind eases toward it. It roughens the water and drives upwelling.
+  wind: { tau: 40, gapMin: 60, gapMax: 180, start: 0.2 },
+  // Nutrient pulses: wind-driven upwelling. During strong wind a plume of deep water rises from the floor.
+  pulses: { storm: 0.6, rate: 0.05, refractory: 150, amount: 60, width: 16, rise: 2.5, top: 0.3 },
   nutrients: {
     deep: 1.0,                          // concentration of upwelled deep water (held below the bottom row)
     surface: 0.2,                       // initial surface concentration
@@ -67,6 +70,7 @@ const PARAMS = {
     halfSat: 0.3,                       // nutrient half-saturation at size 1, proportional to size
     maintenance: 0.002,                 // slowed by the night rest (diel.rest)
     uptake: 1.3,                        // nutrient units per unit energy per unit biomass
+    vigorTau: 8,                        // s; smoothing of each cell's recorded growth conditions (observed only)
   },
   // Rule 3: division
   division: { threshold: 1.0, maxCells: 400, spread: 0.6 },
@@ -186,7 +190,17 @@ const PARAMS = {
   ambient: { rate: 2.5 },
   // Motile cells swim small helices around their simulated position (seen side-on as ellipses);
   // diatoms have no flagella and only rock. Visual only: the simulation never sees it.
-  swim: { amp: 1.1, flatten: 0.6, periodMin: 2.5, periodMax: 5, rock: 0.3, rockPeriod: 7 },
+  // Activity shows how a cell is doing: day species (flagellates) swim lively when they are growing well and
+  // sleep at night; dinoflagellates are the night swimmers, livelier in the dark while they have reserves.
+  swim: { amp: 1.1, flatten: 0.6, periodMin: 2.5, periodMax: 5, rock: 0.3, rockPeriod: 7,
+          sleepy: 0.25, lively: 1.3, sleepPeriod: 2.2, livePeriod: 0.7, vigorFull: 0.45 },
+  // Sea state from the wind: wave height, how fast the water moves, refraction, marine snow sway,
+  // and when rays form (a glassy surface focuses nothing; choppy water breaks rays into flickers).
+  sea: {
+    waveCalm: 0.35, waveRough: 1.9, paceCalm: 0.5, paceRough: 1.8, shimmerCalm: 0.25, shimmerRough: 1.7, swayCalm: 0.4, swayRough: 2.5,
+    focusFrom: 0.12, focusFull: 0.32, breakFrom: 0.55, breakFull: 0.9, broken: 0.8,
+  },
+  murk: { from: 0.8, full: 3 },         // bloom biomass summed down the upper column: rays fade in murky water
   hud: { x: 4, y: 290, line: 7, visibleMs: 6000, fadeMs: 2000 },
   debug: { sampleEvery: 100, historyLength: 180, frameSamples: 120, graphY: 172, graphH: 48, mapX: 126, mapY: 6, mapCell: 2 },
 };
@@ -529,11 +543,11 @@ function lifespanFor(c, rng) {
 function createCell(w, x, y, g, energy, parentId, spriteSeed) {
   const c = {
     id: w.nextId++, parentId, x, y, vx: 0, vy: 0,
-    energy, held: 0, age: 0, lifespan: 0,
+    energy, held: 0, age: 0, lifespan: 0, vigor: 0,   // vigor: smoothed growth conditions, observed only
     theta: w.rng.next() * TAU, flashTick: -1000, dying: 0, grazed: false,
     g, spriteSeed, gen: 0,
     r: 0, biomass: 0, gainK: 0, halfSat: 0, maintK: 0, targetLight: 0,
-    spr: null, ox: 0, oy: 0,   // sprite cache and swimming offset: render only
+    spr: null, ox: 0, oy: 0, swimPh: 0,   // sprite cache and swimming: render only
   };
   deriveTraits(c);
   c.lifespan = lifespanFor(c, w.rng);
@@ -558,15 +572,16 @@ function buildHash(w) {
 }
 
 function createWorld(seed, founderCount, dayLength) {
-  const F = PARAMS.founders, P = PARAMS.pulses, rng = makeRng(seed);
+  const F = PARAMS.founders, rng = makeRng(seed);
   const w = {
     seed, rng, tick: 0, nextId: 1, fields: createFields(), cells: [], cysts: [], hash: createHash(), upwelled: 0, initialInventory: 0,
     dayLength: dayLength || PARAMS.diel.dayLength, surfaceLight: 1,
-    pulses: [], nextPulse: 0,
+    pulses: [], lastPulse: -1e9,
+    wind: PARAMS.wind.start, windTarget: PARAMS.wind.start, nextWind: 0,
     fallen: new Float64Array(PARAMS.grid.cols),   // detritus exported per column, ever (observed only, never read by the rules)
     deaths: { starved: 0, old: 0, grazed: 0 },     // observed only
   };
-  w.nextPulse = Math.floor(rng.range(P.firstMin, P.firstMax) * PARAMS.time.tickRate);
+  w.nextWind = Math.floor(rng.range(PARAMS.wind.gapMin, PARAMS.wind.gapMax) * PARAMS.time.tickRate);
   updateLight(w);
   const count = founderCount || F.count;
   for (let l = 0; l < F.lineages; l++) {
@@ -610,7 +625,7 @@ function worldChecksum(w) {
     h = Math.imul(h ^ CK_VIEW.getUint32(0), 16777619);
     h = Math.imul(h ^ CK_VIEW.getUint32(4), 16777619);
   };
-  mix(w.tick); mix(w.cells.length); mix(w.cysts.length);
+  mix(w.tick); mix(w.cells.length); mix(w.cysts.length); mix(w.wind);
   for (const c of w.cells) { mix(c.id); mix(c.x); mix(c.y); mix(c.energy); mix(c.theta); }
   for (let i = 0; i < w.fields.nut.length; i += 7) { mix(w.fields.nut[i]); mix(w.fields.graz[i]); }
   return h >>> 0;
@@ -625,6 +640,7 @@ function stepWorld(w) {
   w.tick++;
   updateLight(w);
   w.upwelled += diffuseNutrients(w.fields, dt);
+  updateWind(w, dt);
   updatePulses(w, dt);
   buildHash(w);
   for (let i = 0; i < cells.length; i++) if (!cells[i].dying) steer(w, cells[i], dt);
@@ -705,6 +721,7 @@ function metabolise(w, c, dt, pace) {
   const want = gain * PARAMS.metabolism.uptake * c.biomass;
   const got = want > 0 ? takeField(f.nut, c.x, c.y, want) : 0;
   c.energy += (want > 0 ? gain * got / want : 0) - c.maintK * pace * dt;
+  c.vigor += (L * N / (N + c.halfSat) - c.vigor) * dt / PARAMS.metabolism.vigorTau;   // recorded, never read by the rules
   c.held += got;
 }
 
@@ -714,11 +731,25 @@ function advancePhase(w, c, dt) {
   if (c.theta >= TAU) { c.theta -= TAU; c.flashTick = w.tick; }
 }
 
-// Nutrient pulses: at long random intervals a plume of deep water rises from the floor,
+// Weather: the wind eases toward a target that changes at random intervals.
+// Targets are r^1.5 of a uniform draw, so calm spells are common and storms rarer.
+function updateWind(w, dt) {
+  const Wd = PARAMS.wind, rng = w.rng;
+  if (w.tick >= w.nextWind) {
+    const r = rng.next();
+    w.windTarget = r * Math.sqrt(r);
+    w.nextWind = w.tick + Math.floor(rng.range(Wd.gapMin, Wd.gapMax) * PARAMS.time.tickRate);
+  }
+  w.wind += (w.windTarget - w.wind) * dt / Wd.tau;
+}
+
+// Nutrient pulses: wind-driven upwelling. During strong wind a plume of deep water rises from the floor,
 // releasing its nutrients evenly along its path with a Gaussian horizontal profile.
 function updatePulses(w, dt) {
   const P = PARAMS.pulses, cols = PARAMS.grid.cols, rng = w.rng;
-  if (w.tick >= w.nextPulse) {
+  if (w.wind > P.storm && w.tick - w.lastPulse > P.refractory * PARAMS.time.tickRate
+      && rng.chance(P.rate * (w.wind - P.storm) / (1 - P.storm) * dt)) {
+    w.lastPulse = w.tick;
     const x = rng.range(P.width, W - P.width), y = H - PARAMS.world.floor, top = H * P.top * rng.range(0.7, 1.3);
     const weights = new Float64Array(cols);
     let sum = 0;
@@ -729,7 +760,6 @@ function updatePulses(w, dt) {
     }
     for (let i = 0; i < cols; i++) weights[i] /= sum;
     w.pulses.push({ x, y, y0: y, top, age: 0, perTick: P.amount * P.rise * dt / (y - top), weights });
-    w.nextPulse = w.tick + Math.floor(rng.range(P.gapMin, P.gapMax) * PARAMS.time.tickRate);
   }
   let k = 0;
   for (let n = 0; n < w.pulses.length; n++) {
@@ -809,6 +839,7 @@ function divide(w, c) {
   b.held = c.held * 0.5;
   b.vx = c.vx; b.vy = c.vy;
   b.theta = c.theta;
+  b.vigor = c.vigor;
 
   c.x -= ox; c.y -= oy;
   c.g = gA;
@@ -880,7 +911,7 @@ const ZOOMS = PARAMS.camera.levels;
 const RAY_DEPTH = H * R.rayDepth, SHIMMER_DEPTH = H * R.shimmerDepth, CAUSTIC_H = Math.ceil(H * R.causticDepth);
 const FLOOR_TOP = H - PARAMS.world.floor;
 const FLOOR_MIN = FLOOR_TOP - PARAMS.floor.rippleA - PARAMS.floor.rippleB;
-const SURFACE_MAX = PARAMS.surface.base + PARAMS.surface.ampA + PARAMS.surface.ampB + 1;
+const SURFACE_MAX = PARAMS.surface.base + (PARAMS.surface.ampA + PARAMS.surface.ampB) * PARAMS.sea.waveRough + 1;
 
 const view = {
   canvas: null, ctx: null, off: null, offCtx: null, img: null,
@@ -998,6 +1029,36 @@ function waterBand(wy) {
 
 // Clock for the water's own motion (seconds); -1 until the loop starts, then composeFrame falls back to sim time
 let ambientT = -1;
+// The water's own pace follows the wind, so it is integrated: calm water slows, storms hurry it
+let waterT = 0, lastTa = -1;
+const seaNow = { wave: 1, shimmer: 1, sway: 1, focus: 1, broken: 0 };
+const murkCol = new Float64Array(W);   // ray clarity per screen column
+
+function updateSea(w, ta) {
+  const Se = PARAMS.sea, wind = w.wind;
+  const dA = lastTa < 0 ? 0 : clamp(ta - lastTa, 0, 2);
+  lastTa = ta;
+  if (waterT === 0) waterT = ta;
+  waterT += dA * (Se.paceCalm + (Se.paceRough - Se.paceCalm) * wind);
+  seaNow.wave = Se.waveCalm + (Se.waveRough - Se.waveCalm) * wind;
+  seaNow.shimmer = Se.shimmerCalm + (Se.shimmerRough - Se.shimmerCalm) * wind;
+  seaNow.sway = Se.swayCalm + (Se.swayRough - Se.swayCalm) * wind;
+  seaNow.focus = smoothstep(Se.focusFrom, Se.focusFull, wind);
+  seaNow.broken = smoothstep(Se.breakFrom, Se.breakFull, wind) * Se.broken;
+  // Murk: bloom biomass summed down the upper half of each grid column
+  const { cols, rows } = PARAMS.grid, M = PARAMS.murk, B = PARAMS.bloom, colMurk = updateSea.col || (updateSea.col = new Float64Array(cols));
+  for (let i = 0; i < cols; i++) {
+    let sum = 0;
+    for (let j = 0; j < rows >> 1; j++) sum += chl[j * cols + i];
+    colMurk[i] = 1 - smoothstep(M.from, M.full, sum / B.full);
+  }
+  const invz = 1 / cam.zoom;
+  for (let px = 0; px < W; px++) {
+    const wx = (view.bx0 + px + 0.5) * invz;
+    murkCol[px] = colMurk[clamp(Math.floor(wx / GRID_W), 0, cols - 1)];
+  }
+  return dA;
+}
 
 // Brightness of rays and caustics: sunlight by day, a little moonlight at night
 let dayLight = 1;
@@ -1027,7 +1088,12 @@ function updateRays(t) {
     s /= norm;
     if (s <= thr) { rayTable[k] = 0; continue; }
     const r = (s - thr) / (1 - thr), env = 0.55 + 0.45 * Math.sin(u * R.rayGroups + t * R.rayGroupSpeed);
-    rayTable[k] = r * r * env * 4;
+    let v = r * r * env * 4 * seaNow.focus;
+    if (seaNow.broken > 0) {   // choppy water shatters rays into flickering fragments
+      const f = Math.sin(u * 1.7 + t * 3.1) * Math.sin(u * 0.63 - t * 2.3);
+      v *= 1 - seaNow.broken * (f < 0.1 ? 1 : 0.3);
+    }
+    rayTable[k] = v;
   }
 }
 
@@ -1038,7 +1104,7 @@ function updateShimmer(t) {
     const wy = (view.by0 + py + 0.5) * invz;
     if (wy >= SHIMMER_DEPTH) { rowShift[py] = 0; continue; }
     const f = 1 - wy / SHIMMER_DEPTH;
-    rowShift[py] = R.shimmerAmp * f * f * (Math.sin(wy * R.shimmerK1 + t * R.shimmerW1) + 0.6 * Math.sin(wy * R.shimmerK2 - t * R.shimmerW2)) / 1.6;
+    rowShift[py] = R.shimmerAmp * seaNow.shimmer * f * f * (Math.sin(wy * R.shimmerK1 + t * R.shimmerW1) + 0.6 * Math.sin(wy * R.shimmerK2 - t * R.shimmerW2)) / 1.6;
   }
 }
 
@@ -1092,15 +1158,15 @@ function causticAt(wx, wy) {
 // ---- Surface, seen from below ----
 function surfaceY(wx, t) {
   const S = PARAMS.surface;
-  return S.base + S.ampA * Math.sin(wx * S.freqA + t * S.speedA) + S.ampB * Math.sin(wx * S.freqB - t * S.speedB);
+  return S.base + seaNow.wave * (S.ampA * Math.sin(wx * S.freqA + t * S.speedA) + S.ampB * Math.sin(wx * S.freqB - t * S.speedB));
 }
 
 function surfacePixel(wx, wy, t, b) {
   const S = PARAMS.surface;
-  const slope = S.ampA * S.freqA * Math.cos(wx * S.freqA + t * S.speedA) + S.ampB * S.freqB * Math.cos(wx * S.freqB - t * S.speedB);
+  const slope = seaNow.wave * (S.ampA * S.freqA * Math.cos(wx * S.freqA + t * S.speedA) + S.ampB * S.freqB * Math.cos(wx * S.freqB - t * S.speedB));
   if (Math.abs(slope - sun.slope) < S.glintWidth
       && hash01(Math.floor(wx * 2) * 131 + Math.floor(t * S.twinkle) * 7919) < S.glintChance) return dayLight > 0.6 ? COL.GLOW : COL.FOAM;
-  if (rayAt(wx, wy) * dayLight > S.rootLit) return COL.FOAM;
+  if (rayAt(wx, wy) * dayLight * murkCol[clamp(toSX(wx), 0, W - 1)] > S.rootLit) return COL.FOAM;
   return b < 0.5 ? COL.SHAFT : COL.SHAFT - 1;
 }
 
@@ -1181,7 +1247,7 @@ function drawBackground(t) {
         if (wy >= fy) { ib[row + px] = sedimentPixel(wx0 + px * invz, wy, wy - fy, b); continue; }
       }
       let v = base;
-      if (sf > 0) { const k = (u0 + px * du) | 0; if (k >= 0 && k < rayTable.length) v += rayTable[k] * sf; }
+      if (sf > 0) { const k = (u0 + px * du) | 0; if (k >= 0 && k < rayTable.length) v += rayTable[k] * sf * murkCol[px]; }
       let i = v | 0;
       const frac = v - i;
       if (frac > seamStart && b < (frac - seamStart) / R.seam) i++;      // flat bands, dithered seams
@@ -1241,7 +1307,7 @@ function drawParticles(L, seed, t, near) {
   for (let i = 0; i < L.count; i++) {
     const h = seed + i * 5;
     const speed = L.speedMin + hash01(h + 3) * (L.speedMax - L.speedMin);
-    const lx = hash01(h + 1) * W + Math.sin(t * 0.2 + i) * L.sway, ly = hash01(h + 2) * H + t * speed;
+    const lx = hash01(h + 1) * W + Math.sin(waterT * 0.2 + i) * L.sway * seaNow.sway, ly = hash01(h + 2) * H + t * speed;
     const sx = Math.floor(mod((lx - ccx * L.parallax) * zp + W / 2, W * zp));
     const sy = Math.floor(mod((ly - ccy * L.parallax) * zp + H / 2, H * zp));
     if (sx >= W || sy >= H) continue;
@@ -1501,16 +1567,24 @@ function spriteFor(c, rpx, step) {
 }
 
 // Slow tumbling: each cell turns at its own pace with a gentle sway
-// Helical swimming of motile cells; diatoms only rock
-function updateSwim(w, ta) {
-  const Sw = PARAMS.swim, Dn = PARAMS.dino;
+// Helical swimming of motile cells; diatoms only rock. How lively a cell swims shows how it is doing:
+// day species follow their recorded growth conditions (vigor) and sleep at night,
+// dinoflagellates swim at night while they have energy and rest by day.
+function updateSwim(w, dA, ta) {
+  const Sw = PARAMS.swim, Dn = PARAMS.dino, dark = 1 - smoothstep(PARAMS.drift.darkLo, PARAMS.drift.darkHi, w.surfaceLight);
   for (const c of w.cells) {
     if (c.dying) continue;
-    const h1 = hash01(c.id * 17 + 1), h2 = hash01(c.id * 17 + 2);
-    const motile = 1 - smoothstep(Dn.fade, Dn.gone, c.g.timbre);
-    const period = Sw.periodMin + h2 * (Sw.periodMax - Sw.periodMin), a = ta * TAU / period + h1 * TAU;
-    const amp = Sw.amp * motile * (0.6 + 0.4 * h2);
+    const h1 = hash01(c.id * 17 + 1), h2 = hash01(c.id * 17 + 2), tb = c.g.timbre;
+    const motile = 1 - smoothstep(Dn.fade, Dn.gone, tb);
+    const nocturnal = smoothstep(Dn.from, Dn.full, tb);           // dinoflagellate forms (and the diatoms beyond, which don't swim)
+    const dayAct = clamp(c.vigor / Sw.vigorFull, 0, 1);
+    const nightAct = dark * clamp(c.energy * 2, 0, 1) + (1 - dark) * 0.15;
+    const act = dayAct + (nightAct - dayAct) * nocturnal;
+    const period = (Sw.periodMin + h2 * (Sw.periodMax - Sw.periodMin)) * (Sw.sleepPeriod + (Sw.livePeriod - Sw.sleepPeriod) * act);
+    c.swimPh += dA * TAU / period;
+    const amp = Sw.amp * motile * (0.6 + 0.4 * h2) * (Sw.sleepy + (Sw.lively - Sw.sleepy) * act);
     const rock = Sw.rock * (1 - motile) * Math.sin(ta * TAU / Sw.rockPeriod + h1 * TAU);
+    const a = c.swimPh + h1 * TAU;
     c.ox = amp * Math.cos(a) + rock;
     c.oy = amp * Sw.flatten * Math.sin(a) + rock * 0.5;
   }
@@ -1587,7 +1661,7 @@ function drawCell(c, tick, t) {
       if (pulse > 0 && BAYER[(((by + 1) & 3) << 2) | ((bx + 3) & 3)] < pulse) idx = LIGHT_UP[idx];   // soft bioluminescent swell
       if (sl > 0 || cl > 0) {                                                    // light shafts and caustics play over the cell
         const wx = (bx + 0.5) / z + rowShift[sy];
-        let lit = sl > 0 ? shaftAt(wx, wy) * sl : 0;
+        let lit = sl > 0 ? shaftAt(wx, wy) * sl * murkCol[sx] : 0;
         if (cl > 0 && causticAt(wx, wy) < cw) lit += cl;
         if (BAYER[(((by + 3) & 3) << 2) | ((bx + 1) & 3)] < lit) idx = LIGHT_UP[idx];
       }
@@ -1853,18 +1927,20 @@ function drawHud(w, now) {
 // All pixel work for one frame. Returns the time spent on the debug overlay, so frame timing can leave it out.
 function composeFrame(w, now) {
   const t = w.tick * TICK_DT, ta = ambientT >= 0 ? ambientT : t, P = PARAMS.particles;
+  let dA = 0;
   view.bx0 = clamp(Math.round(cam.x * cam.zoom), 0, Math.round(W * cam.zoom) - W);
   view.by0 = clamp(Math.round(cam.y * cam.zoom), 0, Math.round(H * cam.zoom) - H);
   buildDeadline = performance.now() + PARAMS.sprite.buildBudgetMs;
   const moon = PARAMS.timeOfDay.moonLight;
   dayLight = moon + (1 - moon) * w.surfaceLight;
   updateSun(dayPhase(w));
-  updateRays(ta);
-  updateShimmer(ta);
-  updateCaustics(ta, w.tick);
   updateBloom(w);
-  updateSwim(w, ta);
-  drawBackground(ta);
+  dA = updateSea(w, ta);
+  updateRays(waterT);
+  updateShimmer(waterT);
+  updateCaustics(waterT, w.tick);
+  updateSwim(w, dA, ta);
+  drawBackground(waterT);
   drawParticles(P.far, 1000, ta, false);
   drawParticles(P.mid, 2000, ta, false);
   drawPlumes(w);
@@ -1984,7 +2060,7 @@ function debugSample(w) {
   if (w.tick >= debug.nextSample) {
     let depth = 0, n = 0;
     for (const c of w.cells) if (!c.dying) { depth += c.y; n++; }
-    debug.history.push({ pop: n, nut: meanNutrient(w), depth: n ? depth / n / H : -1, light: w.surfaceLight });
+    debug.history.push({ pop: n, nut: meanNutrient(w), depth: n ? depth / n / H : -1, light: w.surfaceLight, wind: w.wind });
     if (debug.history.length > D.historyLength) debug.history.shift();
     debug.nextSample += D.sampleEvery;
   }
@@ -2057,13 +2133,13 @@ function drawDebug(w) {
     'MS ' + avg.toFixed(1) + '  P95 ' + p95.toFixed(1),
     'DROP ' + debug.droppedTicks,
     'CK ' + ck,
-    'DAY ' + dayPhase(w).toFixed(2) + '  SUN ' + w.surfaceLight.toFixed(2) + '  PLUME ' + w.pulses.length,
+    'DAY ' + dayPhase(w).toFixed(2) + ' SUN ' + w.surfaceLight.toFixed(2) + ' WIND ' + w.wind.toFixed(2) + ' PL ' + w.pulses.length,
     'DIED S ' + w.deaths.starved + ' O ' + w.deaths.old + ' G ' + w.deaths.grazed,
   ];
   for (let i = 0; i < lines.length; i++) drawText(3, 6 + i * 7, lines[i], COL.FOAM, 1);
   drawFieldMaps(w);
 
-  // Population (foam), mean nutrient (gold), mean cell depth (rose, down = deeper) and sunlight (slate)
+  // Population (foam), mean nutrient (gold), mean cell depth (rose, down = deeper), sunlight (slate), wind (emerald)
   // over the last ~10 minutes; dotted slate line = cap
   const gy = D.graphY, gh = D.graphH, ib = view.ibuf;
   for (let y = gy; y < gy + gh; y++) for (let x = 0; x < W; x++) ib[y * W + x] = COL.WATER;
@@ -2071,6 +2147,7 @@ function drawDebug(w) {
   const hist = debug.history, x0 = W - hist.length;
   for (let i = 0; i < hist.length; i++) {
     put(x0 + i, gy + gh - 1 - Math.round(hist[i].light * (gh - 1)), COL.SLATE);
+    put(x0 + i, gy + gh - 1 - Math.round(hist[i].wind * (gh - 1)), rampBase(EMERALD) + BASE);
     if (hist[i].depth >= 0) put(x0 + i, gy + Math.round(hist[i].depth * (gh - 1)), rampBase(ROSE) + HIGHLIGHT);
     put(x0 + i, gy + gh - 1 - Math.round(hist[i].pop / PARAMS.division.maxCells * (gh - 1)), COL.FOAM);
     put(x0 + i, gy + gh - 1 - Math.round(clamp(hist[i].nut, 0, 1) * (gh - 1)), rampBase(1) + HIGHLIGHT);

@@ -41,7 +41,8 @@ A **side view of a water column**: a fixed world of 180 × 320 units (portrait, 
 
 ### Fields (coarse grid, e.g. 24 × 40, bilinear sampling)
 - **Light**: strongest at the top, decays with depth, scaled by a slow day/night cycle (diel cycle; one "day" is 5 real minutes by default, `?day=5|10|30` picks 5, 10 or 30). Sunrise to sunset is 65% of the cycle, surface light follows `sqrt(sin)` (sharp twilights), and night keeps a faint moonlight. The world starts in early morning.
-- **Nutrients**: diffuse slowly, are consumed by cells, enter from the bottom (upwelling), and return when cells die (remineralisation). Occasional nutrient pulses rise from the bottom at long random intervals drawn from the seeded RNG, never on a fixed schedule: a plume of deep water climbs from the floor (~1–1.5 min) and releases its nutrients along its path. Resuspended specks rising in it make it visible.
+- **Wind** (weather): a slow seeded process. Its target changes at random intervals (calm spells common, storms rarer) and the wind eases toward it. Strong wind drives upwelling (nutrient pulses). It also sets the sea state the renderer draws: wave height, how fast the water moves, refraction, and whether rays form.
+- **Nutrients**: diffuse slowly, are consumed by cells, enter from the bottom (upwelling), and return when cells die (remineralisation). Occasional nutrient pulses rise from the bottom as **wind-driven upwelling**, never on a fixed schedule: a plume of deep water climbs from the floor (~1–1.5 min) and releases its nutrients along its path. Resuspended specks rising in it make it visible.
 
 ### Cells (agents)
 State: position, velocity, energy, age, phase θ (0–2π), genome, parent id.
@@ -135,7 +136,8 @@ References: the "bit_wonder" style on Instagram — dark backgrounds, chunky clu
 - **Seafloor scavengers (decoration)**: amphipods, ostracods and isopods walk in where detritus has recently fallen, pick at it, and walk off out of frame. Driven by the simulation's record of exported detritus per column, so they come after die-offs; they never touch the simulation.
 - **Flash**: a soft swell and fade (about 1.5 s), never more than one palette step brighter; a faint dithered halo spills onto the water and nearby cells, and cells very large on screen add faint broken arcs. Calm, never electric.
 - **Lineage threads**: 1-px dotted line from a young cell to its living parent, fading with the child's age.
-- **Liveliness without speed**: the water (surface, rays, caustics, shimmer, snow) animates on its own clock, livelier than the ecosystem, and motile cells swim small helices around their simulated position while diatoms only rock. Render only: the ecosystem keeps its slow pace.
+- **Liveliness without speed**: the water (surface, rays, caustics, shimmer, snow) animates on its own clock, livelier than the ecosystem and hurried or slowed by the wind, and motile cells swim small helices around their simulated position while diatoms only rock. How lively a cell swims shows how it is doing: flagellates follow their recorded growth conditions (light × nutrients) and sleep at night; dinoflagellates are the night swimmers, active in the dark while they have energy. Render only: the ecosystem keeps its slow pace.
+- **Rays are occasional**: they need the sun up, some chop on the surface (a glassy surface focuses nothing; rough water shatters them into flickers) and clear water (murky bloom water hides them). They come and go with weather and blooms.
 - **Time-lapse**: `?speed=2|4|8` or the `[` / `]` keys run more of the same fixed ticks per second (still deterministic). No on-screen control.
 - **HUD (minimal, diegetic)**: a microscope readout in a tiny built-in 3×5 pixel font drawn in code: seed, time, population, magnification (and time-lapse speed when above 1×). Small, in a corner, fades after inactivity. No panels, menus or knobs anywhere.
 

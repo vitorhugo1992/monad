@@ -1,0 +1,1122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#070a14">
+<title>MONAD</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #070a14; }
+  body { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+  #screen { position: fixed; inset: 0; width: 100%; height: 100%; image-rendering: crisp-edges; image-rendering: pixelated; }
+</style>
+</head>
+<body>
+<canvas id="screen"></canvas>
+<script>
+'use strict';
+
+// ===== PARAMS =====
+// Units: world pixels (the 180x320 internal canvas) and seconds. Energy is per unit biomass:
+// a cell divides at 1 and each daughter starts at 0.5.
+const PARAMS = {
+  world: { w: 180, h: 320 },
+  time: { tickRate: 30, maxTicksPerFrame: 8 },
+  grid: { cols: 24, rows: 40 },
+  hash: { cell: 24 },                   // must be >= the largest interaction distance
+
+  light: { surface: 1.0, atten: 4.0 },  // e-folding depth = a quarter of the column
+  nutrients: {
+    deep: 1.0,                          // concentration of upwelled deep water (held below the bottom row)
+    surface: 0.2,                       // initial surface concentration
+    clineTop: 0.1, clineBottom: 0.7,    // initial nutricline, as fractions of depth
+    diffusion: 0.3,                     // grid nodes^2 per second
+    upwelling: 1.0,                     // coupling of the bottom row to deep water
+  },
+
+  founders: { count: 14, lineages: 3, spread: 18, energyMin: 0.3, energyMax: 0.7, maxAge: 60 },
+
+  // Rule 1: drift
+  drift: {
+    brownian: 2.5,                      // px/s per sqrt(s), applied to velocity
+    phototaxis: 1.5,                    // px/s^2 at full light mismatch
+    drag: 1.0,                          // 1/s; velocity e-folds in one second
+    separation: 18,                     // px/s^2 at full overlap
+    separationRange: 1.1,               // x (ri + rj)
+    wallBounce: 0.3,
+    surfaceGap: 4,                      // cells stay below the surface film
+    deadSink: 3,                        // px/s^2 while fading
+  },
+  // Rule 2: metabolism, per unit biomass:
+  //   de/dt = efficiency * L * N/(N + halfSat*size) - maintenance / size^(1/2)
+  // Small cells win in bright, nutrient-poor water (affinity); large cells in dim water (low upkeep).
+  metabolism: {
+    efficiency: 0.2,
+    halfSat: 0.3,                       // nutrient half-saturation at size 1, proportional to size
+    maintenance: 0.004,
+    uptake: 4.0,                        // nutrient units per unit energy per unit biomass
+  },
+  // Rule 3: division
+  division: { threshold: 1.0, maxCells: 120, spread: 0.6 },
+  lifespan: { base: 240, jitterMin: 0.8, jitterMax: 1.4 },   // x sqrt(size), seconds since last division
+  // Rule 4: death
+  death: { fadeTicks: 60, recycled: 0.6 },                   // the rest sinks out to the bottom row
+  cyst: {
+    chanceStarved: 0.3, chanceOld: 0.08,
+    reserve: 0.4,                       // fraction of the dying cell's nutrients kept in the cyst
+    sink: 6,
+    dormancyMin: 40, dormancyMax: 160,
+    germRate: 1 / 45, germNutrient: 0.35, germEnergy: 0.4,
+    viability: 600, max: 40,
+  },
+  mutation: { step: 0.08, jumpChance: 0.05, jump: 0.3 },
+
+  sprite: {
+    rMin: 2.5, rMax: 8,                 // body radius at size 0.6 .. 1.6
+    frames: 3, wobbleFps: 2,
+    aspectMin: 0.75, aspectMax: 2.2,    // lineage trait: squat .. pennate-like
+    tilt: 0.35,
+    squareness: 4,                      // superellipse exponent added at timbre 1 (round cell -> frustule box)
+    breathe: 0.04, stream: 0.5,         // membrane swell and chloroplast drift between wobble frames
+    setaeFrom: 0.35, setaeLen: 1.4, setaeMin: 2, setaeMinR: 4, cornerSetaeP: 4, setaeBend: 0.15,
+    plastidsPerSize: 5, plastidR: 0.3, plastidMinR: 0.9, cupR: 0.55, cupOffset: 0.25,
+    plastidLit: 0.6, toneBright: 0.55, toneHigh: 0.15,
+    cytoShade: -0.35, dither: 0.25,
+    girdleFrom: 0.55, glassFrom: 0.6,
+  },
+  flash: { glowTicks: 5, ringTicks: 14, ringStart: 1, ringGrow: 0.5, arcs: 3, arcGap: -0.3 },
+  thread: { maxAge: 60, dotSpacing: 3 },
+  render: {
+    waterTop: 6.9, waterBottom: 0.3, waterCurve: 1.5,
+    seam: 0.3,                          // fraction of each colour band that is dithered
+    shaftDepth: 0.6, shaftStrength: 2.4, shaftSlope: 0.45,
+    shaftA: 0.6, shaftB: 0.4, shaftFreqA: 0.05, shaftFreqB: 0.11, shaftSpeedA: 0.04, shaftSpeedB: 0.03,
+    causticDepth: 0.16, causticCell: 16, causticWidth: 0.9, causticSpeed: 0.12, causticEvery: 3, causticFade: 2.2,
+    surfaceRows: 4, streakFreq: 0.13, streakSpeed: 0.25, streakThreshold: 1.25, foamThreshold: 1.75,
+    snowCount: 48, snowSpeedMin: 1, snowSpeedMax: 3.5, snowSway: 2, snowLift: 2,
+    deepFrom: 0.55, deepDarken: 0.7,
+  },
+  hud: { x: 4, y: 297, line: 7, visibleMs: 6000, fadeMs: 2000 },
+  debug: { sampleEvery: 100, historyLength: 180, frameSamples: 120, graphY: 92, graphH: 40, mapX: 126, mapY: 6, mapCell: 2 },
+};
+
+// ===== RNG =====
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function makeRng(seed) {
+  const next = mulberry32(seed);
+  return {
+    next,
+    range(lo, hi) { return lo + (hi - lo) * next(); },
+    int(n) { return Math.floor(next() * n); },
+    chance(p) { return next() < p; },
+  };
+}
+
+// Stateless hash for visuals, so rendering never draws from the simulation stream.
+function hash32(n) {
+  n = Math.imul((n >>> 0) ^ (n >>> 16), 0x7feb352d);
+  n = Math.imul(n ^ (n >>> 15), 0x846ca68b);
+  return (n ^ (n >>> 16)) >>> 0;
+}
+const hash01 = (n) => hash32(n) / 4294967296;
+
+// ===== Utils =====
+const TAU = Math.PI * 2;
+const W = PARAMS.world.w, H = PARAMS.world.h;
+const TICK_DT = 1 / PARAMS.time.tickRate;
+const SQRT3 = Math.sqrt(3);
+
+const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+
+function smoothstep(e0, e1, x) {
+  const t = clamp((x - e0) / (e1 - e0), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+// The simulation uses only + - * / and sqrt, which every JS engine computes bit-identically.
+// Math.exp/log/sin/pow may differ between engines, so the same seed would grow different worlds.
+function dexp(x) {
+  let k = 0;
+  while (x > 0.5 || x < -0.5) { x *= 0.5; k++; }
+  let term = 1, sum = 1;
+  for (let i = 1; i <= 12; i++) { term = term * x / i; sum += term; }
+  while (k-- > 0) sum *= sum;
+  return sum;
+}
+
+// Standard normal approximation from four uniforms (Irwin-Hall): arithmetic only.
+function gauss(rng) {
+  return (rng.next() + rng.next() + rng.next() + rng.next() - 2) * SQRT3;
+}
+
+// 4x4 Bayer thresholds in [0, 1)
+const BAYER = new Float64Array([0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5].map((v) => (v + 0.5) / 16));
+const bayer = (x, y) => BAYER[((y & 3) << 2) | (x & 3)];
+
+// ===== Palette =====
+// 32 colours. Water ramp (0-7) runs deep navy -> surface teal, then light and accents,
+// then four pigment ramps of five hue-shifted tones (outline, shadow, base, highlight, bright).
+const PALETTE_HEX = [
+  '#070a14', '#0b1322', '#0f1d30', '#12293d', '#15364a', '#194757', '#1f5a64', '#296f70',
+  '#3f8b84', // 8  light shaft / caustic / surface film
+  '#9ed2bd', // 9  foam, HUD
+  '#f2f0d8', // 10 flash glow
+  '#31465a', // 11 slate (debug)
+  '#10261f', '#1d4a33', '#3b7a3a', '#7fae45', '#d2e37a', // green: teal shadows, yellow-green highlights
+  '#2a1712', '#5b3218', '#9a6122', '#d6a23f', '#f6e3a1', // gold: rust shadows, cream highlights
+  '#2a1030', '#5a1d43', '#9b3550', '#d9675f', '#f8b994', // rose: plum shadows, peach highlights
+  '#141336', '#2c2a6a', '#4f479e', '#8a76cf', '#d4c0f0', // violet: indigo shadows, lilac highlights
+];
+
+const PAL32 = new Uint32Array(PALETTE_HEX.map((hex) => {
+  const n = parseInt(hex.slice(1), 16);
+  return (0xff000000 | ((n & 0xff) << 16) | (n & 0xff00) | ((n >> 16) & 0xff)) >>> 0;
+}));
+
+const COL = { WATER: 0, SHAFT: 8, FOAM: 9, GLOW: 10, SLATE: 11, RAMP: 12, TONES: 5, RAMPS: 4 };
+const OUTLINE = 0, SHADOW = 1, BASE = 2, HIGHLIGHT = 3, BRIGHT = 4;
+const rampBase = (ramp) => COL.RAMP + ramp * COL.TONES;
+
+// ===== Fields =====
+const GRID_W = W / PARAMS.grid.cols, GRID_H = H / PARAMS.grid.rows;
+
+function createFields() {
+  const { cols, rows } = PARAMS.grid, N = PARAMS.nutrients, n = cols * rows;
+  const f = { light: new Float64Array(n), nut: new Float64Array(n), scratch: new Float64Array(n) };
+  for (let j = 0; j < rows; j++) {
+    const depth = (j + 0.5) / rows;
+    const light = PARAMS.light.surface * dexp(-PARAMS.light.atten * depth);
+    const nut = N.surface + (N.deep - N.surface) * smoothstep(N.clineTop, N.clineBottom, depth);
+    for (let i = 0; i < cols; i++) { f.light[j * cols + i] = light; f.nut[j * cols + i] = nut; }
+  }
+  return f;
+}
+
+// Bilinear footprint of a point, reused to avoid allocation.
+const LOC = { k00: 0, k10: 0, k01: 0, k11: 0, w00: 0, w10: 0, w01: 0, w11: 0 };
+function locate(x, y) {
+  const { cols, rows } = PARAMS.grid;
+  const gx = clamp(x / GRID_W - 0.5, 0, cols - 1), gy = clamp(y / GRID_H - 0.5, 0, rows - 1);
+  const i0 = Math.floor(gx), j0 = Math.floor(gy);
+  const i1 = i0 + 1 < cols ? i0 + 1 : i0, j1 = j0 + 1 < rows ? j0 + 1 : j0;
+  const fx = gx - i0, fy = gy - j0;
+  LOC.k00 = j0 * cols + i0; LOC.k10 = j0 * cols + i1; LOC.k01 = j1 * cols + i0; LOC.k11 = j1 * cols + i1;
+  LOC.w00 = (1 - fx) * (1 - fy); LOC.w10 = fx * (1 - fy); LOC.w01 = (1 - fx) * fy; LOC.w11 = fx * fy;
+}
+
+function sampleField(a, x, y) {
+  locate(x, y);
+  return a[LOC.k00] * LOC.w00 + a[LOC.k10] * LOC.w10 + a[LOC.k01] * LOC.w01 + a[LOC.k11] * LOC.w11;
+}
+
+function addField(a, x, y, amount) {
+  locate(x, y);
+  a[LOC.k00] += amount * LOC.w00; a[LOC.k10] += amount * LOC.w10;
+  a[LOC.k01] += amount * LOC.w01; a[LOC.k11] += amount * LOC.w11;
+}
+
+function takeNode(a, k, want) {
+  const got = want < a[k] ? want : a[k];
+  a[k] -= got;
+  return got;
+}
+
+// Removes up to `amount`, never driving a node negative. Returns what was actually taken.
+function takeField(a, x, y, amount) {
+  locate(x, y);
+  const k00 = LOC.k00, k10 = LOC.k10, k01 = LOC.k01, k11 = LOC.k11;
+  const w00 = LOC.w00, w10 = LOC.w10, w01 = LOC.w01, w11 = LOC.w11;
+  return takeNode(a, k00, amount * w00) + takeNode(a, k10, amount * w10)
+       + takeNode(a, k01, amount * w01) + takeNode(a, k11, amount * w11);
+}
+
+// Explicit diffusion; closed sides and top, bottom row exchanges with deep water (upwelling).
+// Returns the net amount that entered from below this tick.
+function diffuseNutrients(f, dt) {
+  const { cols, rows } = PARAMS.grid, N = PARAMS.nutrients;
+  const k = N.diffusion * dt, kb = k * N.upwelling;
+  const a = f.nut, b = f.scratch;
+  let inflow = 0;
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      const idx = j * cols + i, c = a[idx];
+      const l = i > 0 ? a[idx - 1] : c, r = i < cols - 1 ? a[idx + 1] : c;
+      const u = j > 0 ? a[idx - cols] : c, d = j < rows - 1 ? a[idx + cols] : c;
+      let v = c + k * (l + r + u + d - 4 * c);
+      if (j === rows - 1) { const q = kb * (N.deep - c); v += q; inflow += q; }
+      b[idx] = v;
+    }
+  }
+  f.nut = b; f.scratch = a;
+  return inflow;
+}
+
+// ===== Genome =====
+// Only perceivable genes. hue is continuous; its floor picks the pigment ramp.
+const GENES = {
+  hue: [0, 4],
+  size: [0.6, 1.6],
+  depthPref: [0, 1],
+  omega: [0.15, 0.6],
+  coupling: [0, 1],
+  timbre: [0, 1],
+};
+const GENE_KEYS = Object.keys(GENES);
+const HUE_MAX = GENES.hue[1] - 1e-9;
+
+function clampGene(key, v) {
+  const [lo, hi] = GENES[key];
+  return clamp(v, lo, key === 'hue' ? HUE_MAX : hi);
+}
+
+function randomGenome(rng) {
+  const g = {};
+  for (const k of GENE_KEYS) g[k] = clampGene(k, rng.range(GENES[k][0], GENES[k][1]));
+  return g;
+}
+
+function mutateGenome(parent, rng) {
+  const M = PARAMS.mutation, g = {};
+  for (const k of GENE_KEYS) {
+    const span = GENES[k][1] - GENES[k][0];
+    g[k] = clampGene(k, parent[k] + (rng.next() * 2 - 1) * M.step * span);
+  }
+  if (rng.chance(M.jumpChance)) {
+    const k = GENE_KEYS[rng.int(GENE_KEYS.length)], span = GENES[k][1] - GENES[k][0];
+    g[k] = clampGene(k, g[k] + (rng.next() * 2 - 1) * M.jump * span);
+  }
+  return g;
+}
+
+const hueRamp = (g) => Math.floor(g.hue);
+
+// ===== Cells =====
+function cellRadius(g) {
+  const S = PARAMS.sprite, [lo, hi] = GENES.size;
+  return S.rMin + (g.size - lo) / (hi - lo) * (S.rMax - S.rMin);
+}
+
+// Traits that follow from the genome; recomputed whenever the genome changes.
+function deriveTraits(c) {
+  const rs = Math.sqrt(c.g.size), M = PARAMS.metabolism;
+  c.r = cellRadius(c.g);
+  c.biomass = c.g.size;
+  c.gainK = M.efficiency;                    // per-biomass max gain, independent of size
+  c.halfSat = M.halfSat * c.g.size;          // big cells need richer water
+  c.maintK = M.maintenance / rs;             // per-biomass upkeep ~ size^-1/2: big cells endure the dark
+  c.targetLight = PARAMS.light.surface * dexp(-PARAMS.light.atten * c.g.depthPref);
+}
+
+function lifespanFor(c, rng) {
+  const L = PARAMS.lifespan;
+  return L.base * Math.sqrt(c.g.size) * rng.range(L.jitterMin, L.jitterMax);
+}
+
+// Returns a new cell; the caller adds it to the world.
+function createCell(w, x, y, g, energy, parentId, spriteSeed) {
+  const c = {
+    id: w.nextId++, parentId, x, y, vx: 0, vy: 0,
+    energy, held: 0, age: 0, lifespan: 0,
+    theta: w.rng.next() * TAU, flashTick: -1000, dying: 0,
+    g, spriteSeed, gen: 0,
+    r: 0, biomass: 0, gainK: 0, halfSat: 0, maintK: 0, targetLight: 0,
+    spr: null,
+  };
+  deriveTraits(c);
+  c.lifespan = lifespanFor(c, w.rng);
+  c.held = PARAMS.metabolism.uptake * c.biomass * energy;
+  return c;
+}
+
+function createHash() {
+  const s = PARAMS.hash.cell, cols = Math.ceil(W / s), rows = Math.ceil(H / s), buckets = [];
+  for (let i = 0; i < cols * rows; i++) buckets.push([]);
+  return { s, cols, rows, buckets };
+}
+
+function buildHash(w) {
+  const hs = w.hash;
+  for (let i = 0; i < hs.buckets.length; i++) hs.buckets[i].length = 0;
+  for (let n = 0; n < w.cells.length; n++) {
+    const c = w.cells[n];
+    const i = clamp(Math.floor(c.x / hs.s), 0, hs.cols - 1), j = clamp(Math.floor(c.y / hs.s), 0, hs.rows - 1);
+    hs.buckets[j * hs.cols + i].push(c);
+  }
+}
+
+function createWorld(seed, founderCount) {
+  const F = PARAMS.founders, rng = makeRng(seed);
+  const w = { seed, rng, tick: 0, nextId: 1, fields: createFields(), cells: [], cysts: [], hash: createHash(), upwelled: 0, initialInventory: 0 };
+  const count = founderCount || F.count;
+  for (let l = 0; l < F.lineages; l++) {
+    const base = randomGenome(rng), spriteSeed = rng.int(0x7fffffff), cx = rng.range(F.spread, W - F.spread);
+    const n = Math.floor(count / F.lineages) + (l < count % F.lineages ? 1 : 0);
+    for (let k = 0; k < n; k++) {
+      const g = mutateGenome(base, rng);
+      const x = clamp(cx + gauss(rng) * F.spread, 8, W - 8);
+      const y = clamp(g.depthPref * H + gauss(rng) * F.spread, 8, H - 8);
+      const c = createCell(w, x, y, g, rng.range(F.energyMin, F.energyMax), null, spriteSeed);
+      c.age = rng.range(0, F.maxAge);
+      w.cells.push(c);
+    }
+  }
+  w.initialInventory = nutrientInventory(w);
+  return w;
+}
+
+function aliveCount(w) {
+  let n = 0;
+  for (let i = 0; i < w.cells.length; i++) if (!w.cells[i].dying) n++;
+  return n;
+}
+
+// Field + nutrients bound in cells + cyst reserves. Changes only by upwelling.
+function nutrientInventory(w) {
+  let s = 0;
+  const nut = w.fields.nut;
+  for (let i = 0; i < nut.length; i++) s += nut[i];
+  for (let i = 0; i < w.cells.length; i++) s += w.cells[i].held;
+  for (let i = 0; i < w.cysts.length; i++) s += w.cysts[i].reserve;
+  return s;
+}
+
+const CK_VIEW = new DataView(new ArrayBuffer(8));
+function worldChecksum(w) {
+  let h = 0x811c9dc5;
+  const mix = (v) => {
+    CK_VIEW.setFloat64(0, v);
+    h = Math.imul(h ^ CK_VIEW.getUint32(0), 16777619);
+    h = Math.imul(h ^ CK_VIEW.getUint32(4), 16777619);
+  };
+  mix(w.tick); mix(w.cells.length); mix(w.cysts.length);
+  for (const c of w.cells) { mix(c.id); mix(c.x); mix(c.y); mix(c.energy); mix(c.theta); }
+  for (let i = 0; i < w.fields.nut.length; i += 7) mix(w.fields.nut[i]);
+  return h >>> 0;
+}
+
+// ===== Rules =====
+const DRAG_K = dexp(-PARAMS.drift.drag * TICK_DT);
+const BROWNIAN_K = PARAMS.drift.brownian * Math.sqrt(TICK_DT);
+
+function stepWorld(w) {
+  const dt = TICK_DT, cells = w.cells;
+  w.tick++;
+  w.upwelled += diffuseNutrients(w.fields, dt);
+  buildHash(w);
+  for (let i = 0; i < cells.length; i++) if (!cells[i].dying) steer(w, cells[i], dt);
+  for (let i = 0; i < cells.length; i++) move(cells[i], dt);
+  for (let i = 0; i < cells.length; i++) {
+    const c = cells[i];
+    if (c.dying) continue;
+    metabolise(w, c, dt);
+    advancePhase(w, c, dt);
+    c.age += dt;
+  }
+  lifeAndDeath(w);
+  updateCysts(w, dt);
+}
+
+// Rule 1: Brownian motion, phototaxis toward the preferred light level, soft separation.
+function steer(w, c, dt) {
+  const D = PARAMS.drift, hs = w.hash;
+  c.vx += gauss(w.rng) * BROWNIAN_K;
+  c.vy += gauss(w.rng) * BROWNIAN_K;
+
+  // Brighter than preferred -> swim down (+y); dimmer -> swim up. Bounded ratio, no log.
+  const L = sampleField(w.fields.light, c.x, c.y);
+  c.vy += D.phototaxis * (L - c.targetLight) / (L + c.targetLight + 1e-6) * dt;
+
+  const ci = clamp(Math.floor(c.x / hs.s), 0, hs.cols - 1), cj = clamp(Math.floor(c.y / hs.s), 0, hs.rows - 1);
+  for (let j = cj - 1; j <= cj + 1; j++) {
+    if (j < 0 || j >= hs.rows) continue;
+    for (let i = ci - 1; i <= ci + 1; i++) {
+      if (i < 0 || i >= hs.cols) continue;
+      const bucket = hs.buckets[j * hs.cols + i];
+      for (let n = 0; n < bucket.length; n++) {
+        const o = bucket[n];
+        if (o === c) continue;
+        const dx = c.x - o.x, dy = c.y - o.y, d2 = dx * dx + dy * dy;
+        const reach = (c.r + o.r) * D.separationRange;
+        if (d2 >= reach * reach || d2 === 0) continue;
+        const d = Math.sqrt(d2), push = D.separation * (1 - d / reach) * dt / d;
+        c.vx += dx * push;
+        c.vy += dy * push;
+      }
+    }
+  }
+}
+
+function move(c, dt) {
+  const D = PARAMS.drift, r = c.r;
+  if (c.dying) c.vy += D.deadSink * dt;
+  c.vx *= DRAG_K;
+  c.vy *= DRAG_K;
+  c.x += c.vx * dt;
+  c.y += c.vy * dt;
+  if (c.x < r) { c.x = r; c.vx = Math.abs(c.vx) * D.wallBounce; }
+  else if (c.x > W - r) { c.x = W - r; c.vx = -Math.abs(c.vx) * D.wallBounce; }
+  if (c.y < r + D.surfaceGap) { c.y = r + D.surfaceGap; c.vy = Math.abs(c.vy) * D.wallBounce; }
+  else if (c.y > H - r - 1) { c.y = H - r - 1; c.vy = -Math.abs(c.vy) * D.wallBounce; }
+}
+
+// Rule 2: energy += light x nutrients x efficiency - maintenance. Uptake removes nutrients locally.
+function metabolise(w, c, dt) {
+  const f = w.fields;
+  const L = sampleField(f.light, c.x, c.y), N = sampleField(f.nut, c.x, c.y);
+  const gain = c.gainK * L * N / (N + c.halfSat) * dt;
+  const want = gain * PARAMS.metabolism.uptake * c.biomass;
+  const got = want > 0 ? takeField(f.nut, c.x, c.y, want) : 0;
+  c.energy += (want > 0 ? gain * got / want : 0) - c.maintK * dt;
+  c.held += got;
+}
+
+// Phase advances at the natural rate (coupling arrives in phase 3). Wrapping past 2pi is a flash.
+function advancePhase(w, c, dt) {
+  c.theta += TAU * c.g.omega * dt;
+  if (c.theta >= TAU) { c.theta -= TAU; c.flashTick = w.tick; }
+}
+
+// Rules 3 and 4
+function lifeAndDeath(w) {
+  const Dv = PARAMS.division, fade = PARAMS.death.fadeTicks, cells = w.cells;
+  let alive = aliveCount(w), removed = 0;
+  const n = cells.length;
+  for (let i = 0; i < n; i++) {
+    const c = cells[i];
+    if (c.dying) { if (++c.dying > fade) removed++; continue; }
+    const starved = c.energy < 0;
+    if (starved || c.age > c.lifespan) { die(w, c, starved); alive--; }
+    else if (c.energy >= Dv.threshold) {
+      if (alive < Dv.maxCells) { cells.push(divide(w, c)); alive++; }
+      else c.energy = Dv.threshold;   // the water is full: the cell waits at the threshold
+    }
+  }
+  if (removed) {
+    let k = 0;
+    for (let i = 0; i < cells.length; i++) if (cells[i].dying <= fade) cells[k++] = cells[i];
+    cells.length = k;
+  }
+}
+
+// The mother continues as daughter A (keeps her id); daughter B is new and points to her.
+function divide(w, c) {
+  const rng = w.rng;
+  const gA = mutateGenome(c.g, rng), gB = mutateGenome(c.g, rng);
+  let ox = gauss(rng), oy = gauss(rng);
+  const off = c.r * PARAMS.division.spread / (Math.sqrt(ox * ox + oy * oy) || 1);
+  ox *= off; oy *= off;
+
+  const b = createCell(w, c.x + ox, c.y + oy, gB, c.energy * 0.5, c.id, c.spriteSeed);
+  b.held = c.held * 0.5;
+  b.vx = c.vx; b.vy = c.vy;
+  b.theta = c.theta;
+
+  c.x -= ox; c.y -= oy;
+  c.g = gA;
+  c.energy *= 0.5;
+  c.held *= 0.5;
+  c.age = 0;
+  c.parentId = null;
+  c.gen++;
+  deriveTraits(c);
+  c.lifespan = lifespanFor(c, rng);
+  return b;
+}
+
+// Death returns nutrients: most are recycled in place, the rest sinks to the bottom as detritus.
+// A dying cell (more often a starving one) may leave a resting cyst.
+function die(w, c, starved) {
+  const Cy = PARAMS.cyst, nut = w.fields.nut;
+  c.dying = 1;
+  let give = c.held;
+  if (w.cysts.length < Cy.max && w.rng.chance(starved ? Cy.chanceStarved : Cy.chanceOld)) {
+    const reserve = give * Cy.reserve;
+    give -= reserve;
+    w.cysts.push({
+      x: c.x, y: c.y, floorY: H - 2 - w.rng.int(3), g: c.g, spriteSeed: c.spriteSeed,
+      reserve, age: 0, dormancy: w.rng.range(Cy.dormancyMin, Cy.dormancyMax),
+    });
+  }
+  const recycled = give * PARAMS.death.recycled;
+  addField(nut, c.x, c.y, recycled);
+  addField(nut, c.x, H - 1, give - recycled);
+  c.held = 0;
+}
+
+// Cysts sink, rest, then germinate where nutrients are rich, or lose viability.
+function updateCysts(w, dt) {
+  const Cy = PARAMS.cyst, cysts = w.cysts;
+  if (!cysts.length) return;
+  let alive = aliveCount(w), k = 0;
+  for (let i = 0; i < cysts.length; i++) {
+    const q = cysts[i];
+    q.age += dt;
+    if (q.y < q.floorY) q.y = Math.min(q.floorY, q.y + Cy.sink * dt);
+    if (q.age > Cy.viability) { addField(w.fields.nut, q.x, q.y, q.reserve); continue; }
+    if (q.age > q.dormancy && alive < PARAMS.division.maxCells
+        && sampleField(w.fields.nut, q.x, q.y) > Cy.germNutrient && w.rng.chance(Cy.germRate * dt)) {
+      const c = createCell(w, q.x, q.y, q.g, Cy.germEnergy, null, q.spriteSeed);
+      c.held = q.reserve;
+      w.cells.push(c);
+      alive++;
+      continue;
+    }
+    cysts[k++] = q;
+  }
+  cysts.length = k;
+}
+
+// ===== Harmony =====
+// Phase 2.
+
+// ===== Audio =====
+// Phase 2.
+
+// ===== Render =====
+const R = PARAMS.render;
+const view = { canvas: null, ctx: null, off: null, offCtx: null, img: null, buf: null, scale: 1, ox: 0, oy: 0 };
+const waterRow = new Float64Array(H);   // background band value per row, before light
+let shaftTable = null, causticMask = null, causticPts = null, causticTick = -1;
+
+function initRender(canvas) {
+  view.canvas = canvas;
+  view.ctx = canvas.getContext('2d', { alpha: false });
+  view.off = document.createElement('canvas');
+  view.off.width = W;
+  view.off.height = H;
+  view.offCtx = view.off.getContext('2d');
+  view.img = view.offCtx.createImageData(W, H);
+  view.buf = new Uint32Array(view.img.data.buffer);
+  for (let y = 0; y < H; y++) {
+    const f = y / (H - 1);
+    waterRow[y] = R.waterBottom + (R.waterTop - R.waterBottom) * Math.pow(1 - f, R.waterCurve);
+  }
+  shaftTable = new Float64Array(Math.ceil(W + H * R.shaftSlope) + 2);
+  const causticRows = Math.ceil(H * R.causticDepth);
+  causticMask = new Uint8Array(W * causticRows);
+  causticPts = new Float64Array(2 * (Math.ceil(W / R.causticCell) + 3) * (Math.ceil(causticRows / R.causticCell) + 3));
+  resize();
+}
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  const cw = Math.round(window.innerWidth * dpr), ch = Math.round(window.innerHeight * dpr);
+  view.canvas.width = cw;
+  view.canvas.height = ch;
+  view.scale = Math.max(1, Math.floor(Math.min(cw / W, ch / H)));
+  view.ox = Math.floor((cw - W * view.scale) / 2);
+  view.oy = Math.floor((ch - H * view.scale) / 2);
+  view.ctx.imageSmoothingEnabled = false;
+  view.ctx.fillStyle = PALETTE_HEX[COL.WATER];
+  view.ctx.fillRect(0, 0, cw, ch);
+}
+
+function put(buf, x, y, idx) {
+  if (x >= 0 && x < W && y >= 0 && y < H) buf[y * W + x] = PAL32[idx];
+}
+
+// Cellular caustics: thin lines where the two nearest drifting feature points are equidistant.
+function updateCaustics(t) {
+  const cs = R.causticCell, rows = causticMask.length / W;
+  const gw = Math.ceil(W / cs) + 3, gh = Math.ceil(rows / cs) + 3;   // lattice from -1 .. n+1
+  for (let gj = 0; gj < gh; gj++) {
+    for (let gi = 0; gi < gw; gi++) {
+      const id = gj * 131 + gi, k = 2 * (gj * gw + gi);
+      const sp = R.causticSpeed * (0.6 + hash01(id * 5 + 3));
+      causticPts[k] = (gi - 1 + 0.5 + 0.38 * Math.sin(t * sp + hash01(id * 5 + 1) * TAU)) * cs;
+      causticPts[k + 1] = (gj - 1 + 0.5 + 0.38 * Math.cos(t * sp * 0.8 + hash01(id * 5 + 2) * TAU)) * cs;
+    }
+  }
+  for (let y = 0; y < rows; y++) {
+    const gj = Math.floor(y / cs) + 1;
+    for (let x = 0; x < W; x++) {
+      const gi = Math.floor(x / cs) + 1;
+      let f1 = 1e9, f2 = 1e9;
+      for (let dj = -1; dj <= 1; dj++) {
+        for (let di = -1; di <= 1; di++) {
+          const k = 2 * ((gj + dj) * gw + gi + di);
+          const dx = causticPts[k] - x, dy = causticPts[k + 1] - y, d = dx * dx + dy * dy;
+          if (d < f1) { f2 = f1; f1 = d; } else if (d < f2) f2 = d;
+        }
+      }
+      causticMask[y * W + x] = Math.sqrt(f2) - Math.sqrt(f1) < R.causticWidth ? 1 : 0;
+    }
+  }
+}
+
+// Water: flat colour bands with dithered seams, light shafts near the top, caustic network.
+function drawBackground(buf, t, tick) {
+  if (causticTick < 0 || tick - causticTick >= R.causticEvery) { updateCaustics(t); causticTick = tick; }
+  for (let u = 0; u < shaftTable.length; u++) {
+    const s = R.shaftA * Math.sin(u * R.shaftFreqA + t * R.shaftSpeedA)
+            + R.shaftB * Math.sin(u * R.shaftFreqB - t * R.shaftSpeedB + 1.3);
+    shaftTable[u] = s > 0 ? s * s * s : 0;
+  }
+  const shaftRows = Math.floor(H * R.shaftDepth), causticRows = causticMask.length / W, seamStart = 1 - R.seam;
+  for (let y = 0; y < H; y++) {
+    const row = y * W, base = waterRow[y];
+    const sd = y < shaftRows ? 1 - y / shaftRows : 0, sf = R.shaftStrength * sd * sd;
+    const cf = y < causticRows ? Math.pow(1 - y / causticRows, R.causticFade) : 0;   // sparse, breaking up with depth
+    for (let x = 0; x < W; x++) {
+      const v = sf > 0 ? base + shaftTable[(x + y * R.shaftSlope) | 0] * sf : base;
+      let i = v | 0;
+      const frac = v - i, b = BAYER[((y & 3) << 2) | (x & 3)];
+      if (frac > seamStart && b < (frac - seamStart) / R.seam) i++;
+      if (cf > 0 && causticMask[row + x] && b < cf) i++;
+      buf[row + x] = PAL32[i > COL.SHAFT ? COL.SHAFT : i];
+    }
+  }
+  // Surface film with broken horizontal streaks
+  for (let y = 0; y < R.surfaceRows; y++) {
+    const dir = y & 1 ? 1 : -0.7;
+    for (let x = 0; x < W; x++) {
+      if (y === 0) { buf[x] = PAL32[COL.SHAFT]; continue; }
+      const s = Math.sin(x * R.streakFreq + y * 2.1 + t * R.streakSpeed * dir) + Math.sin(x * 0.047 - t * 0.09 + y * 1.3);
+      if (s > R.foamThreshold) buf[y * W + x] = PAL32[COL.FOAM];
+      else if (s > R.streakThreshold) buf[y * W + x] = PAL32[COL.SHAFT];
+    }
+  }
+}
+
+function drawSnow(buf, t) {
+  for (let i = 0; i < R.snowCount; i++) {
+    const speed = R.snowSpeedMin + hash01(i * 3 + 13) * (R.snowSpeedMax - R.snowSpeedMin);
+    const y = Math.floor((hash01(i * 3 + 12) * H + t * speed) % H);
+    const x = Math.floor((hash01(i * 3 + 11) * W + Math.sin(t * 0.2 + i) * R.snowSway + W) % W);
+    if (y < R.surfaceRows) continue;
+    buf[y * W + x] = PAL32[Math.min(COL.SHAFT, Math.floor(waterRow[y]) + R.snowLift)];
+  }
+}
+
+// ---- Cell sprites ----
+// Morphology follows the genome continuously: size -> cell size and chloroplast count,
+// timbre -> round coccoid .. glassy box-like frustule, coupling -> setae reaching for neighbours.
+// The lineage seed fixes elongation and chloroplast layout, so relatives look alike.
+function buildSprite(c) {
+  const S = PARAMS.sprite, g = c.g, r = c.r;
+  const lin = makeRng(c.spriteSeed);
+  const own = makeRng(hash32(c.id * 31 + c.gen));
+  const aspect = lin.range(S.aspectMin, S.aspectMax);
+  const a = r * Math.sqrt(aspect), b = r / Math.sqrt(aspect);
+  const angle = lin.next() * Math.PI + own.range(-S.tilt, S.tilt);
+  const ca = Math.cos(angle), sa = Math.sin(angle);
+  const p = 2 + g.timbre * S.squareness;
+  const shape = (u, v, sw) => Math.pow(Math.pow(Math.abs(u / (a * sw)), p) + Math.pow(Math.abs(v / (b * sw)), p), 1 / p);
+
+  // Setae: corner spines on box-like cells, radial spines on round ones
+  const sk = clamp((g.coupling - S.setaeFrom) / (1 - S.setaeFrom), 0, 1);
+  const setaeLen = r >= S.setaeMinR ? sk * S.setaeLen * r : 0;
+  const setae = [];
+  if (setaeLen >= S.setaeMin) {
+    if (p >= S.cornerSetaeP) {
+      for (const [su, sv] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) setae.push({ du: su * a, dv: sv * b, bend: lin.range(-1, 1) * S.setaeBend });
+    } else {
+      const n = 2 + lin.int(4), off = lin.next() * TAU;
+      for (let k = 0; k < n; k++) setae.push({ du: Math.cos(off + k * TAU / n), dv: Math.sin(off + k * TAU / n), bend: lin.range(-1, 1) * S.setaeBend });
+    }
+    for (const s of setae) {
+      const len = Math.sqrt(s.du * s.du + s.dv * s.dv);
+      s.du /= len; s.dv /= len;
+      s.start = 1 / shape(s.du, s.dv, 1);   // distance from centre to the body edge along this ray
+    }
+  }
+
+  // Chloroplasts: one cup in small cells, several discs in large ones
+  const nPl = 1 + Math.floor((g.size - GENES.size[0]) * S.plastidsPerSize);
+  const plastids = [];
+  for (let k = 0; k < nPl; k++) {
+    const ang = lin.next() * TAU, rad = nPl === 1 ? S.cupOffset : lin.range(0.15, 0.55);
+    plastids.push({
+      u: Math.cos(ang) * rad * a, v: Math.sin(ang) * rad * b,
+      r: Math.max(S.plastidMinR, (nPl === 1 ? S.cupR : S.plastidR) * r * own.range(0.85, 1.15)),
+      ph: lin.next() * TAU,
+    });
+  }
+
+  const ext = Math.max(a, b) * (1 + S.breathe) + setaeLen + 2;
+  const half = Math.ceil(ext), size = half * 2 + 1;
+  const frames = [];
+  for (let f = 0; f < S.frames; f++) {
+    const ph = TAU * f / S.frames, sw = 1 + S.breathe * Math.sin(ph);
+    const tones = new Int8Array(size * size).fill(-1);
+    const inside = new Uint8Array(size * size);
+    const uAt = new Float32Array(size * size);
+    for (let py = 0; py < size; py++) {
+      for (let px = 0; px < size; px++) {
+        const dx = px - half, dy = py - half;
+        const u = dx * ca + dy * sa, v = -dx * sa + dy * ca;
+        if (shape(u, v, sw) <= 1) { inside[py * size + px] = 1; uAt[py * size + px] = u; }
+      }
+    }
+    const pl = plastids.map((P) => {
+      const u = P.u + Math.sin(ph + P.ph) * S.stream, v = P.v + Math.cos(ph + P.ph) * S.stream;
+      return { x: u * ca - v * sa, y: u * sa + v * ca, r: P.r };
+    });
+    const isIn = (px, py) => px >= 0 && py >= 0 && px < size && py < size && inside[py * size + px] === 1;
+
+    for (let py = 0; py < size; py++) {
+      for (let px = 0; px < size; px++) {
+        const k = py * size + px;
+        if (!inside[k]) continue;
+        const dx = px - half, dy = py - half, dth = (bayer(px, py) - 0.5) * S.dither;
+        // Translucent cytoplasm, darker toward the lower right
+        let tone = (-dx - dy) / (ext * 1.4142) + dth < S.cytoShade ? OUTLINE : SHADOW;
+        if (g.timbre > S.girdleFrom && Math.abs(uAt[k]) < 0.5) tone = BASE;   // girdle seam between valves
+        for (let j = pl.length - 1; j >= 0; j--) {   // front-most chloroplast wins
+          const P = pl[j], ex = dx - P.x, ey = dy - P.y, d = Math.sqrt(ex * ex + ey * ey) / P.r;
+          if (d > 1) continue;
+          const s = (-ex - ey) / (P.r * 1.4142) * S.plastidLit + (1 - d) * (1 - S.plastidLit) + dth;
+          tone = s > S.toneBright ? BRIGHT : s > S.toneHigh ? HIGHLIGHT : BASE;
+          break;
+        }
+        // Rim: lit on the upper left, selective dark outline on the lower right
+        const lowerRight = !isIn(px + 1, py) || !isIn(px, py + 1);
+        const upperLeft = !isIn(px - 1, py) || !isIn(px, py - 1);
+        if (upperLeft) tone = HIGHLIGHT;
+        else if (lowerRight) tone = g.timbre > S.glassFrom ? BASE : OUTLINE;
+        tones[k] = tone;
+      }
+    }
+    for (const s of setae) {
+      const flex = s.bend + Math.sin(ph + s.start) * S.setaeBend * 0.3;
+      for (let t = 0; t <= setaeLen; t += 0.5) {
+        const along = s.start + t, side = flex * t * t / setaeLen;
+        const u = s.du * along - s.dv * side, v = s.dv * along + s.du * side;
+        const px = Math.round(u * ca - v * sa) + half, py = Math.round(u * sa + v * ca) + half;
+        if (px < 0 || py < 0 || px >= size || py >= size || inside[py * size + px]) continue;
+        const tipFrac = t / setaeLen;
+        if (tipFrac > 0.6 && bayer(px, py) < (tipFrac - 0.6) * 2.5) continue;   // fine tips thin out
+        tones[py * size + px] = tipFrac < 0.5 ? BASE : SHADOW;
+      }
+    }
+    frames.push(tones);
+  }
+  return { gen: c.gen, half, size, frames };
+}
+
+function spriteFor(c) {
+  if (!c.spr || c.spr.gen !== c.gen) c.spr = buildSprite(c);
+  return c.spr;
+}
+
+function drawCell(buf, c, tick) {
+  const S = PARAMS.sprite, spr = spriteFor(c);
+  const frame = (Math.floor(tick * S.wobbleFps / PARAMS.time.tickRate) + c.id) % S.frames;
+  const tones = spr.frames[frame], size = spr.size;
+  const x0 = Math.round(c.x) - spr.half, y0 = Math.round(c.y) - spr.half;
+  const base = rampBase(hueRamp(c.g));
+  const glow = !c.dying && tick - c.flashTick < PARAMS.flash.glowTicks ? 1 : 0;
+  const fade = c.dying ? c.dying / PARAMS.death.fadeTicks : 0;
+  const depth = c.y / H, dark = depth > R.deepFrom ? (depth - R.deepFrom) / (1 - R.deepFrom) * R.deepDarken : 0;
+  for (let py = 0; py < size; py++) {
+    const sy = y0 + py;
+    if (sy < 0 || sy >= H) continue;
+    for (let px = 0; px < size; px++) {
+      const sx = x0 + px;
+      if (sx < 0 || sx >= W) continue;
+      const t = tones[py * size + px];
+      if (t < 0) continue;
+      if (fade > 0 && bayer(sx, sy) < fade) continue;     // death: dissolve
+      let tt = t + glow;
+      if (dark > 0 && tt > 0 && bayer(sx + 1, sy + 2) < dark) tt--;   // deep water mutes colour
+      buf[sy * W + sx] = PAL32[tt >= COL.TONES ? COL.GLOW : base + tt];
+    }
+  }
+}
+
+const drawOrder = [];
+function drawCells(buf, w) {
+  drawOrder.length = 0;
+  for (let i = 0; i < w.cells.length; i++) drawOrder.push(w.cells[i]);
+  drawOrder.sort((p, q) => q.r - p.r || p.id - q.id);
+  for (let i = 0; i < drawOrder.length; i++) drawCell(buf, drawOrder[i], w.tick);
+}
+
+// Bioluminescent flash: partial pixel arcs spreading and breaking up
+function drawRings(buf, w) {
+  const F = PARAMS.flash;
+  for (const c of w.cells) {
+    if (c.dying) continue;
+    const age = w.tick - c.flashTick;
+    if (age < 0 || age >= F.ringTicks) continue;
+    const k = age / F.ringTicks, rad = c.r + F.ringStart + age * F.ringGrow;
+    const idx = rampBase(hueRamp(c.g)) + (k < 0.5 ? BRIGHT : HIGHLIGHT);
+    const steps = Math.ceil(TAU * rad * 1.5), seed = c.id * 1.7;
+    for (let s = 0; s < steps; s++) {
+      const ang = s / steps * TAU;
+      if (Math.sin(ang * F.arcs + seed) < F.arcGap) continue;
+      const x = Math.round(c.x + Math.cos(ang) * rad), y = Math.round(c.y + Math.sin(ang) * rad);
+      if (x < 0 || x >= W || y < 0 || y >= H || bayer(x, y) < k) continue;
+      buf[y * W + x] = PAL32[idx];
+    }
+  }
+}
+
+// Dotted thread from a young daughter to her living sister-mother, thinning with age
+const byId = new Map();
+function drawThreads(buf, w) {
+  const T = PARAMS.thread;
+  byId.clear();
+  for (const c of w.cells) if (!c.dying) byId.set(c.id, c);
+  for (const c of w.cells) {
+    if (c.dying || c.parentId === null || c.age > T.maxAge) continue;
+    const p = byId.get(c.parentId);
+    if (!p) continue;
+    const dx = p.x - c.x, dy = p.y - c.y, len = Math.sqrt(dx * dx + dy * dy);
+    if (len < 1) continue;
+    const fade = c.age / T.maxAge, idx = rampBase(hueRamp(c.g)) + BASE;
+    for (let s = 0; s <= len; s += T.dotSpacing) {
+      const x = Math.round(c.x + dx * s / len), y = Math.round(c.y + dy * s / len);
+      if (x < 0 || x >= W || y < 0 || y >= H || bayer(x, y) < fade) continue;
+      buf[y * W + x] = PAL32[idx];
+    }
+  }
+}
+
+function drawCysts(buf, w) {
+  for (const q of w.cysts) {
+    const x = Math.round(q.x), y = Math.round(q.y), base = rampBase(hueRamp(q.g));
+    put(buf, x, y - 1, base + HIGHLIGHT);
+    put(buf, x - 1, y, base + BASE);
+    put(buf, x, y, base + SHADOW);
+    put(buf, x + 1, y, base + OUTLINE);
+    put(buf, x, y + 1, base + OUTLINE);
+  }
+}
+
+// ---- 3x5 pixel font (rows as 3-bit masks, left = 4) ----
+const FONT = {
+  '0': [7, 5, 5, 5, 7], '1': [2, 6, 2, 2, 7], '2': [7, 1, 7, 4, 7], '3': [7, 1, 3, 1, 7], '4': [5, 5, 7, 1, 1],
+  '5': [7, 4, 7, 1, 7], '6': [7, 4, 7, 5, 7], '7': [7, 1, 1, 2, 2], '8': [7, 5, 7, 5, 7], '9': [7, 5, 7, 1, 7],
+  A: [2, 5, 7, 5, 5], B: [6, 5, 6, 5, 6], C: [3, 4, 4, 4, 3], D: [6, 5, 5, 5, 6], E: [7, 4, 6, 4, 7],
+  F: [7, 4, 6, 4, 4], G: [3, 4, 5, 5, 3], H: [5, 5, 7, 5, 5], I: [7, 2, 2, 2, 7], J: [1, 1, 1, 5, 2],
+  K: [5, 5, 6, 5, 5], L: [4, 4, 4, 4, 7], M: [5, 7, 7, 5, 5], N: [6, 5, 5, 5, 5], O: [2, 5, 5, 5, 2],
+  P: [6, 5, 6, 4, 4], Q: [2, 5, 5, 7, 3], R: [6, 5, 6, 5, 5], S: [3, 4, 2, 1, 6], T: [7, 2, 2, 2, 2],
+  U: [5, 5, 5, 5, 7], V: [5, 5, 5, 5, 2], W: [5, 5, 7, 7, 5], X: [5, 5, 2, 5, 5], Y: [5, 5, 2, 2, 2],
+  Z: [7, 1, 2, 4, 7], ':': [0, 2, 0, 2, 0], '.': [0, 0, 0, 0, 2], '-': [0, 0, 7, 0, 0], '/': [1, 1, 2, 4, 4],
+  ' ': [0, 0, 0, 0, 0],
+};
+
+function drawGlyphs(buf, x, y, text, idx, vis, dx) {
+  for (let n = 0; n < text.length; n++) {
+    const glyph = FONT[text[n]] || FONT[' '];
+    for (let row = 0; row < 5; row++) {
+      for (let col = 0; col < 3; col++) {
+        if (!(glyph[row] & (4 >> col))) continue;
+        const px = x + n * 4 + col, py = y + row;
+        if (vis < 1 && bayer(px, py) >= vis) continue;
+        put(buf, px + dx, py + dx, idx);
+      }
+    }
+  }
+}
+
+function drawText(buf, x, y, text, idx, vis) {
+  drawGlyphs(buf, x, y, text, COL.WATER, vis, 1);   // 1-px drop shadow
+  drawGlyphs(buf, x, y, text, idx, vis, 0);
+}
+
+const pad = (n, len) => String(n).padStart(len, '0');
+function clock(seconds) {
+  const s = Math.floor(seconds), h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60;
+  return (h ? h + ':' : '') + pad(m, 2) + ':' + pad(s % 60, 2);
+}
+
+// Microscope readout, bottom left; dissolves after inactivity
+function drawHud(buf, w, now) {
+  const Hd = PARAMS.hud;
+  const vis = debug.on ? 1 : clamp(1 - (now - input.lastActivity - Hd.visibleMs) / Hd.fadeMs, 0, 1);
+  if (vis <= 0) return;
+  drawText(buf, Hd.x, Hd.y, 'SEED ' + seedLabel, COL.FOAM, vis);
+  drawText(buf, Hd.x, Hd.y + Hd.line, 'T ' + clock(w.tick * TICK_DT), COL.FOAM, vis);
+  drawText(buf, Hd.x, Hd.y + Hd.line * 2, 'POP ' + pad(aliveCount(w), 3), rampBase(1) + HIGHLIGHT, vis);
+}
+
+// Returns the time spent on the debug overlay, so frame timing can leave it out.
+function render(w, now) {
+  const buf = view.buf, t = w.tick * TICK_DT;
+  drawBackground(buf, t, w.tick);
+  drawSnow(buf, t);
+  drawCysts(buf, w);
+  drawThreads(buf, w);
+  drawCells(buf, w);
+  drawRings(buf, w);
+  drawHud(buf, w, now);
+  let overlayMs = 0;
+  if (debug.on) { const t0 = performance.now(); drawDebug(buf, w); overlayMs = performance.now() - t0; }
+  view.offCtx.putImageData(view.img, 0, 0);
+  view.ctx.drawImage(view.off, view.ox, view.oy, W * view.scale, H * view.scale);
+  return overlayMs;
+}
+
+// ===== Input =====
+const input = { lastActivity: 0 };
+
+function setupInput() {
+  input.lastActivity = performance.now();
+  const wake = () => { input.lastActivity = performance.now(); };
+  for (const type of ['pointerdown', 'pointermove', 'wheel', 'touchstart']) window.addEventListener(type, wake, { passive: true });
+  window.addEventListener('keydown', (e) => {
+    wake();
+    if (e.key === 'd' || e.key === 'D') { debug.on = !debug.on; needsRender = true; }
+  });
+  window.addEventListener('resize', () => { resize(); needsRender = true; });
+  document.addEventListener('visibilitychange', () => { lastTime = 0; });
+}
+
+// ===== Debug =====
+const debug = {
+  on: false, history: [], nextSample: 0,
+  frameMs: new Float64Array(PARAMS.debug.frameSamples), frameIdx: 0, frameCount: 0,
+  droppedTicks: 0, checksum: null,
+};
+
+function meanNutrient(w) {
+  const nut = w.fields.nut;
+  let s = 0;
+  for (let i = 0; i < nut.length; i++) s += nut[i];
+  return s / nut.length;
+}
+
+// Called after every tick so samples and checksums land on exact ticks.
+function debugSample(w) {
+  const D = PARAMS.debug, minute = 60 * PARAMS.time.tickRate;
+  if (w.tick >= debug.nextSample) {
+    debug.history.push({ pop: aliveCount(w), nut: meanNutrient(w) });
+    if (debug.history.length > D.historyLength) debug.history.shift();
+    debug.nextSample += D.sampleEvery;
+  }
+  if (w.tick % minute === 0) debug.checksum = { minute: w.tick / minute, hash: worldChecksum(w) };
+}
+
+function recordFrame(ms) {
+  debug.frameMs[debug.frameIdx] = ms;
+  debug.frameIdx = (debug.frameIdx + 1) % debug.frameMs.length;
+  debug.frameCount++;
+}
+
+// Mini-maps in the top-right corner: nutrients (green) with cells as dots, light (gold) beside it.
+function drawFieldMaps(buf, w) {
+  const D = PARAMS.debug, { cols, rows } = PARAMS.grid, m = D.mapCell, green = rampBase(0), gold = rampBase(1);
+  const node = (field, ramp, i, j, ox) => {
+    const v = clamp(field[j * cols + i], 0, 1) * 4;
+    for (let y = 0; y < m; y++) {
+      for (let x = 0; x < m; x++) {
+        const px = ox + i * m + x, py = D.mapY + j * m + y;
+        let k = v | 0;
+        if (bayer(px, py) < v - k) k++;
+        put(buf, px, py, ramp + (k > BRIGHT ? BRIGHT : k));
+      }
+    }
+  };
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) node(w.fields.nut, green, i, j, D.mapX);
+    node(w.fields.light, gold, 0, j, D.mapX + cols * m + 1);
+  }
+  for (const c of w.cells) {
+    if (!c.dying) put(buf, D.mapX + Math.floor(c.x / GRID_W * m), D.mapY + Math.floor(c.y / GRID_H * m), COL.FOAM);
+  }
+}
+
+function drawDebug(buf, w) {
+  const D = PARAMS.debug, pop = aliveCount(w);
+  let sx = 0, sy = 0;
+  for (const c of w.cells) if (!c.dying) { sx += Math.cos(c.theta); sy += Math.sin(c.theta); }
+  const sync = pop ? Math.sqrt(sx * sx + sy * sy) / pop : 0;
+  const n = Math.min(debug.frameCount, debug.frameMs.length);
+  const ms = Array.from(debug.frameMs.subarray(0, n)).sort((p, q) => p - q);
+  const avg = n ? ms.reduce((s, v) => s + v, 0) / n : 0, p95 = n ? ms[Math.floor(n * 0.95)] : 0;
+  const ck = debug.checksum ? pad(debug.checksum.minute, 2) + ' ' + debug.checksum.hash.toString(16).toUpperCase().padStart(8, '0') : '-';
+  const lines = [
+    'POP ' + pop + '  CYST ' + w.cysts.length,
+    'SYNC ' + sync.toFixed(2) + '  NUT ' + meanNutrient(w).toFixed(2),
+    'VOX -  ONS -',
+    'MS ' + avg.toFixed(1) + '  P95 ' + p95.toFixed(1),
+    'DROP ' + debug.droppedTicks,
+    'CK ' + ck,
+  ];
+  for (let i = 0; i < lines.length; i++) drawText(buf, 3, 6 + i * 7, lines[i], COL.FOAM, 1);
+  drawFieldMaps(buf, w);
+
+  // Population (foam) and mean nutrient (gold) over the last ~10 minutes; slate line = cap
+  const gy = D.graphY, gh = D.graphH;
+  for (let y = gy; y < gy + gh; y++) for (let x = 0; x < W; x++) buf[y * W + x] = PAL32[COL.WATER];
+  for (let x = 0; x < W; x += 2) put(buf, x, gy, COL.SLATE);
+  const hist = debug.history, x0 = W - hist.length;
+  for (let i = 0; i < hist.length; i++) {
+    put(buf, x0 + i, gy + gh - 1 - Math.round(hist[i].pop / PARAMS.division.maxCells * (gh - 1)), COL.FOAM);
+    put(buf, x0 + i, gy + gh - 1 - Math.round(clamp(hist[i].nut, 0, 1) * (gh - 1)), rampBase(1) + HIGHLIGHT);
+  }
+}
+
+// ===== Loop =====
+let world = null, seedLabel = '', lastTime = 0, acc = 0, needsRender = true;
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (!lastTime) lastTime = now;
+  acc += Math.min((now - lastTime) / 1000, 1);
+  lastTime = now;
+  const t0 = performance.now();
+  let ticks = 0;
+  while (acc >= TICK_DT && ticks < PARAMS.time.maxTicksPerFrame) {
+    stepWorld(world);
+    debugSample(world);
+    acc -= TICK_DT;
+    ticks++;
+  }
+  if (acc >= TICK_DT) { debug.droppedTicks += Math.floor(acc / TICK_DT); acc = 0; }
+  // Everything visible is tied to simulation ticks, so frames between ticks would be identical.
+  if (ticks > 0 || needsRender) {
+    const overlayMs = render(world, now);
+    needsRender = false;
+    recordFrame(performance.now() - t0 - overlayMs);
+  }
+}
+
+// ===== Init =====
+function hashString(s) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+  return h >>> 0;
+}
+
+// ?seed=  (number or word), ?debug, ?stress (start at the cell cap), ?ff=seconds (fast-forward)
+function readOptions() {
+  const q = new URLSearchParams(location.search);
+  let label = (q.get('seed') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12), seed;
+  if (!label) {
+    seed = crypto.getRandomValues(new Uint32Array(1))[0] % 1000000;   // the one non-seeded draw: picking the seed
+    label = String(seed);
+    try { q.set('seed', label); history.replaceState(null, '', location.pathname + '?' + q.toString()); } catch (e) { /* file:// may refuse */ }
+  } else {
+    seed = /^\d+$/.test(label) ? Number(label) >>> 0 : hashString(label);
+  }
+  return { seed, label, debug: q.has('debug'), stress: q.has('stress'), ff: Math.max(0, Number(q.get('ff')) || 0) };
+}
+
+function init() {
+  const opts = readOptions();
+  seedLabel = opts.label;
+  world = createWorld(opts.seed, opts.stress ? PARAMS.division.maxCells : 0);
+  debug.on = opts.debug;
+  const ffTicks = Math.floor(opts.ff * PARAMS.time.tickRate);
+  for (let i = 0; i < ffTicks; i++) { stepWorld(world); debugSample(world); }
+  initRender(document.getElementById('screen'));
+  setupInput();
+  requestAnimationFrame(frame);
+}
+
+init();
+</script>
+</body>
+</html>

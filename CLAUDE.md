@@ -135,6 +135,7 @@ References: the "bit_wonder" style on Instagram — dark backgrounds, chunky clu
 - **Seafloor scavengers (decoration)**: amphipods, ostracods and isopods walk in where detritus has recently fallen, pick at it, and walk off out of frame. Driven by the simulation's record of exported detritus per column, so they come after die-offs; they never touch the simulation.
 - **Flash**: a soft swell and fade (about 1.5 s), never more than one palette step brighter; a faint dithered halo spills onto the water and nearby cells, and cells very large on screen add faint broken arcs. Calm, never electric.
 - **Lineage threads**: 1-px dotted line from a young cell to its living parent, fading with the child's age.
+- **Liveliness without speed**: the water (surface, rays, caustics, shimmer, snow) animates on its own clock, livelier than the ecosystem, and motile cells swim small helices around their simulated position while diatoms only rock. Render only: the ecosystem keeps its slow pace.
 - **Time-lapse**: `?speed=2|4|8` or the `[` / `]` keys run more of the same fixed ticks per second (still deterministic). No on-screen control.
 - **HUD (minimal, diegetic)**: a microscope readout in a tiny built-in 3×5 pixel font drawn in code: seed, time, population, magnification (and time-lapse speed when above 1×). Small, in a corner, fades after inactivity. No panels, menus or knobs anywhere.
 

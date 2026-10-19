@@ -149,7 +149,7 @@ const PARAMS = {
     seam: 0.3,                          // fraction of each colour band that is dithered
     // God rays: thin beams focused by the moving surface, fanning out from a virtual sun above the water.
     // The sun (the moon at night) crosses the sky, so rays lean one way in the morning and the other at evening.
-    rayDepth: 0.85, rayStrength: 3.2, rayFadePow: 1.5, rayFocal: 420, rayTilt: 0.6, rayRes: 4,
+    rayDepth: 0.65, rayStrength: 2.4, rayFadePow: 2, rayFocal: 420, rayTilt: 0.6, rayRes: 4,
     rayWaves: [[1.0, 0.31, 0.45, 0.0], [0.8, 0.53, -0.6, 1.7], [0.6, 0.19, 0.25, 4.1], [0.45, 0.89, 0.8, 2.3]],   // amp, k (rad/unit), speed (rad/s), phase
     rayThreshold: 0.25, rayGroups: 0.045, rayGroupSpeed: 0.11,   // envelope that lets groups of rays wax and wane
     // Refraction: a travelling wobble near the surface bends rays, caustics and the light on cells
@@ -181,6 +181,12 @@ const PARAMS = {
     moonLight: 0.3,                     // rays and caustics at night, as a fraction of noon
   },
   plume: { specks: 46, sediment: 0.4 }, // resuspended specks rising in a nutrient pulse
+  // Water (surface, rays, caustics, shimmer, snow) animates on its own clock, livelier than the slow ecosystem;
+  // time-lapse speeds it up only beyond this rate.
+  ambient: { rate: 2.5 },
+  // Motile cells swim small helices around their simulated position (seen side-on as ellipses);
+  // diatoms have no flagella and only rock. Visual only: the simulation never sees it.
+  swim: { amp: 1.1, flatten: 0.6, periodMin: 2.5, periodMax: 5, rock: 0.3, rockPeriod: 7 },
   hud: { x: 4, y: 290, line: 7, visibleMs: 6000, fadeMs: 2000 },
   debug: { sampleEvery: 100, historyLength: 180, frameSamples: 120, graphY: 172, graphH: 48, mapX: 126, mapY: 6, mapCell: 2 },
 };
@@ -527,7 +533,7 @@ function createCell(w, x, y, g, energy, parentId, spriteSeed) {
     theta: w.rng.next() * TAU, flashTick: -1000, dying: 0, grazed: false,
     g, spriteSeed, gen: 0,
     r: 0, biomass: 0, gainK: 0, halfSat: 0, maintK: 0, targetLight: 0,
-    spr: null,
+    spr: null, ox: 0, oy: 0,   // sprite cache and swimming offset: render only
   };
   deriveTraits(c);
   c.lifespan = lifespanFor(c, w.rng);
@@ -989,6 +995,9 @@ function waterBand(wy) {
   const f = clamp(wy / H, 0, 1);
   return R.waterBottom + (R.waterTop - R.waterBottom) * Math.pow(1 - f, R.waterCurve);
 }
+
+// Clock for the water's own motion (seconds); -1 until the loop starts, then composeFrame falls back to sim time
+let ambientT = -1;
 
 // Brightness of rays and caustics: sunlight by day, a little moonlight at night
 let dayLight = 1;
@@ -1492,6 +1501,21 @@ function spriteFor(c, rpx, step) {
 }
 
 // Slow tumbling: each cell turns at its own pace with a gentle sway
+// Helical swimming of motile cells; diatoms only rock
+function updateSwim(w, ta) {
+  const Sw = PARAMS.swim, Dn = PARAMS.dino;
+  for (const c of w.cells) {
+    if (c.dying) continue;
+    const h1 = hash01(c.id * 17 + 1), h2 = hash01(c.id * 17 + 2);
+    const motile = 1 - smoothstep(Dn.fade, Dn.gone, c.g.timbre);
+    const period = Sw.periodMin + h2 * (Sw.periodMax - Sw.periodMin), a = ta * TAU / period + h1 * TAU;
+    const amp = Sw.amp * motile * (0.6 + 0.4 * h2);
+    const rock = Sw.rock * (1 - motile) * Math.sin(ta * TAU / Sw.rockPeriod + h1 * TAU);
+    c.ox = amp * Math.cos(a) + rock;
+    c.oy = amp * Sw.flatten * Math.sin(a) + rock * 0.5;
+  }
+}
+
 function tumbleAngle(c, t) {
   const S = PARAMS.sprite, h1 = hash01(c.id * 13 + 5), h2 = hash01(c.id * 13 + 6);
   return h1 * TAU + (h2 * 2 - 1) * S.maxSpin * t + S.sway * Math.sin(t * S.swaySpeed + h1 * TAU);
@@ -1522,7 +1546,7 @@ const IRID_SET = HUE_WHEEL.map((r) => rampBase(r) + BRIGHT).concat([COL.FOAM]);
 
 function drawCell(c, tick, t) {
   const S = PARAMS.sprite, z = cam.zoom, rpx = c.r * z;
-  const cx = toSX(c.x), cy = toSY(c.y), reach = rpx * (2 + S.setaeLen) + 4;
+  const cx = toSX(c.x + c.ox), cy = toSY(c.y + c.oy), reach = rpx * (2 + S.setaeLen) + 4;
   if (cx < -reach || cy < -reach || cx > W + reach || cy > H + reach) return;
   const steps = S.tumbleSteps, angle = tumbleAngle(c, t);
   const step = mod(Math.round(angle / TAU * steps), steps);
@@ -1594,7 +1618,7 @@ function drawFlashes(w) {
     const level = flashLevel(c, w.tick);
     if (level <= 0) continue;
     const age = w.tick - c.flashTick;
-    const cx = toSX(c.x), cy = toSY(c.y), rpx = c.r * z;
+    const cx = toSX(c.x + c.ox), cy = toSY(c.y + c.oy), rpx = c.r * z;
     const rh = clamp(rpx * F.haloRadius, F.haloMinPx, F.haloMaxPx), strength = F.haloStrength * level;
     const y0 = Math.max(0, Math.floor(cy - rh)), y1 = Math.min(H - 1, Math.ceil(cy + rh));
     const x0 = Math.max(0, Math.floor(cx - rh)), x1 = Math.min(W - 1, Math.ceil(cx + rh));
@@ -1630,7 +1654,7 @@ function drawThreads(w) {
     if (c.dying || c.parentId === null || c.age > T.maxAge || c.r * cam.zoom < PARAMS.sprite.speckR) continue;
     const p = byId.get(c.parentId);
     if (!p || p.r * cam.zoom < PARAMS.sprite.speckR) continue;
-    const ax = toSX(c.x), ay = toSY(c.y), dx = toSX(p.x) - ax, dy = toSY(p.y) - ay;
+    const ax = toSX(c.x + c.ox), ay = toSY(c.y + c.oy), dx = toSX(p.x + p.ox) - ax, dy = toSY(p.y + p.oy) - ay;
     const len = Math.sqrt(dx * dx + dy * dy);
     if (len < 1) continue;
     const fade = c.age / T.maxAge, idx = rampBase(hueRamp(c.g)) + BASE;
@@ -1828,20 +1852,21 @@ function drawHud(w, now) {
 
 // All pixel work for one frame. Returns the time spent on the debug overlay, so frame timing can leave it out.
 function composeFrame(w, now) {
-  const t = w.tick * TICK_DT, P = PARAMS.particles;
+  const t = w.tick * TICK_DT, ta = ambientT >= 0 ? ambientT : t, P = PARAMS.particles;
   view.bx0 = clamp(Math.round(cam.x * cam.zoom), 0, Math.round(W * cam.zoom) - W);
   view.by0 = clamp(Math.round(cam.y * cam.zoom), 0, Math.round(H * cam.zoom) - H);
   buildDeadline = performance.now() + PARAMS.sprite.buildBudgetMs;
   const moon = PARAMS.timeOfDay.moonLight;
   dayLight = moon + (1 - moon) * w.surfaceLight;
   updateSun(dayPhase(w));
-  updateRays(t);
-  updateShimmer(t);
-  updateCaustics(t, w.tick);
+  updateRays(ta);
+  updateShimmer(ta);
+  updateCaustics(ta, w.tick);
   updateBloom(w);
-  drawBackground(t);
-  drawParticles(P.far, 1000, t, false);
-  drawParticles(P.mid, 2000, t, false);
+  updateSwim(w, ta);
+  drawBackground(ta);
+  drawParticles(P.far, 1000, ta, false);
+  drawParticles(P.mid, 2000, ta, false);
   drawPlumes(w);
   drawPebbles();
   drawCysts(w);
@@ -1850,7 +1875,7 @@ function composeFrame(w, now) {
   drawThreads(w);
   drawCells(w, t);
   drawFlashes(w);
-  drawParticles(P.near, 3000, t, true);
+  drawParticles(P.near, 3000, ta, true);
   drawHud(w, now);
   let overlayMs = 0;
   if (debug.on) { const t0 = performance.now(); drawDebug(w); overlayMs = performance.now() - t0; }
@@ -2065,8 +2090,11 @@ function frame(now) {
   requestAnimationFrame(frame);
   if (!lastTime) lastTime = now;
   const speed = PARAMS.time.speeds[speedLevel];
-  acc += Math.min((now - lastTime) / 1000, 1) * speed;
+  const real = Math.min((now - lastTime) / 1000, 1);
+  acc += real * speed;
   lastTime = now;
+  if (ambientT < 0) ambientT = world.tick * TICK_DT;
+  ambientT += real * Math.max(PARAMS.ambient.rate, speed);
   const t0 = performance.now();
   let ticks = 0;
   while (acc >= TICK_DT && ticks < PARAMS.time.maxTicksPerFrame * speed) {

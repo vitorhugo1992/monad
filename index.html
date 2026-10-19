@@ -27,6 +27,12 @@ const PARAMS = {
   cell: { rMin: 1.25, rMax: 4 },        // body radius at size 0.6 .. 1.6
 
   light: { surface: 1.0, atten: 4.0 },  // e-folding depth = a quarter of the column
+  // Diel cycle. Phase 0 is sunrise; the sun is up for dayFrac of the cycle, light = sqrt(sin) (sharp twilights).
+  // ?day=5|10|30 picks the day length in minutes.
+  // At night cells rest (circadian clock): upkeep and ageing slow to `rest` as the sun goes down.
+  diel: { dayLength: 300, dayMinutes: [5, 10, 30], start: 0.08, dayFrac: 0.65, moon: 0.01, rest: 0.12 },
+  // Nutrient pulses: deep water rises from the floor in a plume at long random intervals.
+  pulses: { firstMin: 90, firstMax: 240, gapMin: 180, gapMax: 540, amount: 60, width: 16, rise: 2.5, top: 0.3 },
   nutrients: {
     deep: 1.0,                          // concentration of upwelled deep water (held below the bottom row)
     surface: 0.2,                       // initial surface concentration
@@ -35,7 +41,7 @@ const PARAMS = {
     upwelling: 1.0,                     // coupling of the bottom row to deep water
   },
 
-  founders: { count: 6, lineages: 2, spread: 12, energyMin: 0.4, energyMax: 0.7, maxAge: 30 },   // the water starts nearly empty
+  founders: { count: 6, lineages: 2, spread: 12, energyMin: 0.4, energyMax: 0.7, maxAge: 30, depthMax: 0.65 },   // the water starts nearly empty, inoculated in the lit layer
 
   // Rule 1: drift
   drift: {
@@ -48,6 +54,10 @@ const PARAMS = {
     surfaceGap: 7,                      // cells stay below the surface
     floorGap: 2,                        // and above the sediment ripples
     deadSink: 3,                        // px/s^2 while fading
+    // Night descent: in darkness cells follow the nutrient gradient down instead of seeking light.
+    darkLo: 0.05, darkHi: 0.3,          // surface light where descent is full .. gone
+    nutritaxis: 2.0,                    // px/s^2 at full gradient
+    gradientGain: 8,                    // bounded gradient ratio is scaled by this, then clamped to 1
   },
   // Rule 2: metabolism, per unit biomass:
   //   de/dt = efficiency * L * N/(N + halfSat*size) - maintenance / size^(1/2)
@@ -55,7 +65,7 @@ const PARAMS = {
   metabolism: {
     efficiency: 0.2,
     halfSat: 0.3,                       // nutrient half-saturation at size 1, proportional to size
-    maintenance: 0.004,
+    maintenance: 0.002,                 // slowed by the night rest (diel.rest)
     uptake: 1.3,                        // nutrient units per unit energy per unit biomass
   },
   // Rule 3: division
@@ -70,6 +80,15 @@ const PARAMS = {
     dormancyMin: 40, dormancyMax: 160,
     germRate: 1 / 45, germNutrient: 0.35, germEnergy: 0.4,
     viability: 600, max: 80,
+  },
+  // Rule 5: grazing by an invisible grazer field Z on the nutrient grid. Grazers eat local biomass B
+  // with a type III response f = B^2/(B^2+K^2) (sparse cells find refuge), grow on it and starve slowly:
+  //   per-cell mortality = rate * Z * K*B/(B^2+K^2)      dZ/dt = Z*(growth*f - decay) + diffusion
+  // The lag between food and grazers ends blooms and lets the water recover.
+  grazing: {
+    rate: 0.05, halfB: 0.5, growth: 0.03, decay: 0.006,   // 1/s; halfB in biomass per grid node
+    floor: 0.05, diffusion: 0.05, max: 6,
+    recycled: 0.7,                      // excreted in place; the rest sinks as fecal pellets
   },
   mutation: { step: 0.08, jumpChance: 0.05, jump: 0.3 },
 
@@ -150,8 +169,14 @@ const PARAMS = {
     near: { count: 14, parallax: 1.6, zoomExp: 1.25, speedMin: 1.5, speedMax: 3, sway: 3, size: 3 },
   },
   cystLook: { r: 0.8, spikesFromPx: 3 },
+  // Palette keyframes over the diel phase (0 = sunrise), crossfaded by dithering
+  timeOfDay: {
+    keys: [[0, 'dawn'], [0.1, 'day'], [0.5, 'day'], [0.6, 'evening'], [0.69, 'night'], [0.93, 'night'], [1, 'dawn']],
+    moonLight: 0.3,                     // rays and caustics at night, as a fraction of noon
+  },
+  plume: { specks: 46, sediment: 0.4 }, // resuspended specks rising in a nutrient pulse
   hud: { x: 4, y: 290, line: 7, visibleMs: 6000, fadeMs: 2000 },
-  debug: { sampleEvery: 100, historyLength: 180, frameSamples: 120, graphY: 92, graphH: 40, mapX: 126, mapY: 6, mapCell: 2 },
+  debug: { sampleEvery: 100, historyLength: 180, frameSamples: 120, graphY: 172, graphH: 48, mapX: 126, mapY: 6, mapCell: 2 },
 };
 
 // ===== RNG =====
@@ -207,6 +232,15 @@ function dexp(x) {
   return sum;
 }
 
+// Sine from arithmetic only (Taylor series on [-pi/2, pi/2]); error below 1e-7.
+function dsin(x) {
+  x -= TAU * Math.floor(x / TAU + 0.5);
+  if (x > Math.PI / 2) x = Math.PI - x;
+  else if (x < -Math.PI / 2) x = -Math.PI - x;
+  const x2 = x * x;
+  return x * (1 - x2 / 6 * (1 - x2 / 20 * (1 - x2 / 42 * (1 - x2 / 72 * (1 - x2 / 110)))));
+}
+
 // Standard normal approximation from four uniforms (Irwin-Hall): arithmetic only.
 function gauss(rng) {
   return (rng.next() + rng.next() + rng.next() + rng.next() - 2) * SQRT3;
@@ -236,10 +270,11 @@ const PALETTE_HEX = [
   '#0d1438', '#1b2f74', '#2f55b4', '#5a8ae6', '#b0d0fa', // blue: ink shadows, sky highlights
 ];
 
-const PAL32 = new Uint32Array(PALETTE_HEX.map((hex) => {
+const toPal32 = (hex) => {
   const n = parseInt(hex.slice(1), 16);
   return (0xff000000 | ((n & 0xff) << 16) | (n & 0xff00) | ((n >> 16) & 0xff)) >>> 0;
-}));
+};
+const PAL32 = new Uint32Array(PALETTE_HEX.map(toPal32));
 
 const COL = { WATER: 0, SHAFT: 8, FOAM: 9, GLOW: 10, SLATE: 11, RAMP: 12, RAMP2: 38, TONES: 5, RAMPS: 7, BLOOM: 32, BLOOM_FROM: 2, BLOOM_TO: 7 };
 const OUTLINE = 0, SHADOW = 1, BASE = 2, HIGHLIGHT = 3, BRIGHT = 4;
@@ -247,6 +282,35 @@ const GREEN = 0, GOLD = 1, ROSE = 2, VIOLET = 3, EMERALD = 4, LIGHTBLUE = 5, BLU
 const rampBase = (ramp) => (ramp < 4 ? COL.RAMP + ramp * COL.TONES : COL.RAMP2 + (ramp - 4) * COL.TONES);
 // The hue gene walks around this colour wheel, so a mutation shifts a lineage to a neighbouring colour
 const HUE_WHEEL = [GOLD, GREEN, EMERALD, LIGHTBLUE, BLUE, VIOLET, ROSE];
+
+// ---- Time of day: hand-curated palettes crossfaded by dithering ----
+// Each keyframe replaces the environment colours (water ramp, light and accents, bloom water).
+// Pigments are not recoloured: at night each tone takes the next darker step of its own ramp,
+// so lineages keep their colour at every hour and every pixel is still a curated colour.
+const ENV_SLOTS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 32, 33, 34, 35, 36, 37];
+const TIME_PALETTES = {
+  day: { env: ENV_SLOTS.map((i) => PALETTE_HEX[i]), tones: [0, 1, 2, 3, 4] },
+  dawn: {   // cool lilac water, pink rays
+    env: ['#070a16', '#0c1326', '#121c35', '#1a2644', '#243152', '#333d5e', '#474a68', '#615a72',
+          '#9a7f92', '#e6c4c8', '#fbeee6', '#3a4258',
+          '#121f22', '#18292b', '#213433', '#2d403b', '#3c4c44', '#4e5a4c'],
+    tones: [0, 1, 2, 3, 4],
+  },
+  evening: {   // golden rays over plum-navy depths
+    env: ['#080912', '#0e1222', '#151a30', '#1e223d', '#2a2b48', '#3b3550', '#533f52', '#6e4c52',
+          '#a8714f', '#f2c27e', '#fff0c8', '#3a3550',
+          '#141a1c', '#1b2326', '#252d2c', '#333731', '#464234', '#5c4f38'],
+    tones: [0, 1, 2, 3, 4],
+  },
+  night: {   // moonlit: near-black water, silver moon rays, cold blue-white bioluminescence
+    env: ['#04060c', '#060a14', '#080e1c', '#0a1324', '#0d192d', '#112037', '#162942', '#1c334d',
+          '#2e4a66', '#8fa6c4', '#bff0ff', '#1e2a3c',
+          '#0a1412', '#0d1a19', '#10211f', '#142a26', '#18332c', '#1e3d33'],
+    tones: [0, 0, 1, 2, 3],
+  },
+};
+// Built after the ramp tables below
+const TIME_PAL32 = {};
 
 // Each colour's next brighter step: light falling on anything is one lookup.
 const LIGHT_UP = new Uint8Array(PALETTE_HEX.length);
@@ -260,19 +324,53 @@ for (let r = 0; r < COL.RAMPS; r++) {
 }
 for (let i = 0; i <= COL.BLOOM_TO - COL.BLOOM_FROM; i++) LIGHT_UP[COL.BLOOM + i] = i < COL.BLOOM_TO - COL.BLOOM_FROM ? COL.BLOOM + i + 1 : COL.SHAFT;
 
+for (const name of Object.keys(TIME_PALETTES)) {
+  const P = TIME_PALETTES[name], pal = new Uint32Array(PAL32);
+  ENV_SLOTS.forEach((slot, k) => { pal[slot] = toPal32(P.env[k]); });
+  for (let r = 0; r < COL.RAMPS; r++) {
+    for (let t = 0; t < COL.TONES; t++) pal[rampBase(r) + t] = PAL32[rampBase(r) + P.tones[t]];
+  }
+  TIME_PAL32[name] = pal;
+}
+
 // ===== Fields =====
 const GRID_W = W / PARAMS.grid.cols, GRID_H = H / PARAMS.grid.rows;
 
 function createFields() {
   const { cols, rows } = PARAMS.grid, N = PARAMS.nutrients, n = cols * rows;
-  const f = { light: new Float64Array(n), nut: new Float64Array(n), scratch: new Float64Array(n) };
+  const f = {
+    light: new Float64Array(n), profile: new Float64Array(rows), nut: new Float64Array(n), scratch: new Float64Array(n),
+    bio: new Float64Array(n), graz: new Float64Array(n), grazScratch: new Float64Array(n),
+  };
   for (let j = 0; j < rows; j++) {
     const depth = (j + 0.5) / rows;
-    const light = PARAMS.light.surface * dexp(-PARAMS.light.atten * depth);
+    f.profile[j] = PARAMS.light.surface * dexp(-PARAMS.light.atten * depth);
     const nut = N.surface + (N.deep - N.surface) * smoothstep(N.clineTop, N.clineBottom, depth);
-    for (let i = 0; i < cols; i++) { f.light[j * cols + i] = light; f.nut[j * cols + i] = nut; }
+    for (let i = 0; i < cols; i++) f.nut[j * cols + i] = nut;
   }
+  f.graz.fill(PARAMS.grazing.floor);
   return f;
+}
+
+// Surface light over the diel cycle (phase 0 = sunrise): sqrt of a half sine, then moonlight.
+function surfaceLightAt(phase) {
+  const D = PARAMS.diel;
+  if (phase >= D.dayFrac) return D.moon;
+  return D.moon + (1 - D.moon) * Math.sqrt(dsin(Math.PI * phase / D.dayFrac));
+}
+
+function dayPhase(w) {
+  const p = w.tick * TICK_DT / w.dayLength + PARAMS.diel.start;
+  return p - Math.floor(p);
+}
+
+function updateLight(w) {
+  const { cols, rows } = PARAMS.grid, f = w.fields;
+  w.surfaceLight = surfaceLightAt(dayPhase(w));
+  for (let j = 0; j < rows; j++) {
+    const v = f.profile[j] * w.surfaceLight;
+    for (let i = 0; i < cols; i++) f.light[j * cols + i] = v;
+  }
 }
 
 // Bilinear footprint of a point, reused to avoid allocation.
@@ -332,6 +430,24 @@ function diffuseNutrients(f, dt) {
   }
   f.nut = b; f.scratch = a;
   return inflow;
+}
+
+// Grazers: grow where food is dense, starve slowly elsewhere, spread by closed diffusion, never below a floor.
+function updateGrazers(f, dt) {
+  const { cols, rows } = PARAMS.grid, G = PARAMS.grazing;
+  const k = G.diffusion * dt, K2 = G.halfB * G.halfB;
+  const a = f.graz, b = f.grazScratch;
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      const idx = j * cols + i, c = a[idx], B = f.bio[idx];
+      const l = i > 0 ? a[idx - 1] : c, r = i < cols - 1 ? a[idx + 1] : c;
+      const u = j > 0 ? a[idx - cols] : c, d = j < rows - 1 ? a[idx + cols] : c;
+      const food = B * B / (B * B + K2);
+      const v = c + k * (l + r + u + d - 4 * c) + c * (G.growth * food - G.decay) * dt;
+      b[idx] = clamp(v, G.floor, G.max);
+    }
+  }
+  f.graz = b; f.grazScratch = a;
 }
 
 // ===== Genome =====
@@ -402,7 +518,7 @@ function createCell(w, x, y, g, energy, parentId, spriteSeed) {
   const c = {
     id: w.nextId++, parentId, x, y, vx: 0, vy: 0,
     energy, held: 0, age: 0, lifespan: 0,
-    theta: w.rng.next() * TAU, flashTick: -1000, dying: 0,
+    theta: w.rng.next() * TAU, flashTick: -1000, dying: 0, grazed: false,
     g, spriteSeed, gen: 0,
     r: 0, biomass: 0, gainK: 0, halfSat: 0, maintK: 0, targetLight: 0,
     spr: null,
@@ -429,15 +545,21 @@ function buildHash(w) {
   }
 }
 
-function createWorld(seed, founderCount) {
-  const F = PARAMS.founders, rng = makeRng(seed);
+function createWorld(seed, founderCount, dayLength) {
+  const F = PARAMS.founders, P = PARAMS.pulses, rng = makeRng(seed);
   const w = {
     seed, rng, tick: 0, nextId: 1, fields: createFields(), cells: [], cysts: [], hash: createHash(), upwelled: 0, initialInventory: 0,
+    dayLength: dayLength || PARAMS.diel.dayLength, surfaceLight: 1,
+    pulses: [], nextPulse: 0,
     fallen: new Float64Array(PARAMS.grid.cols),   // detritus exported per column, ever (observed only, never read by the rules)
+    deaths: { starved: 0, old: 0, grazed: 0 },     // observed only
   };
+  w.nextPulse = Math.floor(rng.range(P.firstMin, P.firstMax) * PARAMS.time.tickRate);
+  updateLight(w);
   const count = founderCount || F.count;
   for (let l = 0; l < F.lineages; l++) {
     const base = randomGenome(rng), spriteSeed = rng.int(0x7fffffff), cx = rng.range(F.spread, W - F.spread);
+    base.depthPref *= F.depthMax;
     const n = Math.floor(count / F.lineages) + (l < count % F.lineages ? 1 : 0);
     for (let k = 0; k < n; k++) {
       const g = mutateGenome(base, rng);
@@ -478,7 +600,7 @@ function worldChecksum(w) {
   };
   mix(w.tick); mix(w.cells.length); mix(w.cysts.length);
   for (const c of w.cells) { mix(c.id); mix(c.x); mix(c.y); mix(c.energy); mix(c.theta); }
-  for (let i = 0; i < w.fields.nut.length; i += 7) mix(w.fields.nut[i]);
+  for (let i = 0; i < w.fields.nut.length; i += 7) { mix(w.fields.nut[i]); mix(w.fields.graz[i]); }
   return h >>> 0;
 }
 
@@ -489,30 +611,44 @@ const BROWNIAN_K = PARAMS.drift.brownian * Math.sqrt(TICK_DT);
 function stepWorld(w) {
   const dt = TICK_DT, cells = w.cells;
   w.tick++;
+  updateLight(w);
   w.upwelled += diffuseNutrients(w.fields, dt);
+  updatePulses(w, dt);
   buildHash(w);
   for (let i = 0; i < cells.length; i++) if (!cells[i].dying) steer(w, cells[i], dt);
   for (let i = 0; i < cells.length; i++) move(cells[i], dt);
+  const Dr = PARAMS.drift, rest = PARAMS.diel.rest;
+  const pace = rest + (1 - rest) * smoothstep(Dr.darkLo, Dr.darkHi, w.surfaceLight);   // night rest
   for (let i = 0; i < cells.length; i++) {
     const c = cells[i];
     if (c.dying) continue;
-    metabolise(w, c, dt);
+    metabolise(w, c, dt, pace);
     advancePhase(w, c, dt);
-    c.age += dt;
+    c.age += dt * pace;
   }
+  graze(w, dt);
   lifeAndDeath(w);
   updateCysts(w, dt);
 }
 
 // Rule 1: Brownian motion, phototaxis toward the preferred light level, soft separation.
+// The preferred level is relative to the surface, so a cell holds its depth all day.
+// Night descent: in darkness cells follow the nutrient gradient down instead; phototaxis brings them back at dawn.
 function steer(w, c, dt) {
   const D = PARAMS.drift, hs = w.hash;
   c.vx += gauss(w.rng) * BROWNIAN_K;
   c.vy += gauss(w.rng) * BROWNIAN_K;
 
   // Brighter than preferred -> swim down (+y); dimmer -> swim up. Bounded ratio, no log.
-  const L = sampleField(w.fields.light, c.x, c.y);
-  c.vy += D.phototaxis * (L - c.targetLight) / (L + c.targetLight + 1e-6) * dt;
+  const night = 1 - smoothstep(D.darkLo, D.darkHi, w.surfaceLight);
+  if (night < 1) {
+    const L = sampleField(w.fields.light, c.x, c.y), T = c.targetLight * w.surfaceLight;
+    c.vy += (1 - night) * D.phototaxis * (L - T) / (L + T + 1e-9) * dt;
+  }
+  if (night > 0) {
+    const nd = sampleField(w.fields.nut, c.x, c.y + GRID_H), nu = sampleField(w.fields.nut, c.x, c.y - GRID_H);
+    c.vy += night * D.nutritaxis * clamp(D.gradientGain * (nd - nu) / (nd + nu + 1e-6), -1, 1) * dt;
+  }
 
   const ci = clamp(Math.floor(c.x / hs.s), 0, hs.cols - 1), cj = clamp(Math.floor(c.y / hs.s), 0, hs.rows - 1);
   for (let j = cj - 1; j <= cj + 1; j++) {
@@ -549,13 +685,14 @@ function move(c, dt) {
 }
 
 // Rule 2: energy += light x nutrients x efficiency - maintenance. Uptake removes nutrients locally.
-function metabolise(w, c, dt) {
+// Upkeep slows with the night rest (pace).
+function metabolise(w, c, dt, pace) {
   const f = w.fields;
   const L = sampleField(f.light, c.x, c.y), N = sampleField(f.nut, c.x, c.y);
   const gain = c.gainK * L * N / (N + c.halfSat) * dt;
   const want = gain * PARAMS.metabolism.uptake * c.biomass;
   const got = want > 0 ? takeField(f.nut, c.x, c.y, want) : 0;
-  c.energy += (want > 0 ? gain * got / want : 0) - c.maintK * dt;
+  c.energy += (want > 0 ? gain * got / want : 0) - c.maintK * pace * dt;
   c.held += got;
 }
 
@@ -563,6 +700,67 @@ function metabolise(w, c, dt) {
 function advancePhase(w, c, dt) {
   c.theta += TAU * c.g.omega * dt;
   if (c.theta >= TAU) { c.theta -= TAU; c.flashTick = w.tick; }
+}
+
+// Nutrient pulses: at long random intervals a plume of deep water rises from the floor,
+// releasing its nutrients evenly along its path with a Gaussian horizontal profile.
+function updatePulses(w, dt) {
+  const P = PARAMS.pulses, cols = PARAMS.grid.cols, rng = w.rng;
+  if (w.tick >= w.nextPulse) {
+    const x = rng.range(P.width, W - P.width), y = H - PARAMS.world.floor, top = H * P.top * rng.range(0.7, 1.3);
+    const weights = new Float64Array(cols);
+    let sum = 0;
+    for (let i = 0; i < cols; i++) {
+      const d = ((i + 0.5) * GRID_W - x) / P.width;
+      weights[i] = dexp(-d * d);
+      sum += weights[i];
+    }
+    for (let i = 0; i < cols; i++) weights[i] /= sum;
+    w.pulses.push({ x, y, y0: y, top, age: 0, perTick: P.amount * P.rise * dt / (y - top), weights });
+    w.nextPulse = w.tick + Math.floor(rng.range(P.gapMin, P.gapMax) * PARAMS.time.tickRate);
+  }
+  let k = 0;
+  for (let n = 0; n < w.pulses.length; n++) {
+    const p = w.pulses[n];
+    p.age += dt;
+    p.y -= P.rise * dt;
+    if (p.y <= p.top) continue;
+    for (let i = 0; i < cols; i++) addField(w.fields.nut, (i + 0.5) * GRID_W, p.y, p.perTick * p.weights[i]);
+    w.upwelled += p.perTick;
+    w.pulses[k++] = p;
+  }
+  w.pulses.length = k;
+}
+
+// Rule 5: grazing. Density-dependent and lagged: grazers build up where cells are dense.
+function graze(w, dt) {
+  const G = PARAMS.grazing, f = w.fields, cells = w.cells, K = G.halfB;
+  f.bio.fill(0);
+  for (let i = 0; i < cells.length; i++) if (!cells[i].dying) addField(f.bio, cells[i].x, cells[i].y, cells[i].biomass);
+  updateGrazers(f, dt);
+  for (let i = 0; i < cells.length; i++) {
+    const c = cells[i];
+    if (c.dying) continue;
+    const B = sampleField(f.bio, c.x, c.y), Z = sampleField(f.graz, c.x, c.y);
+    const m = G.rate * Z * K * B / (B * B + K * K);
+    if (w.rng.chance(m * dt)) eaten(w, c);
+  }
+}
+
+// A grazed cell vanishes quietly: no cyst; most of its nutrients are excreted in place, the rest sink as pellets.
+function eaten(w, c) {
+  c.dying = 1;
+  c.grazed = true;
+  w.deaths.grazed++;
+  const recycled = c.held * PARAMS.grazing.recycled;
+  addField(w.fields.nut, c.x, c.y, recycled);
+  exportDetritus(w, c.x, c.held - recycled);
+  c.held = 0;
+}
+
+function exportDetritus(w, x, amount) {
+  addField(w.fields.nut, x, H - 1, amount);
+  w.fallen[clamp(Math.floor(x / GRID_W), 0, PARAMS.grid.cols - 1)] += amount;
 }
 
 // Rules 3 and 4
@@ -628,9 +826,9 @@ function die(w, c, starved) {
   }
   const recycled = give * PARAMS.death.recycled;
   addField(nut, c.x, c.y, recycled);
-  addField(nut, c.x, H - 1, give - recycled);
-  w.fallen[clamp(Math.floor(c.x / GRID_W), 0, PARAMS.grid.cols - 1)] += give - recycled;
+  exportDetritus(w, c.x, give - recycled);
   c.held = 0;
+  if (starved) w.deaths.starved++; else w.deaths.old++;
 }
 
 // Cysts sink, rest, then germinate where nutrients are rich, or lose viability.
@@ -783,9 +981,12 @@ function waterBand(wy) {
   return R.waterBottom + (R.waterTop - R.waterBottom) * Math.pow(1 - f, R.waterCurve);
 }
 
+// Brightness of rays and caustics: sunlight by day, a little moonlight at night
+let dayLight = 1;
+
 function shaftFade(wy) {
   const sd = wy < SHAFT_DEPTH ? 1 - wy / SHAFT_DEPTH : 0;
-  return R.shaftStrength * sd * sd;
+  return R.shaftStrength * dayLight * sd * sd;
 }
 
 function updateShafts(t) {
@@ -911,7 +1112,7 @@ function drawBackground(t) {
   for (let py = 0; py < H; py++) {
     const by = by0 + py, wy = (by + 0.5) * invz, row = py * W, brow = (by & 3) << 2, brow2 = ((by + 1) & 3) << 2;
     const base = waterBand(wy), sf = shaftFade(wy), u0 = (wx0 + wy * R.shaftSlope) * R.shaftRes;
-    const cf = wy < CAUSTIC_H ? Math.pow(1 - wy / CAUSTIC_H, R.causticFade) : 0;
+    const cf = wy < CAUSTIC_H ? Math.pow(1 - wy / CAUSTIC_H, R.causticFade) * dayLight : 0;
     const nearSurface = wy < SURFACE_MAX, nearFloor = wy > FLOOR_MIN, tintRow = (py >> 2) * TINT_W;
     for (let px = 0; px < W; px++) {
       const bx = bx0 + px, b = BAYER[brow | (bx & 3)];
@@ -935,6 +1136,43 @@ function drawBackground(t) {
         if (tint > 0 && BAYER[brow2 | ((bx + 2) & 3)] < tint) i = COL.BLOOM + i - COL.BLOOM_FROM;
       }
       ib[row + px] = i;
+    }
+  }
+}
+
+// ---- Nutrient pulses: resuspended specks rising in the plume, thinning as it climbs ----
+function drawPlumes(w) {
+  const P = PARAMS.plume, Pu = PARAMS.pulses;
+  for (const p of w.pulses) {
+    const span = p.y0 - p.y;
+    for (let i = 0; i < P.specks; i++) {
+      const h = Math.floor(p.x * 997) + i * 11;
+      const off = (hash01(h + 1) + hash01(h + 2) - 1) * Pu.width;
+      const y = p.y0 - mod(p.age * Pu.rise * (0.5 + 0.5 * hash01(h + 3)) + hash01(h + 4) * span, span);
+      if (hash01(h + 5) > 0.3 + 0.7 * (y - p.y) / span) continue;   // fewer specks near the head
+      const x = p.x + off + Math.sin(p.age * 0.7 + i) * 0.8;
+      const sx = toSX(x), sy = toSY(y);
+      if (sx < 0 || sy < 0 || sx >= W || sy >= H) continue;
+      if (hash01(h + 6) < P.sediment) put(sx, sy, rampBase(GOLD) + SHADOW);
+      else lift(sx, sy);
+    }
+  }
+}
+
+// Palette for this moment of the day: two keyframes and a world-anchored dither between them
+function blitTimeOfDay(w) {
+  const keys = PARAMS.timeOfDay.keys, ph = dayPhase(w);
+  let k = 0;
+  while (k < keys.length - 2 && ph >= keys[k + 1][0]) k++;
+  const a = TIME_PAL32[keys[k][1]], b = TIME_PAL32[keys[k + 1][1]];
+  const mix = a === b ? 0 : (ph - keys[k][0]) / (keys[k + 1][0] - keys[k][0]);
+  const ib = view.ibuf, buf = view.buf, bx0 = view.bx0, by0 = view.by0;
+  if (mix <= 0) { for (let i = 0; i < ib.length; i++) buf[i] = a[ib[i]]; return; }
+  for (let py = 0; py < H; py++) {
+    const row = py * W, brow = ((by0 + py) & 3) << 2;
+    for (let px = 0; px < W; px++) {
+      const i = row + px;
+      buf[i] = BAYER[brow | ((bx0 + px) & 3)] < mix ? b[ib[i]] : a[ib[i]];
     }
   }
 }
@@ -1257,7 +1495,7 @@ function drawCell(c, tick, t) {
     if (sy < 0 || sy >= H) continue;
     const by = by0 + sy, wy = (by + 0.5) / z;
     const sl = shaftFade(wy) * R.cellLight;
-    const cl = wy < CAUSTIC_H ? Math.pow(1 - wy / CAUSTIC_H, R.causticFade) * R.cellCaustic : 0;
+    const cl = wy < CAUSTIC_H ? Math.pow(1 - wy / CAUSTIC_H, R.causticFade) * R.cellCaustic * dayLight : 0;
     for (let px = 0; px < size; px++) {
       const t0 = tones[py * size + px];
       if (t0 === -1) continue;
@@ -1547,12 +1785,15 @@ function composeFrame(w, now) {
   view.bx0 = clamp(Math.round(cam.x * cam.zoom), 0, Math.round(W * cam.zoom) - W);
   view.by0 = clamp(Math.round(cam.y * cam.zoom), 0, Math.round(H * cam.zoom) - H);
   buildDeadline = performance.now() + PARAMS.sprite.buildBudgetMs;
+  const moon = PARAMS.timeOfDay.moonLight;
+  dayLight = moon + (1 - moon) * w.surfaceLight;
   updateShafts(t);
   updateCaustics(t, w.tick);
   updateBloom(w);
   drawBackground(t);
   drawParticles(P.far, 1000, t, false);
   drawParticles(P.mid, 2000, t, false);
+  drawPlumes(w);
   drawPebbles();
   drawCysts(w);
   updateCrawlers(w);
@@ -1564,8 +1805,7 @@ function composeFrame(w, now) {
   drawHud(w, now);
   let overlayMs = 0;
   if (debug.on) { const t0 = performance.now(); drawDebug(w); overlayMs = performance.now() - t0; }
-  const ib = view.ibuf, buf = view.buf;
-  for (let i = 0; i < ib.length; i++) buf[i] = PAL32[ib[i]];
+  blitTimeOfDay(w);
   return overlayMs;
 }
 
@@ -1668,7 +1908,9 @@ function meanNutrient(w) {
 function debugSample(w) {
   const D = PARAMS.debug, minute = 60 * PARAMS.time.tickRate;
   if (w.tick >= debug.nextSample) {
-    debug.history.push({ pop: aliveCount(w), nut: meanNutrient(w) });
+    let depth = 0, n = 0;
+    for (const c of w.cells) if (!c.dying) { depth += c.y; n++; }
+    debug.history.push({ pop: n, nut: meanNutrient(w), depth: n ? depth / n / H : -1, light: w.surfaceLight });
     if (debug.history.length > D.historyLength) debug.history.shift();
     debug.nextSample += D.sampleEvery;
   }
@@ -1696,10 +1938,24 @@ function drawFieldMaps(w) {
       }
     }
   };
+  // Grazers (rose) below the nutrient map, scaled so the floor is dark and 2 is bright
+  const rose = rampBase(ROSE), zy = rows * m + 2;
   for (let j = 0; j < rows; j++) {
-    for (let i = 0; i < cols; i++) node(w.fields.nut, green, i, j, D.mapX);
+    for (let i = 0; i < cols; i++) {
+      node(w.fields.nut, green, i, j, D.mapX);
+      const v = clamp(w.fields.graz[j * cols + i] / 2, 0, 1) * 4;
+      for (let y = 0; y < m; y++) {
+        for (let x = 0; x < m; x++) {
+          const px = D.mapX + i * m + x, py = D.mapY + zy + j * m + y;
+          let k = v | 0;
+          if (bayer(px, py) < v - k) k++;
+          put(px, py, rose + (k > BRIGHT ? BRIGHT : k));
+        }
+      }
+    }
     node(w.fields.light, gold, 0, j, D.mapX + cols * m + 1);
   }
+  for (const p of w.pulses) put(D.mapX + Math.floor(p.x / GRID_W * m), D.mapY + Math.floor(p.y / GRID_H * m), COL.GLOW);
   for (const c of w.cells) {
     if (!c.dying) put(D.mapX + Math.floor(c.x / GRID_W * m), D.mapY + Math.floor(c.y / GRID_H * m), COL.FOAM);
   }
@@ -1727,16 +1983,21 @@ function drawDebug(w) {
     'MS ' + avg.toFixed(1) + '  P95 ' + p95.toFixed(1),
     'DROP ' + debug.droppedTicks,
     'CK ' + ck,
+    'DAY ' + dayPhase(w).toFixed(2) + '  SUN ' + w.surfaceLight.toFixed(2) + '  PLUME ' + w.pulses.length,
+    'DIED S ' + w.deaths.starved + ' O ' + w.deaths.old + ' G ' + w.deaths.grazed,
   ];
   for (let i = 0; i < lines.length; i++) drawText(3, 6 + i * 7, lines[i], COL.FOAM, 1);
   drawFieldMaps(w);
 
-  // Population (foam) and mean nutrient (gold) over the last ~10 minutes; dotted slate line = cap
+  // Population (foam), mean nutrient (gold), mean cell depth (rose, down = deeper) and sunlight (slate)
+  // over the last ~10 minutes; dotted slate line = cap
   const gy = D.graphY, gh = D.graphH, ib = view.ibuf;
   for (let y = gy; y < gy + gh; y++) for (let x = 0; x < W; x++) ib[y * W + x] = COL.WATER;
   for (let x = 0; x < W; x += 2) put(x, gy, COL.SLATE);
   const hist = debug.history, x0 = W - hist.length;
   for (let i = 0; i < hist.length; i++) {
+    put(x0 + i, gy + gh - 1 - Math.round(hist[i].light * (gh - 1)), COL.SLATE);
+    if (hist[i].depth >= 0) put(x0 + i, gy + Math.round(hist[i].depth * (gh - 1)), rampBase(ROSE) + HIGHLIGHT);
     put(x0 + i, gy + gh - 1 - Math.round(hist[i].pop / PARAMS.division.maxCells * (gh - 1)), COL.FOAM);
     put(x0 + i, gy + gh - 1 - Math.round(clamp(hist[i].nut, 0, 1) * (gh - 1)), rampBase(1) + HIGHLIGHT);
   }
@@ -1782,7 +2043,7 @@ function hashString(s) {
 }
 
 // ?seed= (number or word), ?debug, ?stress (start at the cell cap), ?ff=seconds (fast-forward),
-// ?zoom=1..4 with ?at=x,y (world point to centre on), ?speed=1|2|4|8 (time-lapse)
+// ?zoom=1..4 with ?at=x,y (world point to centre on), ?speed=1|2|4|8 (time-lapse), ?day=5|10|30 (minutes)
 function readOptions() {
   const q = new URLSearchParams(location.search);
   let label = (q.get('seed') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12), seed;
@@ -1798,13 +2059,14 @@ function readOptions() {
     seed, label, debug: q.has('debug'), stress: q.has('stress'), ff: Math.max(0, Number(q.get('ff')) || 0),
     zoom: Number(q.get('zoom')) || 1, atX: at.length === 2 ? at[0] : W / 2, atY: at.length === 2 ? at[1] : H / 2,
     speed: Number(q.get('speed')) || 1,
+    dayLength: PARAMS.diel.dayMinutes.includes(Number(q.get('day'))) ? Number(q.get('day')) * 60 : PARAMS.diel.dayLength,
   };
 }
 
 function init() {
   const opts = readOptions();
   seedLabel = opts.label;
-  world = createWorld(opts.seed, opts.stress ? PARAMS.division.maxCells : 0);
+  world = createWorld(opts.seed, opts.stress ? PARAMS.division.maxCells : 0, opts.dayLength);
   debug.on = opts.debug;
   const ffTicks = Math.floor(opts.ff * PARAMS.time.tickRate);
   for (let i = 0; i < ffTicks; i++) { stepWorld(world); debugSample(world); }

@@ -147,15 +147,21 @@ const PARAMS = {
   render: {
     waterTop: 6.9, waterBottom: 0.3, waterCurve: 1.5,
     seam: 0.3,                          // fraction of each colour band that is dithered
-    shaftDepth: 0.6, shaftStrength: 2.4, shaftSlope: 0.45, shaftRes: 4,
-    shaftA: 0.6, shaftB: 0.4, shaftFreqA: 0.05, shaftFreqB: 0.11, shaftSpeedA: 0.04, shaftSpeedB: 0.03,
+    // God rays: thin beams focused by the moving surface, fanning out from a virtual sun above the water.
+    // The sun (the moon at night) crosses the sky, so rays lean one way in the morning and the other at evening.
+    rayDepth: 0.85, rayStrength: 3.2, rayFadePow: 1.5, rayFocal: 420, rayTilt: 0.6, rayRes: 4,
+    rayWaves: [[1.0, 0.31, 0.45, 0.0], [0.8, 0.53, -0.6, 1.7], [0.6, 0.19, 0.25, 4.1], [0.45, 0.89, 0.8, 2.3]],   // amp, k (rad/unit), speed (rad/s), phase
+    rayThreshold: 0.25, rayGroups: 0.045, rayGroupSpeed: 0.11,   // envelope that lets groups of rays wax and wane
+    // Refraction: a travelling wobble near the surface bends rays, caustics and the light on cells
+    shimmerAmp: 1.3, shimmerDepth: 0.35, shimmerK1: 0.21, shimmerW1: 0.9, shimmerK2: 0.47, shimmerW2: 1.6,
     causticDepth: 0.2, causticCell: 16, causticWidth: 1.0, causticSpeed: 0.12, causticEvery: 3, causticFade: 1.5,
     cellLight: 0.35, cellCaustic: 0.7,  // how strongly shafts and caustics brighten cells passing through
     deepFrom: 0.55, deepDarken: 0.7,
   },
   surface: {
     base: 3, ampA: 1.0, ampB: 0.6, freqA: 0.09, freqB: 0.23, speedA: 0.25, speedB: 0.4,
-    glint: 1.25, glintFreqA: 0.5, glintSpeedA: 0.4, glintFreqB: 0.17, glintSpeedB: 0.25,
+    // Specular glints twinkle where the wave slope catches the sun; ray roots light the surface film
+    glintWidth: 0.025, glintChance: 0.55, twinkle: 3, sunSlope: 0.2, rootLit: 0.55,
   },
   floor: {
     rippleA: 1.2, rippleB: 0.6, rippleFreqA: 0.31, rippleFreqB: 0.11,
@@ -865,7 +871,7 @@ function updateCysts(w, dt) {
 // Light (shafts, caustics, flashes) is applied with LIGHT_UP, so every pixel stays on the palette.
 const R = PARAMS.render;
 const ZOOMS = PARAMS.camera.levels;
-const SHAFT_DEPTH = H * R.shaftDepth, CAUSTIC_H = Math.ceil(H * R.causticDepth);
+const RAY_DEPTH = H * R.rayDepth, SHIMMER_DEPTH = H * R.shimmerDepth, CAUSTIC_H = Math.ceil(H * R.causticDepth);
 const FLOOR_TOP = H - PARAMS.world.floor;
 const FLOOR_MIN = FLOOR_TOP - PARAMS.floor.rippleA - PARAMS.floor.rippleB;
 const SURFACE_MAX = PARAMS.surface.base + PARAMS.surface.ampA + PARAMS.surface.ampB + 1;
@@ -878,7 +884,10 @@ const view = {
 };
 const cam = { level: 0, zoom: 1, x: 0, y: 0 };   // x, y: world point at the screen's top-left
 
-const shaftTable = new Float64Array(Math.ceil((W + H * R.shaftSlope) * R.shaftRes) + 8);
+// Ray intensity along the surface, u from -W to 2W (rays from off-screen can lean in)
+const rayTable = new Float64Array(3 * W * R.rayRes + 8);
+const rowShift = new Float64Array(H);   // refraction offset per screen row, world units
+const sun = { x: W / 2, slope: 0 };     // virtual sun (or moon) position above the water
 const CAUSTIC_COLS = W + 2, CAUSTIC_ROWS = CAUSTIC_H + 2;
 const causticF = new Float32Array(CAUSTIC_COLS * CAUSTIC_ROWS);   // gap between nearest and second-nearest point
 let causticPts = null, causticReady = false;
@@ -985,20 +994,52 @@ function waterBand(wy) {
 let dayLight = 1;
 
 function shaftFade(wy) {
-  const sd = wy < SHAFT_DEPTH ? 1 - wy / SHAFT_DEPTH : 0;
-  return R.shaftStrength * dayLight * sd * sd;
+  const sd = wy < RAY_DEPTH ? 1 - wy / RAY_DEPTH : 0;
+  return R.rayStrength * dayLight * Math.pow(sd, R.rayFadePow);
 }
 
-function updateShafts(t) {
-  for (let k = 0; k < shaftTable.length; k++) {
-    const u = k / R.shaftRes;
-    const s = R.shaftA * Math.sin(u * R.shaftFreqA + t * R.shaftSpeedA)
-            + R.shaftB * Math.sin(u * R.shaftFreqB - t * R.shaftSpeedB + 1.3);
-    shaftTable[k] = s > 0 ? s * s * s : 0;
+// The sun crosses the sky during the day, the moon at night; tilt runs -1..1 and back, so it never jumps.
+function updateSun(phase) {
+  const D = PARAMS.diel;
+  const tilt = phase < D.dayFrac ? 2 * phase / D.dayFrac - 1 : 1 - 2 * (phase - D.dayFrac) / (1 - D.dayFrac);
+  sun.x = W / 2 + tilt * R.rayTilt * R.rayFocal;
+  sun.slope = tilt * PARAMS.surface.sunSlope;
+}
+
+// Rays are where the moving surface focuses light: sharp peaks of a few travelling waves, in waxing groups.
+function updateRays(t) {
+  const waves = R.rayWaves, thr = R.rayThreshold;
+  let norm = 0;
+  for (const wv of waves) norm += wv[0];
+  for (let k = 0; k < rayTable.length; k++) {
+    const u = k / R.rayRes - W;
+    let s = 0;
+    for (const wv of waves) s += wv[0] * Math.sin(u * wv[1] + t * wv[2] + wv[3]);
+    s /= norm;
+    if (s <= thr) { rayTable[k] = 0; continue; }
+    const r = (s - thr) / (1 - thr), env = 0.55 + 0.45 * Math.sin(u * R.rayGroups + t * R.rayGroupSpeed);
+    rayTable[k] = r * r * env * 4;
   }
 }
 
-const shaftAt = (wx, wy) => shaftTable[((wx + wy * R.shaftSlope) * R.shaftRes) | 0];
+// Refraction shimmer per screen row, strongest just under the surface
+function updateShimmer(t) {
+  const invz = 1 / cam.zoom;
+  for (let py = 0; py < H; py++) {
+    const wy = (view.by0 + py + 0.5) * invz;
+    if (wy >= SHIMMER_DEPTH) { rowShift[py] = 0; continue; }
+    const f = 1 - wy / SHIMMER_DEPTH;
+    rowShift[py] = R.shimmerAmp * f * f * (Math.sin(wy * R.shimmerK1 + t * R.shimmerW1) + 0.6 * Math.sin(wy * R.shimmerK2 - t * R.shimmerW2)) / 1.6;
+  }
+}
+
+// Trace a point back along its ray to the surface, toward the virtual sun
+function rayAt(wx, wy) {
+  const u = sun.x + (wx - sun.x) * R.rayFocal / (R.rayFocal + wy);
+  const k = ((u + W) * R.rayRes) | 0;
+  return k >= 0 && k < rayTable.length ? rayTable[k] : 0;
+}
+const shaftAt = rayAt;
 
 // Cellular caustics in world space; a third of the rows are refreshed each tick.
 function updateCaustics(t, tick) {
@@ -1047,8 +1088,11 @@ function surfaceY(wx, t) {
 
 function surfacePixel(wx, wy, t, b) {
   const S = PARAMS.surface;
-  const g = Math.sin(wx * S.glintFreqA + t * S.glintSpeedA) + Math.sin(wx * S.glintFreqB - t * S.glintSpeedB + wy * 2);
-  return g > S.glint ? COL.FOAM : b < 0.5 ? COL.SHAFT : COL.SHAFT - 1;
+  const slope = S.ampA * S.freqA * Math.cos(wx * S.freqA + t * S.speedA) + S.ampB * S.freqB * Math.cos(wx * S.freqB - t * S.speedB);
+  if (Math.abs(slope - sun.slope) < S.glintWidth
+      && hash01(Math.floor(wx * 2) * 131 + Math.floor(t * S.twinkle) * 7919) < S.glintChance) return dayLight > 0.6 ? COL.GLOW : COL.FOAM;
+  if (rayAt(wx, wy) * dayLight > S.rootLit) return COL.FOAM;
+  return b < 0.5 ? COL.SHAFT : COL.SHAFT - 1;
 }
 
 // ---- Seafloor ----
@@ -1105,13 +1149,15 @@ const surfaceLine = new Float64Array(W), floorLine = new Float64Array(W);   // p
 
 function drawBackground(t) {
   const ib = view.ibuf, z = cam.zoom, invz = 1 / z, bx0 = view.bx0, by0 = view.by0;
-  const seamStart = 1 - R.seam, cw = R.causticWidth * invz, du = invz * R.shaftRes;
+  const seamStart = 1 - R.seam, cw = R.causticWidth * invz;
   const wx0 = (bx0 + 0.5) * invz;
   if ((by0 + 0.5) * invz < SURFACE_MAX) for (let px = 0; px < W; px++) surfaceLine[px] = surfaceY(wx0 + px * invz, t);
   if ((by0 + H) * invz > FLOOR_MIN) for (let px = 0; px < W; px++) floorLine[px] = floorY(wx0 + px * invz);
   for (let py = 0; py < H; py++) {
     const by = by0 + py, wy = (by + 0.5) * invz, row = py * W, brow = (by & 3) << 2, brow2 = ((by + 1) & 3) << 2;
-    const base = waterBand(wy), sf = shaftFade(wy), u0 = (wx0 + wy * R.shaftSlope) * R.shaftRes;
+    // Ray coordinate is linear in x along a row: trace back toward the virtual sun, bent by refraction
+    const base = waterBand(wy), sf = shaftFade(wy), shift = rowShift[py], g = R.rayFocal / (R.rayFocal + wy);
+    const u0 = (sun.x + (wx0 + shift - sun.x) * g + W) * R.rayRes, du = invz * g * R.rayRes;
     const cf = wy < CAUSTIC_H ? Math.pow(1 - wy / CAUSTIC_H, R.causticFade) * dayLight : 0;
     const nearSurface = wy < SURFACE_MAX, nearFloor = wy > FLOOR_MIN, tintRow = (py >> 2) * TINT_W;
     for (let px = 0; px < W; px++) {
@@ -1125,11 +1171,12 @@ function drawBackground(t) {
         const fy = floorLine[px];
         if (wy >= fy) { ib[row + px] = sedimentPixel(wx0 + px * invz, wy, wy - fy, b); continue; }
       }
-      const v = sf > 0 ? base + shaftTable[(u0 + px * du) | 0] * sf : base;
+      let v = base;
+      if (sf > 0) { const k = (u0 + px * du) | 0; if (k >= 0 && k < rayTable.length) v += rayTable[k] * sf; }
       let i = v | 0;
       const frac = v - i;
       if (frac > seamStart && b < (frac - seamStart) / R.seam) i++;      // flat bands, dithered seams
-      if (cf > 0 && b < cf && causticAt(wx0 + px * invz, wy) < cw) i++;
+      if (cf > 0 && b < cf && causticAt(wx0 + px * invz + shift, wy) < cw) i++;
       if (i > COL.SHAFT) i = COL.SHAFT;
       if (i >= COL.BLOOM_FROM && i <= COL.BLOOM_TO) {
         const tint = bloomTint[tintRow + (px >> 2)];
@@ -1515,7 +1562,7 @@ function drawCell(c, tick, t) {
       }
       if (pulse > 0 && BAYER[(((by + 1) & 3) << 2) | ((bx + 3) & 3)] < pulse) idx = LIGHT_UP[idx];   // soft bioluminescent swell
       if (sl > 0 || cl > 0) {                                                    // light shafts and caustics play over the cell
-        const wx = (bx + 0.5) / z;
+        const wx = (bx + 0.5) / z + rowShift[sy];
         let lit = sl > 0 ? shaftAt(wx, wy) * sl : 0;
         if (cl > 0 && causticAt(wx, wy) < cw) lit += cl;
         if (BAYER[(((by + 3) & 3) << 2) | ((bx + 1) & 3)] < lit) idx = LIGHT_UP[idx];
@@ -1787,7 +1834,9 @@ function composeFrame(w, now) {
   buildDeadline = performance.now() + PARAMS.sprite.buildBudgetMs;
   const moon = PARAMS.timeOfDay.moonLight;
   dayLight = moon + (1 - moon) * w.surfaceLight;
-  updateShafts(t);
+  updateSun(dayPhase(w));
+  updateRays(t);
+  updateShimmer(t);
   updateCaustics(t, w.tick);
   updateBloom(w);
   drawBackground(t);

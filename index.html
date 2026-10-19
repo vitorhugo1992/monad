@@ -35,7 +35,7 @@ const PARAMS = {
     upwelling: 1.0,                     // coupling of the bottom row to deep water
   },
 
-  founders: { count: 40, lineages: 4, spread: 12, energyMin: 0.3, energyMax: 0.7, maxAge: 60 },
+  founders: { count: 6, lineages: 2, spread: 12, energyMin: 0.4, energyMax: 0.7, maxAge: 30 },   // the water starts nearly empty
 
   // Rule 1: drift
   drift: {
@@ -76,7 +76,7 @@ const PARAMS = {
   // ---- Everything below is visual only; none of it feeds back into the simulation. ----
   camera: { levels: [1, 1.5, 2, 3, 4], wheelStep: 1 },   // zoom 1 shows the whole column
   sprite: {
-    frames: 3, wobbleFps: 2,
+    frames: 3, wobbleFps: 1,
     aspectMin: 0.75, aspectMax: 2.2,    // lineage trait: squat .. pennate-like
     squareness: 4,                      // superellipse exponent added at timbre 1 (round cell -> frustule box)
     breathe: 0.04, stream: 0.3,         // membrane swell; chloroplast drift (world units) between wobble frames
@@ -84,14 +84,14 @@ const PARAMS = {
     // Diatom frustules: as timbre rises past diatomFrom the soft outline becomes glass geometry chosen by the
     // lineage (disc or polygon valve, or a pennate boat when elongated), with striae/areolae and iridescence.
     diatomFrom: 0.5, diatomFull: 0.75, valveSides: [0, 3, 4, 5, 6], polygonScale: 1.1,
-    ornamentFrom: 0.5, ornamentMinR: 4, striaeSpacing: 2.5, iridFrom: 0.4, rimIrid: 0.45, iridSpeed: 0.5,
+    ornamentFrom: 0.5, ornamentMinR: 4, striaeSpacing: 2.5, iridFrom: 0.4, rimIrid: 0.45, iridSpeed: 0.12,
     mixFrom: 0.45, mixMax: 0.6,         // hue fraction where chloroplasts of the next colour start to appear; max share
     setaeSolid: 2, setaeFadeFrom: 0.25,  // px of solid spine at the base; fraction of length where it starts to dissolve
     plastidsPerSize: 5, plastidR: 0.3, plastidMinR: 0.9, cupR: 0.55, cupOffset: 0.25,
     plastidLit: 0.6, toneBright: 0.55, toneHigh: 0.15,
     cytoShade: -0.35, dither: 0.25,
     girdleFrom: 0.55, glassFrom: 0.6,
-    tumbleSteps: 32, maxSpin: 0.1, sway: 0.3, swaySpeed: 0.15,   // slow rotation, rad/s
+    tumbleSteps: 32, maxSpin: 0.04, sway: 0.15, swaySpeed: 0.08,   // slow rotation, rad/s (a turn takes minutes)
     buildBudgetMs: 3,                   // sprite rebuilds per frame; stale sprites are drawn past this
     speckR: 2.4,                        // below this on-screen radius a living cell is a 2x2 lit speck
   },
@@ -109,20 +109,21 @@ const PARAMS = {
     },
     prorocentrum: { a: 1.15, b: 0.8, cingulum: -2, taper: 0.3, tooth: 0.5 },   // no cingulum: the groove sits off the body
   },
-  flagella: { maxTimbre: 0.45, minR: 3, length: 1.8, amp: 0.22, waves: 1.3, beat: 3, pairSize: 1.2, spread: 0.35 },
+  flagella: { maxTimbre: 0.45, minR: 3, length: 1.8, amp: 0.22, waves: 1.3, beat: 1, pairSize: 1.2, spread: 0.35 },
   flash: {
-    glowTicks: 5,                       // the cell itself brightens
-    haloTicks: 18, haloRadius: 3, haloMinPx: 3, haloMaxPx: 24, haloStrength: 0.8,   // light spilling into the water and onto neighbours
-    ringTicks: 14, ringStart: 1, ringGrow: 0.5, ringMinR: 4, arcs: 3, arcGap: -0.3,
+    // A flash swells and fades softly (ticks), never more than one palette step brighter
+    rise: 9, fall: 36, cellLift: 0.55,
+    haloRadius: 2.2, haloMinPx: 2, haloMaxPx: 14, haloStrength: 0.3,   // faint light spilling into the water and onto neighbours
+    ringTicks: 30, ringStart: 1, ringGrow: 0.25, ringMinR: 14, arcs: 3, arcGap: 0.2,   // broken arcs only on cells large on screen
   },
   thread: { maxAge: 40, dotSpacing: 3 },  // drawn only between cells big enough on screen to show a form
   // Seafloor scavengers: decoration that comes where detritus recently fell, lingers, and walks off
   crawlers: {
     max: 4, rate: 0.12, smellFull: 15, smellTau: 60, feedMin: 8, feedMax: 20, margin: 16,
-    amphipod: { segs: 6, segLen: 1.4, rFront: 1.05, rTail: 0.6, arch: 0.8, speedMin: 4, speedMax: 6 },
-    ostracod: { rx: 2.5, ry: 1.8, speedMin: 1.5, speedMax: 2.5 },
-    isopod:   { segs: 5, segLen: 1.25, rFront: 1.25, rTail: 1.0, arch: 0.2, speedMin: 1, speedMax: 2 },
-    legH: 1.1, antenna: 3.5, step: 2.2,
+    amphipod: { segs: 6, segLen: 2.2, rFront: 1.7, rTail: 1.0, arch: 1.3, speedMin: 2.5, speedMax: 4 },
+    ostracod: { rx: 4, ry: 2.9, speedMin: 1, speedMax: 1.8 },
+    isopod:   { segs: 5, segLen: 2.0, rFront: 2.0, rTail: 1.6, arch: 0.3, speedMin: 0.8, speedMax: 1.5 },
+    legH: 1.8, antenna: 5.5, step: 1.4,
   },
   render: {
     waterTop: 6.9, waterBottom: 0.3, waterCurve: 1.5,
@@ -134,8 +135,8 @@ const PARAMS = {
     deepFrom: 0.55, deepDarken: 0.7,
   },
   surface: {
-    base: 3, ampA: 1.0, ampB: 0.6, freqA: 0.09, freqB: 0.23, speedA: 0.5, speedB: 0.8,
-    glint: 1.25, glintFreqA: 0.5, glintSpeedA: 1.1, glintFreqB: 0.17, glintSpeedB: 0.6,
+    base: 3, ampA: 1.0, ampB: 0.6, freqA: 0.09, freqB: 0.23, speedA: 0.25, speedB: 0.4,
+    glint: 1.25, glintFreqA: 0.5, glintSpeedA: 0.4, glintFreqB: 0.17, glintSpeedB: 0.25,
   },
   floor: {
     rippleA: 1.2, rippleB: 0.6, rippleFreqA: 0.31, rippleFreqB: 0.11,
@@ -146,7 +147,7 @@ const PARAMS = {
   particles: {
     far:  { count: 90, parallax: 0.5, zoomExp: 0.5, speedMin: 0.3, speedMax: 1.0, sway: 1, lift: 1 },
     mid:  { count: 48, parallax: 1, zoomExp: 1, speedMin: 1, speedMax: 3.5, sway: 2, lift: 2 },
-    near: { count: 14, parallax: 1.6, zoomExp: 1.25, speedMin: 3, speedMax: 6, sway: 4, size: 3 },
+    near: { count: 14, parallax: 1.6, zoomExp: 1.25, speedMin: 1.5, speedMax: 3, sway: 3, size: 3 },
   },
   cystLook: { r: 0.8, spikesFromPx: 3 },
   hud: { x: 4, y: 290, line: 7, visibleMs: 6000, fadeMs: 2000 },
@@ -1247,7 +1248,7 @@ function drawCell(c, tick, t) {
 
   const frame = (Math.floor(tick * S.wobbleFps / PARAMS.time.tickRate) + c.id) % S.frames;
   const tones = spr.frames[frame], size = spr.size, x0 = cx - spr.half, y0 = cy - spr.half;
-  const glow = !c.dying && tick - c.flashTick < PARAMS.flash.glowTicks ? 1 : 0;
+  const pulse = flashLevel(c, tick) * PARAMS.flash.cellLift;
   const fade = c.dying ? c.dying / PARAMS.death.fadeTicks : 0;
   const depth = c.y / H, dark = depth > R.deepFrom ? (depth - R.deepFrom) / (1 - R.deepFrom) * R.deepDarken : 0;
   const ib = view.ibuf, bx0 = view.bx0, by0 = view.by0, cw = 2 * R.causticWidth / z;
@@ -1267,13 +1268,14 @@ function drawCell(c, tick, t) {
       const muted = dark > 0 && BAYER[(((by + 2) & 3) << 2) | ((bx + 1) & 3)] < dark;   // deep water mutes colour
       let idx;
       if (t0 === IRIDESCENT) {
-        idx = glow ? COL.GLOW : muted ? base + BASE : IRID_SET[mod(irPhase + ((bx + 2 * by) >> 1), IRID_SET.length)];
+        idx = muted ? base + BASE : IRID_SET[mod(irPhase + ((bx + 2 * by) >> 1), IRID_SET.length)];
       } else {
         const alt = t0 >= ALT;
-        let tt = (alt ? t0 - ALT : t0) + glow;
+        let tt = alt ? t0 - ALT : t0;
         if (muted && tt > 0) tt--;
-        idx = tt >= COL.TONES ? COL.GLOW : (alt ? base2 : base) + tt;
+        idx = (alt ? base2 : base) + tt;
       }
+      if (pulse > 0 && BAYER[(((by + 1) & 3) << 2) | ((bx + 3) & 3)] < pulse) idx = LIGHT_UP[idx];   // soft bioluminescent swell
       if (sl > 0 || cl > 0) {                                                    // light shafts and caustics play over the cell
         const wx = (bx + 0.5) / z;
         let lit = sl > 0 ? shaftAt(wx, wy) * sl : 0;
@@ -1293,15 +1295,22 @@ function drawCells(w, t) {
   for (let i = 0; i < drawOrder.length; i++) drawCell(drawOrder[i], w.tick, t);
 }
 
-// Bioluminescence: the flash spills light into the water and onto neighbours, plus broken arcs on large cells
+// A flash swells and fades softly: 0..1 over its lifetime
+function flashLevel(c, tick) {
+  const F = PARAMS.flash, a = tick - c.flashTick;
+  if (c.dying || a < 0 || a >= F.rise + F.fall) return 0;
+  return a < F.rise ? smoothstep(0, F.rise, a) : 1 - smoothstep(F.rise, F.rise + F.fall, a);
+}
+
+// Bioluminescence: the flash spills faint light into the water and onto neighbours, plus broken arcs on large cells
 function drawFlashes(w) {
   const F = PARAMS.flash, z = cam.zoom;
   for (const c of w.cells) {
-    if (c.dying) continue;
+    const level = flashLevel(c, w.tick);
+    if (level <= 0) continue;
     const age = w.tick - c.flashTick;
-    if (age < 0 || age >= F.haloTicks) continue;
     const cx = toSX(c.x), cy = toSY(c.y), rpx = c.r * z;
-    const rh = clamp(rpx * F.haloRadius, F.haloMinPx, F.haloMaxPx), strength = F.haloStrength * (1 - age / F.haloTicks);
+    const rh = clamp(rpx * F.haloRadius, F.haloMinPx, F.haloMaxPx), strength = F.haloStrength * level;
     const y0 = Math.max(0, Math.floor(cy - rh)), y1 = Math.min(H - 1, Math.ceil(cy + rh));
     const x0 = Math.max(0, Math.floor(cx - rh)), x1 = Math.min(W - 1, Math.ceil(cx + rh));
     for (let y = y0; y <= y1; y++) {
@@ -1315,7 +1324,7 @@ function drawFlashes(w) {
     if (rpx < F.ringMinR || age >= F.ringTicks) continue;
     const k = age / F.ringTicks, rad = rpx + F.ringStart + age * F.ringGrow * z;
     if (cx < -rad || cy < -rad || cx > W + rad || cy > H + rad) continue;
-    const idx = rampBase(hueRamp(c.g)) + (k < 0.5 ? BRIGHT : HIGHLIGHT);
+    const idx = rampBase(hueRamp(c.g)) + (k < 0.5 ? HIGHLIGHT : BASE);
     const steps = Math.ceil(TAU * rad * 1.5), seed = c.id * 1.7;
     for (let s = 0; s < steps; s++) {
       const ang = s / steps * TAU;

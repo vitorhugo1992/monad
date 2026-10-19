@@ -37,7 +37,7 @@ The music works through constraints, not randomness: one shared harmonic field, 
 
 ## The world
 
-A **side view of a water column**. Light enters from the top. The surface is bright, the depths are dark.
+A **side view of a water column**: a fixed world of 180 × 320 units (portrait, phone-first) with a sediment floor at the bottom. Light enters from the top. The surface is bright, the depths are dark. The world never changes size with the screen, so a seed grows the same world on every device.
 
 ### Fields (coarse grid, e.g. 24 × 40, bilinear sampling)
 - **Light**: strongest at the top, decays with depth, scaled by a slow day/night cycle (diel cycle; one "day" ≈ 8–12 real minutes, tunable).
@@ -65,9 +65,10 @@ Mutation on division: small random walk (±8% of range) per gene, with a 5% chan
 ## Rules (the whole engine)
 
 1. **Drift**: Brownian motion + gentle movement toward the light level matching `depthPref` (phototaxis) + soft separation from close neighbours. Heavy drag. Everything moves slowly.
-2. **Metabolism**: `energy += light × nutrients × efficiency − maintenance`. Uptake removes nutrients from the local field.
-3. **Division**: when energy passes a threshold, split into two daughters with mutated genomes and half the energy each.
-4. **Death**: energy below zero or age past lifespan → the cell fades out, sounds one soft last note, and returns nutrients to the field.
+2. **Metabolism**: `energy += light × nutrients × efficiency − maintenance`, per unit biomass, with size allometry: the nutrient term saturates as `N / (N + halfSat × size)` (small cells win in bright, nutrient-poor water) and maintenance scales as `size^-1/2` (large cells endure dim water). Uptake removes nutrients from the local field and stays bound in the cell until it dies.
+3. **Division**: when energy passes a threshold, split into two daughters with mutated genomes and half the energy (and bound nutrients) each. The mother continues as one daughter (keeps her id, age resets); the other daughter's parent is her. A hard cell cap only blocks division, as a backstop.
+4. **Death**: energy below zero or age past lifespan → the cell fades out, sounds one soft last note, and returns its nutrients: part recycled where it died, the rest exported to the bottom as sinking detritus (the biological pump).
+   - **Resting cysts**: a dying cell (more often a starving one) may leave a dormant cyst that sinks to the sediment and, after dormancy, germinates where nutrients are rich. A seed bank against extinction.
 5. **Grazing pressure** (phase 4): density-dependent mortality. Dense areas slowly and quietly lose cells. This is what ends blooms. No visible predator, no voice of its own.
 6. **Phase coupling (Kuramoto)**: `dθ/dt = 2π·omega + coupling·K·mean(sin(θj − θi))` over neighbours within radius R. When θ wraps past 2π, the cell **flashes** (bioluminescence) and may sing. Synchronised clusters — colonies — emerge from this rule with no colony code.
 7. **Pitch attraction**: each cell holds a scale degree. When it flashes, it nudges its degree toward a consonant interval (unison, 3rd, 4th, 5th, octave) with the degrees its neighbours sang recently. Chords emerge from proximity and sync.
@@ -116,17 +117,19 @@ That's it. Colonies, blooms, silence and rhythm must all come out of these rules
 
 References: the "bit_wonder" style on Instagram — dark backgrounds, chunky clumped sprites with 3-tone shading, dithered gradients and caustics (top-down koi pond, pixel sunsets), tiny pixel-font HUD numbers.
 
-- **Low internal resolution**: render everything to an offscreen canvas ~180 px on the short side (e.g. 180 × 320 portrait), then upscale by an integer factor. `imageSmoothingEnabled = false`, CSS `image-rendering: pixelated`. Centre with letterboxing.
-- **Fixed palette** of ~24 colours defined in `Palette`. Every pixel is a palette colour. No alpha blending, no blur, no canvas gradients.
-- **Gradients and glows via ordered dithering** (4×4 Bayer) between neighbouring palette steps.
-- **Background**: deep navy/teal water column, dithered from lighter at the top to near-black at the bottom; dithered light shafts near the surface; slow, sparse caustic pattern; marine snow as single drifting pixels.
+- **Low internal resolution**: render everything to an offscreen canvas of 180 × 320 px, then upscale by an integer factor (tolerating 1–2 px of overhang from fractional device pixel ratios). `imageSmoothingEnabled = false`, CSS `image-rendering: pixelated`. Centre with letterboxing.
+- **Camera (render only)**: pinch / mouse wheel to zoom between snapped levels 1×–4× (1× shows the whole column), drag to pan. Pixels never get bigger: sprites and backgrounds are re-rasterised at each zoom, so detail appears as you zoom in. Dither is anchored to the world so it doesn't crawl while panning.
+- **Fixed palette** of ~38 colours defined in `Palette`: water ramp, light and accents, four pigment ramps of five hue-shifted tones, and greener "bloom water" twins of the water ramp. Every pixel is a palette colour. No alpha blending, no blur, no canvas gradients.
+- **Gradients and glows via ordered dithering** (4×4 Bayer): flat colour bands with dithered seams only near the band edges. Light is applied with a palette "light-up" table (each colour's next brighter step), so shafts, caustics and flash glows stay on the palette.
+- **Background**: deep navy/teal water column, banded from lighter at the top to near-black at the bottom; an undulating surface seen from below with glints; dithered light shafts; a slow cellular caustic network near the surface; a seafloor of sediment, microbial mat and pebbles; marine snow in three parallax layers (far specks, mid snow, near out-of-focus flocs). Water tints greener where cell biomass is dense, so blooms are visible as colour.
 - **Cells look like phytoplankton, not blobs.** Procedural sprites generated from the genome, as if seen under a microscope: a translucent cell body with a lit rim (upper-left) and a selective dark edge (lower-right), and chloroplasts inside, each shaded on its own (highlight upper-left, shadow lower-right).
-  - Form follows the genes continuously, never via cell types: `timbre` turns a round coccoid cell into a glassy box-like frustule with a girdle seam; `coupling` grows setae on larger cells; `size` sets cell size and the number of chloroplasts (one cup in small cells, several discs in large ones); `hue` sets the pigment ramp.
+  - Form follows the genes continuously, never via cell types: `timbre` turns a round coccoid cell into a glassy box-like frustule with a girdle seam; `coupling` grows setae on cells large enough on screen (polar spines on elongated cells, corner setae on squat box-like ones, radial spines on round ones); `size` sets cell size and the number of chloroplasts (one cup in small cells, several discs in large ones); `hue` sets the pigment ramp. Soft, low-`timbre` cells carry flagella that beat with the cell's phase θ.
   - A per-lineage sprite seed fixes elongation (squat to pennate-like) and the chloroplast layout, so daughters look recognisably related.
-  - 5–20 px body (setae may extend beyond). Cache the sprite per cell with a 2–3 frame wobble (membrane swell, chloroplast drift).
-- **Flash**: the sprite briefly shifts to brighter palette steps, plus a 1-px pixel ring expanding for a few frames.
+  - Body radius 1.25–4 world units; on screen that is a 1-px dot or 2×2 speck at 1× and a detailed 10–32 px cell at 4×. Cells tumble slowly. Cache the sprite per cell, zoom level and rotation step, with a 2–3 frame wobble (membrane swell, chloroplast drift); rebuilds are rationed per frame.
+  - Light shafts and caustics brighten cells passing through them; deep cells are muted.
+- **Flash**: the sprite briefly shifts to brighter palette steps, its light spills as a dithered halo onto the water and nearby cells, and large cells add broken pixel arcs.
 - **Lineage threads**: 1-px dotted line from a young cell to its living parent, fading with the child's age.
-- **HUD (minimal, diegetic)**: a microscope readout in a tiny built-in 3×5 pixel font drawn in code: seed, time of day, population. Small, in a corner, fades after inactivity. No panels, menus or knobs anywhere.
+- **HUD (minimal, diegetic)**: a microscope readout in a tiny built-in 3×5 pixel font drawn in code: seed, time, population, magnification. Small, in a corner, fades after inactivity. No panels, menus or knobs anywhere.
 
 ---
 
@@ -140,7 +143,8 @@ References: the "bit_wonder" style on Instagram — dark backgrounds, chunky clu
 **One phase per session. Do not start the next phase. Each phase must look/sound good before moving on. Commit with git after each phase.**
 
 1. **Silent world** — RNG, fixed timestep, fields, cells, rules 1–4, pixel renderer, background, HUD, debug overlay. No audio.
-   *Done when*: a 10-minute run shows the population rising and falling without extinction or explosion, it looks charming at pixel level, and it holds 60 fps on a phone.
+   *Done when*: a 10-minute run shows the population rising and falling without extinction or explosion, it looks charming at pixel level, and it holds 60 fps on a phone (frames are only drawn when a tick ran, so in practice: no dropped ticks and frame work under 8 ms at p95).
+   `node tools/sim-check.mjs [seeds] [minutes]` fast-forwards many seeds headlessly to check population behaviour, nutrient conservation and determinism.
 2. **Harmonic field + voices** — harmony, audio chain, voice budget. Cells sing on a simple flash timer (θ advancing at `omega`, no coupling yet).
    *Done when*: 10 minutes of listening are never harsh, never mush, and include stretches of near-silence.
 3. **Coupling and pitch attraction** — rules 6–7.

@@ -51,12 +51,12 @@ Every gene must change something you can **see or hear**. If it doesn't, it does
 
 | gene | range | perceived as |
 |---|---|---|
-| `hue` | palette ramp index | colour |
-| `size` | 0.6–1.6 | sprite size; larger sounds lower |
+| `hue` | palette ramp index | pigment colour |
+| `size` | 0.6–1.6 | cell size and chloroplast count; larger sounds lower |
 | `depthPref` | 0–1 | where it lives in the column, which sets its register |
 | `omega` | 0.15–0.6 Hz | natural pulse/flash rate |
-| `coupling` | 0–1 | how strongly it syncs with neighbours |
-| `timbre` | 0–1 | soft triangle ↔ soft square |
+| `coupling` | 0–1 | how strongly it syncs with neighbours; length of its setae (spines) |
+| `timbre` | 0–1 | soft triangle ↔ soft square; round coccoid cell ↔ glassy box-like frustule |
 
 Mutation on division: small random walk (±8% of range) per gene, with a 5% chance of one larger jump. Daughters look and sound recognisably related to the parent.
 
@@ -120,7 +120,10 @@ References: the "bit_wonder" style on Instagram — dark backgrounds, chunky clu
 - **Fixed palette** of ~24 colours defined in `Palette`. Every pixel is a palette colour. No alpha blending, no blur, no canvas gradients.
 - **Gradients and glows via ordered dithering** (4×4 Bayer) between neighbouring palette steps.
 - **Background**: deep navy/teal water column, dithered from lighter at the top to near-black at the bottom; dithered light shafts near the surface; slow, sparse caustic pattern; marine snow as single drifting pixels.
-- **Cells**: procedural sprites generated from the genome — a few overlapping circles forming a clumpy organic silhouette, highlight upper-left, base tone, shadow lower-right, optional 1-px darker outline. 5–20 px. Cache the sprite per cell with a 2–3 frame wobble animation. Daughters inherit visibly similar sprites.
+- **Cells look like phytoplankton, not blobs.** Procedural sprites generated from the genome, as if seen under a microscope: a translucent cell body with a lit rim (upper-left) and a selective dark edge (lower-right), and chloroplasts inside, each shaded on its own (highlight upper-left, shadow lower-right).
+  - Form follows the genes continuously, never via cell types: `timbre` turns a round coccoid cell into a glassy box-like frustule with a girdle seam; `coupling` grows setae on larger cells; `size` sets cell size and the number of chloroplasts (one cup in small cells, several discs in large ones); `hue` sets the pigment ramp.
+  - A per-lineage sprite seed fixes elongation (squat to pennate-like) and the chloroplast layout, so daughters look recognisably related.
+  - 5–20 px body (setae may extend beyond). Cache the sprite per cell with a 2–3 frame wobble (membrane swell, chloroplast drift).
 - **Flash**: the sprite briefly shifts to brighter palette steps, plus a 1-px pixel ring expanding for a few frames.
 - **Lineage threads**: 1-px dotted line from a young cell to its living parent, fading with the child's age.
 - **HUD (minimal, diegetic)**: a microscope readout in a tiny built-in 3×5 pixel font drawn in code: seed, time of day, population. Small, in a corner, fades after inactivity. No panels, menus or knobs anywhere.

@@ -21,7 +21,7 @@
 // Energy is per unit biomass: a cell divides at 1 and each daughter starts at 0.5.
 const PARAMS = {
   world: { w: 180, h: 320, floor: 18 }, // floor: sediment thickness at the bottom
-  time: { tickRate: 30, maxTicksPerFrame: 8 },
+  time: { tickRate: 30, maxTicksPerFrame: 8, speeds: [1, 2, 4, 8] },   // time-lapse: ?speed= or the [ and ] keys
   grid: { cols: 24, rows: 40 },
   hash: { cell: 12 },                   // must be >= the largest interaction distance
   cell: { rMin: 1.25, rMax: 4 },        // body radius at size 0.6 .. 1.6
@@ -85,6 +85,7 @@ const PARAMS = {
     // lineage (disc or polygon valve, or a pennate boat when elongated), with striae/areolae and iridescence.
     diatomFrom: 0.5, diatomFull: 0.75, valveSides: [0, 3, 4, 5, 6], polygonScale: 1.1,
     ornamentFrom: 0.5, ornamentMinR: 4, striaeSpacing: 2.5, iridFrom: 0.4, rimIrid: 0.45, iridSpeed: 0.5,
+    mixFrom: 0.45, mixMax: 0.6,         // hue fraction where chloroplasts of the next colour start to appear; max share
     setaeSolid: 2, setaeFadeFrom: 0.25,  // px of solid spine at the base; fraction of length where it starts to dissolve
     plastidsPerSize: 5, plastidR: 0.3, plastidMinR: 0.9, cupR: 0.55, cupOffset: 0.25,
     plastidLit: 0.6, toneBright: 0.55, toneHigh: 0.15,
@@ -93,6 +94,20 @@ const PARAMS = {
     tumbleSteps: 32, maxSpin: 0.1, sway: 0.3, swaySpeed: 0.15,   // slow rotation, rad/s
     buildBudgetMs: 3,                   // sprite rebuilds per frame; stale sprites are drawn past this
     speckR: 2.4,                        // below this on-screen radius a living cell is a 2x2 lit speck
+  },
+  // Armoured dinoflagellates in the middle of the timbre range; the lineage picks the form.
+  // Shapes in units of the body radius; u runs apex (negative) to antapex.
+  dino: {
+    from: 0.22, full: 0.34, fade: 0.48, gone: 0.58,
+    forms: ['alexandrium', 'dinophysis', 'tripos', 'prorocentrum'],
+    detailR: 3, groove: 0.09, grooveMin: 0.5, spiral: 0.18, sulcus: 0.55,
+    alexandrium: { a: 1.0, b: 0.95, cingulum: 0, plates: 0.05, platesFromR: 6 },
+    dinophysis: { a: 1.05, b: 0.8, cingulum: -0.7, listsFromR: 6, collarFrom: 0.75, collarReach: 1.3, collarBase: 0.45, collarFlare: 0.7, sailFrom: 0.5, sailTo: 0.55, sailDepth: 0.5 },
+    tripos: {
+      a: 0.8, b: 0.75, cingulum: 0, reach: 3.2, width: 0.9, sway: 0.4,
+      horns: [[-0.75, 0, -1.9, 0.05, -3.1, 0.15], [0.6, -0.45, 1.7, -1.2, 1.0, -2.3], [0.6, 0.45, 1.8, 0.9, 1.3, 1.9]],   // quadratic curves u0,v0,u1,v1,u2,v2
+    },
+    prorocentrum: { a: 1.15, b: 0.8, cingulum: -2, taper: 0.3, tooth: 0.5 },   // no cingulum: the groove sits off the body
   },
   flagella: { maxTimbre: 0.45, minR: 3, length: 1.8, amp: 0.22, waves: 1.3, beat: 3, pairSize: 1.2, spread: 0.35 },
   flash: {
@@ -103,11 +118,11 @@ const PARAMS = {
   thread: { maxAge: 40, dotSpacing: 3 },  // drawn only between cells big enough on screen to show a form
   // Seafloor scavengers: decoration that comes where detritus recently fell, lingers, and walks off
   crawlers: {
-    max: 3, rate: 0.05, smellFull: 40, smellTau: 60, feedMin: 8, feedMax: 20, margin: 12,
-    amphipod: { segs: 6, segLen: 1.0, rFront: 0.75, rTail: 0.45, arch: 0.6, speedMin: 4, speedMax: 6 },
-    ostracod: { rx: 1.8, ry: 1.3, speedMin: 1.5, speedMax: 2.5 },
-    isopod:   { segs: 5, segLen: 0.9, rFront: 0.9, rTail: 0.7, arch: 0.15, speedMin: 1, speedMax: 2 },
-    legH: 0.8, antenna: 2.5, step: 2.2,
+    max: 4, rate: 0.12, smellFull: 15, smellTau: 60, feedMin: 8, feedMax: 20, margin: 16,
+    amphipod: { segs: 6, segLen: 1.4, rFront: 1.05, rTail: 0.6, arch: 0.8, speedMin: 4, speedMax: 6 },
+    ostracod: { rx: 2.5, ry: 1.8, speedMin: 1.5, speedMax: 2.5 },
+    isopod:   { segs: 5, segLen: 1.25, rFront: 1.25, rTail: 1.0, arch: 0.2, speedMin: 1, speedMax: 2 },
+    legH: 1.1, antenna: 3.5, step: 2.2,
   },
   render: {
     waterTop: 6.9, waterBottom: 0.3, waterCurve: 1.5,
@@ -201,9 +216,9 @@ const BAYER = new Float64Array([0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 1
 const bayer = (x, y) => BAYER[((y & 3) << 2) | (x & 3)];
 
 // ===== Palette =====
-// 38 colours. Water ramp (0-7) runs deep navy -> surface teal, then light and accents,
-// then four pigment ramps of five hue-shifted tones (outline, shadow, base, highlight, bright),
-// then bloom water: greener twins of water steps 2-7, dithered in where cells are dense.
+// 53 colours. Water ramp (0-7) runs deep navy -> surface teal, then light and accents,
+// then pigment ramps of five hue-shifted tones (outline, shadow, base, highlight, bright),
+// bloom water (greener twins of water steps 2-7, dithered in where cells are dense), then three more ramps.
 const PALETTE_HEX = [
   '#070a14', '#0b1322', '#0f1d30', '#12293d', '#15364a', '#194757', '#1f5a64', '#296f70',
   '#3f8b84', // 8  light shaft / caustic / surface film
@@ -215,6 +230,9 @@ const PALETTE_HEX = [
   '#2a1030', '#5a1d43', '#9b3550', '#d9675f', '#f8b994', // rose: plum shadows, peach highlights
   '#141336', '#2c2a6a', '#4f479e', '#8a76cf', '#d4c0f0', // violet: indigo shadows, lilac highlights
   '#13231f', '#172f28', '#1b3c30', '#204c37', '#285d3d', '#346f46', // bloom water
+  '#0b2422', '#134a3e', '#1f7a5c', '#3fb886', '#a6ecc0', // emerald: deep teal shadows, mint highlights
+  '#0c2234', '#164a66', '#2a7fa6', '#5cc4e0', '#c2f0f4', // light blue: slate shadows, ice highlights
+  '#0d1438', '#1b2f74', '#2f55b4', '#5a8ae6', '#b0d0fa', // blue: ink shadows, sky highlights
 ];
 
 const PAL32 = new Uint32Array(PALETTE_HEX.map((hex) => {
@@ -222,9 +240,12 @@ const PAL32 = new Uint32Array(PALETTE_HEX.map((hex) => {
   return (0xff000000 | ((n & 0xff) << 16) | (n & 0xff00) | ((n >> 16) & 0xff)) >>> 0;
 }));
 
-const COL = { WATER: 0, SHAFT: 8, FOAM: 9, GLOW: 10, SLATE: 11, RAMP: 12, TONES: 5, RAMPS: 4, BLOOM: 32, BLOOM_FROM: 2, BLOOM_TO: 7 };
+const COL = { WATER: 0, SHAFT: 8, FOAM: 9, GLOW: 10, SLATE: 11, RAMP: 12, RAMP2: 38, TONES: 5, RAMPS: 7, BLOOM: 32, BLOOM_FROM: 2, BLOOM_TO: 7 };
 const OUTLINE = 0, SHADOW = 1, BASE = 2, HIGHLIGHT = 3, BRIGHT = 4;
-const rampBase = (ramp) => COL.RAMP + ramp * COL.TONES;
+const GREEN = 0, GOLD = 1, ROSE = 2, VIOLET = 3, EMERALD = 4, LIGHTBLUE = 5, BLUE = 6;
+const rampBase = (ramp) => (ramp < 4 ? COL.RAMP + ramp * COL.TONES : COL.RAMP2 + (ramp - 4) * COL.TONES);
+// The hue gene walks around this colour wheel, so a mutation shifts a lineage to a neighbouring colour
+const HUE_WHEEL = [GOLD, GREEN, EMERALD, LIGHTBLUE, BLUE, VIOLET, ROSE];
 
 // Each colour's next brighter step: light falling on anything is one lookup.
 const LIGHT_UP = new Uint8Array(PALETTE_HEX.length);
@@ -315,7 +336,7 @@ function diffuseNutrients(f, dt) {
 // ===== Genome =====
 // Only perceivable genes. hue is continuous; its floor picks the pigment ramp.
 const GENES = {
-  hue: [0, 4],
+  hue: [0, 7],
   size: [0.6, 1.6],
   depthPref: [0, 1],
   omega: [0.15, 0.6],
@@ -349,7 +370,9 @@ function mutateGenome(parent, rng) {
   return g;
 }
 
-const hueRamp = (g) => Math.floor(g.hue);
+const hueRamp = (g) => HUE_WHEEL[Math.floor(g.hue)];
+// A cell sitting between two colours carries some chloroplasts of the next colour on the wheel
+const hueNeighbour = (g) => HUE_WHEEL[Math.min(HUE_WHEEL.length - 1, Math.floor(g.hue) + 1)];
 
 // ===== Cells =====
 function cellRadius(g) {
@@ -945,25 +968,40 @@ function drawParticles(L, seed, t, near) {
 // Tone code for glassy frustule highlights: coloured at draw time, shimmering as the cell turns
 // (diatom frustules are photonic crystals with real structural colour).
 const IRIDESCENT = -2;
+const ALT = 8;   // tone offset: drawn from the neighbouring colour's ramp (mixed chloroplasts)
 
 function buildSprite(c, rpx, angle, z, key) {
-  const S = PARAMS.sprite, g = c.g, seed = c.spriteSeed;
-  // Separate streams per feature, so zooming (which adds or drops setae) never reshuffles the rest
+  const S = PARAMS.sprite, D = PARAMS.dino, g = c.g, seed = c.spriteSeed;
+  // Separate streams per feature, so zooming (which adds or drops details) never reshuffles the rest
   const lin = makeRng(seed), linSetae = makeRng(seed ^ 0x9e3779b9), linPl = makeRng(seed ^ 0x51ed270b);
   const own = makeRng(hash32(c.id * 31 + c.gen));
 
+  // Three overlapping regions of timbre: soft cell -> armoured dinoflagellate theca -> diatom glass
   const aspect = lin.range(S.aspectMin, S.aspectMax);
   const pennate = aspect >= S.polarAspect;
   const sides = pennate ? 0 : S.valveSides[lin.int(S.valveSides.length)];   // 0 = round disc
-  const areolae = lin.next() < 0.5;                                        // dot lattice instead of radial striae
-  const glass = smoothstep(S.diatomFrom, S.diatomFull, g.timbre);          // 0 soft cell .. 1 diatom frustule
-  const asp = pennate ? aspect : 1 + (aspect - 1) * (1 - glass);           // centric valves are seen face-on
+  const areolae = lin.next() < 0.5;
+  const dino = D.forms[lin.int(D.forms.length)];
+  const theca = smoothstep(D.from, D.full, g.timbre) * (1 - smoothstep(D.fade, D.gone, g.timbre));
+  const glass = smoothstep(S.diatomFrom, S.diatomFull, g.timbre);
+  const asp = pennate ? aspect : 1 + (aspect - 1) * (1 - glass) * (1 - theca);
   const a = rpx * Math.sqrt(asp), b = rpx / Math.sqrt(asp);
   const ca = Math.cos(angle), sa = Math.sin(angle);
   const p = 2 + g.timbre * S.squareness;
   const polyR = rpx * S.polygonScale, apothem = sides ? Math.cos(Math.PI / sides) : 1;
+  const detail = theca > 0.5 && rpx >= D.detailR;
 
+  // Dinoflagellate bodies, in the body frame: u runs apex (u < 0) to antapex, v across
+  const da = rpx * D[dino].a, db = rpx * D[dino].b, cingU = D[dino].cingulum * da;
   const softQ = (u, v, sw) => Math.pow(Math.pow(Math.abs(u / (a * sw)), p) + Math.pow(Math.abs(v / (b * sw)), p), 1 / p);
+  const dinoQ = (u, v, sw) => {
+    if (dino === 'prorocentrum') {                    // egg narrowing toward the apex
+      const bb = db * (1 + D.prorocentrum.taper * u / da);
+      return Math.sqrt((u / da) * (u / da) + (v / bb) * (v / bb)) / sw;
+    }
+    const e = Math.sqrt((u / da) * (u / da) + (v / db) * (v / db)) / sw;
+    return dino === 'alexandrium' ? e * (1 + D.alexandrium.plates * Math.cos(6 * Math.atan2(v, u))) : e;
+  };
   const glassQ = (u, v, sw) => {
     if (pennate) {                                    // boat: pointed at both ends
       const fu = Math.abs(u) / (a * sw);
@@ -975,12 +1013,17 @@ function buildSprite(c, rpx, angle, z, key) {
     const seg = TAU / sides, m = mod(Math.atan2(v, u), seg) - seg / 2;
     return r * Math.cos(m) / (polyR * sw * apothem);
   };
-  const shape = glass > 0 ? (u, v, sw) => softQ(u, v, sw) * (1 - glass) + glassQ(u, v, sw) * glass : softQ;
+  const shape = (u, v, sw) => {
+    let q = softQ(u, v, sw);
+    if (theca > 0) q = q * (1 - theca) + dinoQ(u, v, sw) * theca;
+    if (glass > 0) q = q * (1 - glass) + glassQ(u, v, sw) * glass;
+    return q;
+  };
 
-  // Setae (only once big enough on screen): horns at polygon corners, polar spines on elongated cells,
-  // corner spines on squat box-like cells, radial spines on round ones
+  // Setae (only once big enough on screen, and not on armoured dinoflagellates): horns at polygon corners,
+  // polar spines on elongated cells, corner spines on squat box-like cells, radial spines on round ones
   const sk = clamp((g.coupling - S.setaeFrom) / (1 - S.setaeFrom), 0, 1);
-  const setaeLen = rpx >= S.setaeMinR ? sk * S.setaeLen * rpx : 0;
+  const setaeLen = rpx >= S.setaeMinR && theca < 0.5 ? sk * S.setaeLen * rpx : 0;
   const setae = [];
   if (setaeLen >= S.setaeMin) {
     const bend = () => linSetae.range(-1, 1) * S.setaeBend;
@@ -1001,26 +1044,34 @@ function buildSprite(c, rpx, angle, z, key) {
     }
   }
 
-  // Chloroplasts: one cup in small cells, several discs in large ones
+  // Chloroplasts: one cup in small cells, several discs in large ones.
+  // A cell whose hue sits near the next colour carries some chloroplasts of that colour.
   const nPl = 1 + Math.floor((g.size - GENES.size[0]) * S.plastidsPerSize);
+  const pMix = clamp((g.hue - Math.floor(g.hue) - S.mixFrom) / (1 - S.mixFrom), 0, 1) * S.mixMax;
   const plastids = [];
   for (let k = 0; k < nPl; k++) {
     const ang = linPl.next() * TAU, rad = nPl === 1 ? S.cupOffset : linPl.range(0.15, 0.5);
     plastids.push({
       u: Math.cos(ang) * rad * a, v: Math.sin(ang) * rad * b,
       r: Math.max(S.plastidMinR, (nPl === 1 ? S.cupR : S.plastidR) * rpx * own.range(0.85, 1.15)),
-      ph: linPl.next() * TAU,
+      ph: linPl.next() * TAU, alt: hash01(seed + k * 977) < pMix ? ALT : 0,
     });
   }
 
+  // Tripos horns as tapered curves (body-frame control points, in units of rpx)
+  const horns = detail && dino === 'tripos' ? D.tripos.horns : [];
+  const hornExt = horns.length ? rpx * D.tripos.reach : 0;
+  const listExt = detail && dino === 'dinophysis' && rpx >= D.dinophysis.listsFromR ? da * D.dinophysis.collarReach : 0;
+
   const ornament = glass > S.ornamentFrom && rpx >= S.ornamentMinR;
   const striae = Math.max(6, Math.floor(TAU * rpx / S.striaeSpacing));
-  const bodyExt = Math.max(a, b, glass > 0 && sides ? polyR : 0) * (1 + S.breathe);
-  const half = Math.ceil(bodyExt + setaeLen) + 2, size = half * 2 + 1;
+  const bodyExt = Math.max(a, b, glass > 0 && sides ? polyR : 0, theca > 0 ? Math.max(da, db) * 1.1 : 0) * (1 + S.breathe);
+  const half = Math.ceil(Math.max(bodyExt + setaeLen, hornExt, listExt + 1)) + 2, size = half * 2 + 1;
   const lo = Math.max(0, half - Math.ceil(bodyExt) - 1), hi = Math.min(size - 1, half + Math.ceil(bodyExt) + 1);
+  const toSprite = (u, v) => [Math.round(u * ca - v * sa) + half, Math.round(u * sa + v * ca) + half];
   const frames = [];
   for (let f = 0; f < S.frames; f++) {
-    const ph = TAU * f / S.frames, sw = 1 + S.breathe * Math.sin(ph) * (1 - glass);   // glass doesn't breathe
+    const ph = TAU * f / S.frames, sw = 1 + S.breathe * Math.sin(ph) * (1 - glass) * (1 - theca);   // armour doesn't breathe
     const tones = new Int8Array(size * size).fill(-1);
     const inside = new Uint8Array(size * size);
     const uAt = new Float32Array(size * size), vAt = new Float32Array(size * size);
@@ -1033,9 +1084,10 @@ function buildSprite(c, rpx, angle, z, key) {
     }
     const pl = plastids.map((P) => {
       const u = P.u + Math.sin(ph + P.ph) * S.stream * z, v = P.v + Math.cos(ph + P.ph) * S.stream * z;
-      return { x: u * ca - v * sa, y: u * sa + v * ca, r: P.r };
+      return { x: u * ca - v * sa, y: u * sa + v * ca, r: P.r, alt: P.alt };
     });
     const isIn = (px, py) => px >= 0 && py >= 0 && px < size && py < size && inside[py * size + px] === 1;
+    const cw = Math.max(D.grooveMin, D.groove * rpx);
 
     for (let py = lo; py <= hi; py++) {
       for (let px = lo; px <= hi; px++) {
@@ -1045,7 +1097,7 @@ function buildSprite(c, rpx, angle, z, key) {
         const u = uAt[k], v = vAt[k];
         // Translucent cytoplasm, darker toward the lower right
         let tone = (-dx - dy) / (bodyExt * 1.4142) + dth < S.cytoShade ? OUTLINE : SHADOW;
-        if (g.timbre > S.girdleFrom && glass < 0.5 && Math.abs(u) < 0.5) tone = BASE;   // girdle seam between valves
+        if (g.timbre > S.girdleFrom && glass < 0.5 && theca < 0.5 && Math.abs(u) < 0.5) tone = BASE;   // girdle seam
         if (ornament) {
           if (pennate) {
             const fu = Math.abs(u) / a, edge = Math.abs(v) / (b * (1 - fu * fu));
@@ -1062,15 +1114,69 @@ function buildSprite(c, rpx, angle, z, key) {
           const P = pl[j], ex = dx - P.x, ey = dy - P.y, d = Math.sqrt(ex * ex + ey * ey) / P.r;
           if (d > 1) continue;
           const s = (-ex - ey) / (P.r * 1.4142) * S.plastidLit + (1 - d) * (1 - S.plastidLit) + dth;
-          tone = s > S.toneBright ? BRIGHT : s > S.toneHigh ? HIGHLIGHT : BASE;
+          tone = P.alt + (s > S.toneBright ? BRIGHT : s > S.toneHigh ? HIGHLIGHT : BASE);
           break;
+        }
+        if (theca > 0.5) {
+          // Cingulum: the transverse groove that holds the beating transverse flagellum, slightly spiralled
+          const gu = u - cingU - D.spiral * v;
+          if (Math.abs(gu) < cw) tone = (Math.round(v) + f) % 3 === 0 ? HIGHLIGHT : OUTLINE;
+          else if (gu < 0 && gu > -cw - 1) tone = HIGHLIGHT;                               // lit lip of the groove
+          else if (dino !== 'dinophysis' && dino !== 'prorocentrum' && Math.abs(v) < 0.5 && u > cingU && u < cingU + D.sulcus * da) tone = OUTLINE;   // sulcus
+          else if (dino === 'prorocentrum' && Math.abs(v) < 0.5) tone = BASE;              // suture between the two valves
+          else if (dino === 'alexandrium' && rpx >= D.alexandrium.platesFromR && Math.abs(mod(Math.atan2(v, u) + (u < cingU ? 0.3 : 0), TAU / 6) - TAU / 12) < 0.06) tone = SHADOW;   // thecal plate seams
         }
         // Rim: lit on the upper left (iridescent on glass), selective dark outline on the lower right
         const lowerRight = !isIn(px + 1, py) || !isIn(px, py + 1);
         const upperLeft = !isIn(px - 1, py) || !isIn(px, py - 1);
         if (upperLeft) tone = glass > S.iridFrom && b4 < glass ? IRIDESCENT : HIGHLIGHT;
-        else if (lowerRight) tone = glass > S.iridFrom && b4 < glass * S.rimIrid ? IRIDESCENT : g.timbre > S.glassFrom ? BASE : OUTLINE;
+        else if (lowerRight) tone = glass > S.iridFrom && b4 < glass * S.rimIrid ? IRIDESCENT : g.timbre > S.glassFrom || theca > 0.5 ? BASE : OUTLINE;
         tones[k] = tone;
+      }
+    }
+
+    // Dinophysis: the flared cingular collar at the apex and the sail-like sulcal list, as thin translucent membranes
+    if (listExt) {
+      const L = D.dinophysis;
+      for (let py = 0; py < size; py++) {
+        for (let px = 0; px < size; px++) {
+          const k = py * size + px;
+          if (inside[k]) continue;
+          const dx = px - half, dy = py - half, u = dx * ca + dy * sa, v = -dx * sa + dy * ca;
+          const t = (-u - L.collarFrom * da) / ((L.collarReach - L.collarFrom) * da);              // 0 at its base, 1 at its rim
+          const collar = t >= 0 && t <= 1 && Math.abs(v) < db * (L.collarBase + t * L.collarFlare);
+          const s = (u + L.sailFrom * da) / ((L.sailFrom + L.sailTo) * da);
+          const sail = s >= 0 && s <= 1 && v > db * 0.6 && v < db * 0.6 + rpx * L.sailDepth * Math.sin(Math.PI * s);
+          if (!collar && !sail) continue;
+          // An open funnel: lit flaring sides and a sparse lip; the sail has a lit outer edge
+          const b4 = bayer(px, py);
+          const rimEdge = collar
+            ? Math.abs(v) > db * (L.collarBase + t * L.collarFlare) - 1 || (t > 0.9 && b4 < 0.5)
+            : v > db * 0.6 + rpx * L.sailDepth * Math.sin(Math.PI * s) - 1;
+          if (rimEdge) tones[k] = HIGHLIGHT;
+          else if (b4 < 0.3) tones[k] = SHADOW;
+        }
+      }
+    }
+    // Tripos horns: tapered, lit on one side
+    for (const hn of horns) {
+      for (let t = 0; t <= 1; t += 0.5 / (rpx * D.tripos.reach)) {
+        const mt = 1 - t;
+        const hu = (mt * mt * hn[0] + 2 * mt * t * hn[2] + t * t * hn[4]) * rpx;
+        const hv = (mt * mt * hn[1] + 2 * mt * t * hn[3] + t * t * hn[5]) * rpx + Math.sin(ph) * t * D.tripos.sway;
+        const wdt = D.tripos.width * (1 - t * 0.7);
+        for (let o = -wdt; o <= wdt; o += 0.5) {
+          const [px, py] = toSprite(hu, hv + o);
+          if (px < 0 || py < 0 || px >= size || py >= size || inside[py * size + px]) continue;
+          tones[py * size + px] = o < -wdt + 0.6 ? HIGHLIGHT : t > 0.8 ? SHADOW : BASE;
+        }
+      }
+    }
+    // Prorocentrum: a small apical tooth
+    if (detail && dino === 'prorocentrum') {
+      for (let t = 0; t <= D.prorocentrum.tooth * rpx; t += 0.5) {
+        const [px, py] = toSprite(-da - t, 0);
+        if (px >= 0 && py >= 0 && px < size && py < size && !inside[py * size + px]) tones[py * size + px] = HIGHLIGHT;
       }
     }
     for (const s of setae) {
@@ -1078,7 +1184,7 @@ function buildSprite(c, rpx, angle, z, key) {
       for (let t = 0; t <= setaeLen; t += 0.5) {
         const along = s.start + t, side = flex * t * t / setaeLen;
         const u = s.du * along - s.dv * side, v = s.dv * along + s.du * side;
-        const px = Math.round(u * ca - v * sa) + half, py = Math.round(u * sa + v * ca) + half;
+        const [px, py] = toSprite(u, v);
         if (px < 0 || py < 0 || px >= size || py >= size || inside[py * size + px]) continue;
         // Long, faint silica spines: solid at the base, dissolving toward the tip
         const tipFrac = t / setaeLen;
@@ -1088,7 +1194,7 @@ function buildSprite(c, rpx, angle, z, key) {
     }
     frames.push(tones);
   }
-  return { key, half, size, frames, a };
+  return { key, half, size, frames, a: theca > 0.5 ? da : a };
 }
 
 // Rebuilds are rationed per frame; past the budget a cell keeps its previous sprite for a moment.
@@ -1126,7 +1232,7 @@ function drawFlagella(c, cx, cy, angle, rpx, spr, base) {
 // Fixed templates for cells too small on screen to show a form
 const SPECK = { key: -1, half: 0, size: 2, a: 1, frames: [0, 0, 0].map(() => Int8Array.of(HIGHLIGHT, BASE, BASE, SHADOW)) };
 // Iridescent pixels cycle through the bright ends of every pigment ramp
-const IRID_SET = [rampBase(2) + HIGHLIGHT, rampBase(1) + BRIGHT, COL.FOAM, rampBase(0) + BRIGHT, rampBase(3) + BRIGHT];
+const IRID_SET = HUE_WHEEL.map((r) => rampBase(r) + BRIGHT).concat([COL.FOAM]);
 
 function drawCell(c, tick, t) {
   const S = PARAMS.sprite, z = cam.zoom, rpx = c.r * z;
@@ -1136,7 +1242,7 @@ function drawCell(c, tick, t) {
   const step = mod(Math.round(angle / TAU * steps), steps);
   const spr = rpx < S.speckR ? SPECK : spriteFor(c, rpx, step);
   const irPhase = step + c.id + Math.floor(t * S.iridSpeed);
-  const base = rampBase(hueRamp(c.g));
+  const base = rampBase(hueRamp(c.g)), base2 = rampBase(hueNeighbour(c.g));
   if (!c.dying && spr.key >= 0) drawFlagella(c, cx, cy, step * TAU / steps, rpx, spr, base);
 
   const frame = (Math.floor(tick * S.wobbleFps / PARAMS.time.tickRate) + c.id) % S.frames;
@@ -1163,9 +1269,10 @@ function drawCell(c, tick, t) {
       if (t0 === IRIDESCENT) {
         idx = glow ? COL.GLOW : muted ? base + BASE : IRID_SET[mod(irPhase + ((bx + 2 * by) >> 1), IRID_SET.length)];
       } else {
-        let tt = t0 + glow;
+        const alt = t0 >= ALT;
+        let tt = (alt ? t0 - ALT : t0) + glow;
         if (muted && tt > 0) tt--;
-        idx = tt >= COL.TONES ? COL.GLOW : base + tt;
+        idx = tt >= COL.TONES ? COL.GLOW : (alt ? base2 : base) + tt;
       }
       if (sl > 0 || cl > 0) {                                                    // light shafts and caustics play over the cell
         const wx = (bx + 0.5) / z;
@@ -1421,7 +1528,8 @@ function drawHud(w, now) {
   drawText(Hd.x, Hd.y, 'SEED ' + seedLabel, COL.FOAM, vis);
   drawText(Hd.x, Hd.y + Hd.line, 'T ' + clock(w.tick * TICK_DT), COL.FOAM, vis);
   drawText(Hd.x, Hd.y + Hd.line * 2, 'POP ' + pad(aliveCount(w), 3), rampBase(1) + HIGHLIGHT, vis);
-  drawText(Hd.x, Hd.y + Hd.line * 3, 'MAG ' + cam.zoom + 'X', COL.FOAM, vis);
+  const speed = PARAMS.time.speeds[speedLevel];
+  drawText(Hd.x, Hd.y + Hd.line * 3, 'MAG ' + cam.zoom + 'X' + (speed > 1 ? '  TIME ' + speed + 'X' : ''), COL.FOAM, vis);
 }
 
 // All pixel work for one frame. Returns the time spent on the debug overlay, so frame timing can leave it out.
@@ -1526,6 +1634,8 @@ function setupInput() {
     if (e.key === 'd' || e.key === 'D') debug.on = !debug.on;
     else if (e.key === '+' || e.key === '=') zoomAt(cam.level + 1, W / 2, H / 2);
     else if (e.key === '-' || e.key === '_') zoomAt(cam.level - 1, W / 2, H / 2);
+    else if (e.key === ']') setSpeed(speedLevel + 1);
+    else if (e.key === '[') setSpeed(speedLevel - 1);
   });
   window.addEventListener('resize', () => { resize(); needsRender = true; });
   document.addEventListener('visibilitychange', () => { lastTime = 0; });
@@ -1624,16 +1734,23 @@ function drawDebug(w) {
 }
 
 // ===== Loop =====
-let world = null, seedLabel = '', lastTime = 0, acc = 0, needsRender = true;
+let world = null, seedLabel = '', lastTime = 0, acc = 0, needsRender = true, speedLevel = 0;
+
+// Time-lapse runs more of the same fixed ticks per second; the world stays deterministic.
+function setSpeed(level) {
+  speedLevel = clamp(level, 0, PARAMS.time.speeds.length - 1);
+  needsRender = true;
+}
 
 function frame(now) {
   requestAnimationFrame(frame);
   if (!lastTime) lastTime = now;
-  acc += Math.min((now - lastTime) / 1000, 1);
+  const speed = PARAMS.time.speeds[speedLevel];
+  acc += Math.min((now - lastTime) / 1000, 1) * speed;
   lastTime = now;
   const t0 = performance.now();
   let ticks = 0;
-  while (acc >= TICK_DT && ticks < PARAMS.time.maxTicksPerFrame) {
+  while (acc >= TICK_DT && ticks < PARAMS.time.maxTicksPerFrame * speed) {
     stepWorld(world);
     debugSample(world);
     acc -= TICK_DT;
@@ -1656,7 +1773,7 @@ function hashString(s) {
 }
 
 // ?seed= (number or word), ?debug, ?stress (start at the cell cap), ?ff=seconds (fast-forward),
-// ?zoom=1..4 with ?at=x,y (world point to centre on)
+// ?zoom=1..4 with ?at=x,y (world point to centre on), ?speed=1|2|4|8 (time-lapse)
 function readOptions() {
   const q = new URLSearchParams(location.search);
   let label = (q.get('seed') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12), seed;
@@ -1671,6 +1788,7 @@ function readOptions() {
   return {
     seed, label, debug: q.has('debug'), stress: q.has('stress'), ff: Math.max(0, Number(q.get('ff')) || 0),
     zoom: Number(q.get('zoom')) || 1, atX: at.length === 2 ? at[0] : W / 2, atY: at.length === 2 ? at[1] : H / 2,
+    speed: Number(q.get('speed')) || 1,
   };
 }
 
@@ -1687,6 +1805,7 @@ function init() {
   cam.x = opts.atX - W / (2 * cam.zoom);
   cam.y = opts.atY - H / (2 * cam.zoom);
   clampCamera();
+  setSpeed(Math.max(0, PARAMS.time.speeds.indexOf(opts.speed)));
   setupInput();
   requestAnimationFrame(frame);
 }

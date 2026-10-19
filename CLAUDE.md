@@ -119,19 +119,22 @@ References: the "bit_wonder" style on Instagram — dark backgrounds, chunky clu
 
 - **Low internal resolution**: render everything to an offscreen canvas of 180 × 320 px, then upscale by an integer factor (tolerating 1–2 px of overhang from fractional device pixel ratios). `imageSmoothingEnabled = false`, CSS `image-rendering: pixelated`. Centre with letterboxing.
 - **Camera (render only)**: pinch / mouse wheel to zoom between snapped levels 1×–4× (1× shows the whole column), drag to pan. Pixels never get bigger: sprites and backgrounds are re-rasterised at each zoom, so detail appears as you zoom in. Dither is anchored to the world so it doesn't crawl while panning.
-- **Fixed palette** of ~38 colours defined in `Palette`: water ramp, light and accents, four pigment ramps of five hue-shifted tones, and greener "bloom water" twins of the water ramp. Every pixel is a palette colour. No alpha blending, no blur, no canvas gradients.
+- **Fixed palette** of ~53 colours defined in `Palette`: water ramp, light and accents, seven pigment ramps of five hue-shifted tones (gold, green, emerald, light blue, blue, violet, rose — the `hue` gene walks around this wheel, so mutations shift lineages to neighbouring colours), and greener "bloom water" twins of the water ramp. Every pixel is a palette colour. No alpha blending, no blur, no canvas gradients.
 - **Gradients and glows via ordered dithering** (4×4 Bayer): flat colour bands with dithered seams only near the band edges. Light is applied with a palette "light-up" table (each colour's next brighter step), so shafts, caustics and flash glows stay on the palette.
 - **Background**: deep navy/teal water column, banded from lighter at the top to near-black at the bottom; an undulating surface seen from below with glints; dithered light shafts; a slow cellular caustic network near the surface; a seafloor of sediment, microbial mat and pebbles; marine snow in three parallax layers (far specks, mid snow, near out-of-focus flocs). Water tints greener where cell biomass is dense, so blooms are visible as colour.
 - **Cells look like phytoplankton, not blobs.** Procedural sprites generated from the genome, as if seen under a microscope: a translucent cell body with a lit rim (upper-left) and a selective dark edge (lower-right), and chloroplasts inside, each shaded on its own (highlight upper-left, shadow lower-right).
   - Form follows the genes continuously, never via cell types: `timbre` turns a round coccoid cell into a glassy box-like frustule with a girdle seam; `coupling` grows setae on cells large enough on screen (polar spines on elongated cells, corner setae on squat box-like ones, radial spines on round ones); `size` sets cell size and the number of chloroplasts (one cup in small cells, several discs in large ones); `hue` sets the pigment ramp. Soft, low-`timbre` cells carry flagella that beat with the cell's phase θ.
   - A per-lineage sprite seed fixes elongation (squat to pennate-like) and the chloroplast layout, so daughters look recognisably related.
   - Body radius 1.25–4 world units; on screen that is a 1-px dot or 2×2 speck at 1× and a detailed 10–32 px cell at 4×. Cells tumble slowly. Cache the sprite per cell, zoom level and rotation step, with a 2–3 frame wobble (membrane swell, chloroplast drift); rebuilds are rationed per frame.
+  - **Mixed chloroplasts**: a cell whose `hue` sits near the next colour on the wheel carries some chloroplasts of that colour (as in kleptoplastic dinoflagellates).
+  - **Dinoflagellates** in the middle of the `timbre` range (between soft cells and diatom glass): armoured thecae with a slightly spiralled cingulum groove holding the transverse flagellum, a sulcus, and a trailing flagellum. The lineage picks the form: *Alexandrium* (round, thecal plate seams), *Dinophysis* (laterally flattened, open funnel collar and sail-like sulcal list), *Tripos* (three long curved horns) or *Prorocentrum* (egg-shaped valves with a suture and an apical tooth).
   - **Diatoms, the jewels**: towards the top of the `timbre` range the soft outline becomes glass geometry chosen by the lineage — a round, triangular, square, pentagonal or hexagonal valve seen face-on, or a pointed pennate boat when elongated — with radial striae or areolae lattices, a raphe on pennates, horns at polygon corners, and iridescent rims that shimmer through the bright ends of every pigment ramp as the cell turns (frustules are real photonic crystals).
   - Light shafts and caustics brighten cells passing through them; deep cells are muted.
 - **Seafloor scavengers (decoration)**: amphipods, ostracods and isopods walk in where detritus has recently fallen, pick at it, and walk off out of frame. Driven by the simulation's record of exported detritus per column, so they come after die-offs; they never touch the simulation.
 - **Flash**: the sprite briefly shifts to brighter palette steps, its light spills as a dithered halo onto the water and nearby cells, and large cells add broken pixel arcs.
 - **Lineage threads**: 1-px dotted line from a young cell to its living parent, fading with the child's age.
-- **HUD (minimal, diegetic)**: a microscope readout in a tiny built-in 3×5 pixel font drawn in code: seed, time, population, magnification. Small, in a corner, fades after inactivity. No panels, menus or knobs anywhere.
+- **Time-lapse**: `?speed=2|4|8` or the `[` / `]` keys run more of the same fixed ticks per second (still deterministic). No on-screen control.
+- **HUD (minimal, diegetic)**: a microscope readout in a tiny built-in 3×5 pixel font drawn in code: seed, time, population, magnification (and time-lapse speed when above 1×). Small, in a corner, fades after inactivity. No panels, menus or knobs anywhere.
 
 ---
 
@@ -144,15 +147,17 @@ References: the "bit_wonder" style on Instagram — dark backgrounds, chunky clu
 
 **One phase per session. Do not start the next phase. Each phase must look/sound good before moving on. Commit with git after each phase.**
 
-1. **Silent world** — RNG, fixed timestep, fields, cells, rules 1–4, pixel renderer, background, HUD, debug overlay. No audio.
+The order was changed with the author (visuals first): the world's cycles and coupling come before sound.
+
+1. **Silent world** ✅ — RNG, fixed timestep, fields, cells, rules 1–4, pixel renderer, background, HUD, debug overlay, camera/zoom, cell forms. No audio.
    *Done when*: a 10-minute run shows the population rising and falling without extinction or explosion, it looks charming at pixel level, and it holds 60 fps on a phone (frames are only drawn when a tick ran, so in practice: no dropped ticks and frame work under 8 ms at p95).
    `node tools/sim-check.mjs [seeds] [minutes]` fast-forwards many seeds headlessly to check population behaviour, nutrient conservation and determinism.
-2. **Harmonic field + voices** — harmony, audio chain, voice budget. Cells sing on a simple flash timer (θ advancing at `omega`, no coupling yet).
-   *Done when*: 10 minutes of listening are never harsh, never mush, and include stretches of near-silence.
-3. **Coupling and pitch attraction** — rules 6–7.
-   *Done when*: you can see and hear clusters synchronise into pulsing chords nobody coded.
-4. **Cycles** — diel light, nutrient pulses, remineralisation, grazing (rule 5).
-   *Done when*: a 30-minute run contains at least one bloom, a die-off and a recovery.
+2. **Cycles** — diel light (one day ≈ 8–12 minutes), **night descent** (approved local rule: in darkness cells follow the nutrient gradient down instead of seeking light; phototaxis pulls them back up at dawn, giving diel vertical migration), nutrient pulses, grazing (rule 5). Day/night is shown by **palette shifts**: a few hand-curated palettes (day with deep rays, golden evening, moonlit night where bioluminescence glows, dawn) crossfaded by dithering, so every frame still uses only curated colours.
+   *Done when*: a 30-minute run contains at least one bloom, a die-off and a recovery, and migration is visible.
+3. **Coupling and chains** — rule 6 (Kuramoto), visible as synchronised flashing and flagella beating together, plus **chain adhesion** (approved local rule: on division daughters may stay linked by a spring, more likely with high `coupling`, like setae interlocking in *Chaetoceros*; chains up to ~8 cells; links break when a cell dies or slowly at random).
+   *Done when*: you can see clusters and chains synchronise, nobody coded.
+4. **Harmonic field + voices** — harmony, audio chain, voice budget, and rule 7 (pitch attraction). Cells sing when they flash.
+   *Done when*: 10 minutes of listening are never harsh, never mush, include stretches of near-silence, and synchronised clusters are heard as chords nobody coded.
 5. **Elders** — cells that survive long in deep, low-light water slow their metabolism, grow, and sing low drones. The oldest living elder sets the harmonic root; when it dies, the root may shift.
    *Done when*: root changes are rare and feel like events.
 6. **The player** — mother voice, QWERTY + MIDI, tap to feed, harmonic pull, phase nudging.

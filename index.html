@@ -78,7 +78,8 @@ const PARAMS = {
     tilt: 0.35,
     squareness: 4,                      // superellipse exponent added at timbre 1 (round cell -> frustule box)
     breathe: 0.04, stream: 0.5,         // membrane swell and chloroplast drift between wobble frames
-    setaeFrom: 0.35, setaeLen: 1.4, setaeMin: 2, setaeMinR: 4, cornerSetaeP: 4, setaeBend: 0.15,
+    setaeFrom: 0.35, setaeLen: 2.8, setaeMin: 3, setaeMinR: 4, cornerSetaeP: 4, setaeBend: 0.05,
+    setaeSolid: 2, setaeFadeFrom: 0.25,  // px of solid spine at the base; fraction of length where it starts to dissolve
     plastidsPerSize: 5, plastidR: 0.3, plastidMinR: 0.9, cupR: 0.55, cupOffset: 0.25,
     plastidLit: 0.6, toneBright: 0.55, toneHigh: 0.15,
     cytoShade: -0.35, dither: 0.25,
@@ -612,7 +613,9 @@ function resize() {
   const cw = Math.round(window.innerWidth * dpr), ch = Math.round(window.innerHeight * dpr);
   view.canvas.width = cw;
   view.canvas.height = ch;
-  view.scale = Math.max(1, Math.floor(Math.min(cw / W, ch / H)));
+  // Fractional device pixel ratios can leave the canvas a pixel short of a whole multiple;
+  // allow that much overhang rather than dropping a whole scale step.
+  view.scale = Math.max(1, Math.floor(Math.min((cw + 2) / W, (ch + 2) / H)));
   view.ox = Math.floor((cw - W * view.scale) / 2);
   view.oy = Math.floor((ch - H * view.scale) / 2);
   view.ctx.imageSmoothingEnabled = false;
@@ -793,9 +796,10 @@ function buildSprite(c) {
         const u = s.du * along - s.dv * side, v = s.dv * along + s.du * side;
         const px = Math.round(u * ca - v * sa) + half, py = Math.round(u * sa + v * ca) + half;
         if (px < 0 || py < 0 || px >= size || py >= size || inside[py * size + px]) continue;
+        // Long, faint silica spines: solid at the base, dissolving toward the tip
         const tipFrac = t / setaeLen;
-        if (tipFrac > 0.6 && bayer(px, py) < (tipFrac - 0.6) * 2.5) continue;   // fine tips thin out
-        tones[py * size + px] = tipFrac < 0.5 ? BASE : SHADOW;
+        if (tipFrac > S.setaeFadeFrom && bayer(px, py) < (tipFrac - S.setaeFadeFrom) / (1 - S.setaeFadeFrom)) continue;
+        tones[py * size + px] = t < S.setaeSolid ? BASE : SHADOW;
       }
     }
     frames.push(tones);

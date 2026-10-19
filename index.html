@@ -20,7 +20,7 @@
 // Units: world units (the whole column is 180x320; at zoom 1 one unit is one screen pixel) and seconds.
 // Energy is per unit biomass: a cell divides at 1 and each daughter starts at 0.5.
 const PARAMS = {
-  world: { w: 180, h: 320, floor: 12 }, // floor: sediment thickness at the bottom
+  world: { w: 180, h: 320, floor: 18 }, // floor: sediment thickness at the bottom
   time: { tickRate: 30, maxTicksPerFrame: 8 },
   grid: { cols: 24, rows: 40 },
   hash: { cell: 12 },                   // must be >= the largest interaction distance
@@ -81,6 +81,10 @@ const PARAMS = {
     squareness: 4,                      // superellipse exponent added at timbre 1 (round cell -> frustule box)
     breathe: 0.04, stream: 0.3,         // membrane swell; chloroplast drift (world units) between wobble frames
     setaeFrom: 0.35, setaeLen: 2.8, setaeMin: 3, setaeMinR: 4, cornerSetaeP: 4, polarAspect: 1.4, setaeBend: 0.05,
+    // Diatom frustules: as timbre rises past diatomFrom the soft outline becomes glass geometry chosen by the
+    // lineage (disc or polygon valve, or a pennate boat when elongated), with striae/areolae and iridescence.
+    diatomFrom: 0.5, diatomFull: 0.75, valveSides: [0, 3, 4, 5, 6], polygonScale: 1.1,
+    ornamentFrom: 0.5, ornamentMinR: 4, striaeSpacing: 2.5, iridFrom: 0.4, rimIrid: 0.45, iridSpeed: 0.5,
     setaeSolid: 2, setaeFadeFrom: 0.25,  // px of solid spine at the base; fraction of length where it starts to dissolve
     plastidsPerSize: 5, plastidR: 0.3, plastidMinR: 0.9, cupR: 0.55, cupOffset: 0.25,
     plastidLit: 0.6, toneBright: 0.55, toneHigh: 0.15,
@@ -88,7 +92,7 @@ const PARAMS = {
     girdleFrom: 0.55, glassFrom: 0.6,
     tumbleSteps: 32, maxSpin: 0.1, sway: 0.3, swaySpeed: 0.15,   // slow rotation, rad/s
     buildBudgetMs: 3,                   // sprite rebuilds per frame; stale sprites are drawn past this
-    dotR: 1.6, speckR: 2.4,             // below these on-screen radii a cell is a 1-px dot or a 2x2 lit speck
+    speckR: 2.4,                        // below this on-screen radius a living cell is a 2x2 lit speck
   },
   flagella: { maxTimbre: 0.45, minR: 3, length: 1.8, amp: 0.22, waves: 1.3, beat: 3, pairSize: 1.2, spread: 0.35 },
   flash: {
@@ -96,7 +100,15 @@ const PARAMS = {
     haloTicks: 18, haloRadius: 3, haloMinPx: 3, haloMaxPx: 24, haloStrength: 0.8,   // light spilling into the water and onto neighbours
     ringTicks: 14, ringStart: 1, ringGrow: 0.5, ringMinR: 4, arcs: 3, arcGap: -0.3,
   },
-  thread: { maxAge: 60, dotSpacing: 3 },
+  thread: { maxAge: 40, dotSpacing: 3 },  // drawn only between cells big enough on screen to show a form
+  // Seafloor scavengers: decoration that comes where detritus recently fell, lingers, and walks off
+  crawlers: {
+    max: 3, rate: 0.05, smellFull: 40, smellTau: 60, feedMin: 8, feedMax: 20, margin: 12,
+    amphipod: { segs: 6, segLen: 1.0, rFront: 0.75, rTail: 0.45, arch: 0.6, speedMin: 4, speedMax: 6 },
+    ostracod: { rx: 1.8, ry: 1.3, speedMin: 1.5, speedMax: 2.5 },
+    isopod:   { segs: 5, segLen: 0.9, rFront: 0.9, rTail: 0.7, arch: 0.15, speedMin: 1, speedMax: 2 },
+    legH: 0.8, antenna: 2.5, step: 2.2,
+  },
   render: {
     waterTop: 6.9, waterBottom: 0.3, waterCurve: 1.5,
     seam: 0.3,                          // fraction of each colour band that is dithered
@@ -395,7 +407,10 @@ function buildHash(w) {
 
 function createWorld(seed, founderCount) {
   const F = PARAMS.founders, rng = makeRng(seed);
-  const w = { seed, rng, tick: 0, nextId: 1, fields: createFields(), cells: [], cysts: [], hash: createHash(), upwelled: 0, initialInventory: 0 };
+  const w = {
+    seed, rng, tick: 0, nextId: 1, fields: createFields(), cells: [], cysts: [], hash: createHash(), upwelled: 0, initialInventory: 0,
+    fallen: new Float64Array(PARAMS.grid.cols),   // detritus exported per column, ever (observed only, never read by the rules)
+  };
   const count = founderCount || F.count;
   for (let l = 0; l < F.lineages; l++) {
     const base = randomGenome(rng), spriteSeed = rng.int(0x7fffffff), cx = rng.range(F.spread, W - F.spread);
@@ -590,6 +605,7 @@ function die(w, c, starved) {
   const recycled = give * PARAMS.death.recycled;
   addField(nut, c.x, c.y, recycled);
   addField(nut, c.x, H - 1, give - recycled);
+  w.fallen[clamp(Math.floor(c.x / GRID_W), 0, PARAMS.grid.cols - 1)] += give - recycled;
   c.held = 0;
 }
 
@@ -926,29 +942,57 @@ function drawParticles(L, seed, t, near) {
 // timbre -> round coccoid .. glassy box-like frustule, coupling -> setae reaching for neighbours.
 // The lineage seed fixes elongation and chloroplast layout, so relatives look alike.
 // Sprites are rebuilt per zoom level and per 1/32 turn of tumbling.
+// Tone code for glassy frustule highlights: coloured at draw time, shimmering as the cell turns
+// (diatom frustules are photonic crystals with real structural colour).
+const IRIDESCENT = -2;
+
 function buildSprite(c, rpx, angle, z, key) {
-  const S = PARAMS.sprite, g = c.g;
-  const lin = makeRng(c.spriteSeed);
+  const S = PARAMS.sprite, g = c.g, seed = c.spriteSeed;
+  // Separate streams per feature, so zooming (which adds or drops setae) never reshuffles the rest
+  const lin = makeRng(seed), linSetae = makeRng(seed ^ 0x9e3779b9), linPl = makeRng(seed ^ 0x51ed270b);
   const own = makeRng(hash32(c.id * 31 + c.gen));
+
   const aspect = lin.range(S.aspectMin, S.aspectMax);
-  const a = rpx * Math.sqrt(aspect), b = rpx / Math.sqrt(aspect);
+  const pennate = aspect >= S.polarAspect;
+  const sides = pennate ? 0 : S.valveSides[lin.int(S.valveSides.length)];   // 0 = round disc
+  const areolae = lin.next() < 0.5;                                        // dot lattice instead of radial striae
+  const glass = smoothstep(S.diatomFrom, S.diatomFull, g.timbre);          // 0 soft cell .. 1 diatom frustule
+  const asp = pennate ? aspect : 1 + (aspect - 1) * (1 - glass);           // centric valves are seen face-on
+  const a = rpx * Math.sqrt(asp), b = rpx / Math.sqrt(asp);
   const ca = Math.cos(angle), sa = Math.sin(angle);
   const p = 2 + g.timbre * S.squareness;
-  const shape = (u, v, sw) => Math.pow(Math.pow(Math.abs(u / (a * sw)), p) + Math.pow(Math.abs(v / (b * sw)), p), 1 / p);
+  const polyR = rpx * S.polygonScale, apothem = sides ? Math.cos(Math.PI / sides) : 1;
 
-  // Setae (only once big enough on screen): polar spines on elongated cells,
+  const softQ = (u, v, sw) => Math.pow(Math.pow(Math.abs(u / (a * sw)), p) + Math.pow(Math.abs(v / (b * sw)), p), 1 / p);
+  const glassQ = (u, v, sw) => {
+    if (pennate) {                                    // boat: pointed at both ends
+      const fu = Math.abs(u) / (a * sw);
+      if (fu >= 1) return 1 + fu;
+      return Math.max(fu, Math.abs(v) / (b * sw * (1 - fu * fu)));
+    }
+    const r = Math.sqrt(u * u + v * v);
+    if (!sides) return r / (rpx * sw);
+    const seg = TAU / sides, m = mod(Math.atan2(v, u), seg) - seg / 2;
+    return r * Math.cos(m) / (polyR * sw * apothem);
+  };
+  const shape = glass > 0 ? (u, v, sw) => softQ(u, v, sw) * (1 - glass) + glassQ(u, v, sw) * glass : softQ;
+
+  // Setae (only once big enough on screen): horns at polygon corners, polar spines on elongated cells,
   // corner spines on squat box-like cells, radial spines on round ones
   const sk = clamp((g.coupling - S.setaeFrom) / (1 - S.setaeFrom), 0, 1);
   const setaeLen = rpx >= S.setaeMinR ? sk * S.setaeLen * rpx : 0;
   const setae = [];
   if (setaeLen >= S.setaeMin) {
-    if (aspect >= S.polarAspect) {
-      for (const su of [1, -1]) setae.push({ du: su, dv: 0, bend: lin.range(-1, 1) * S.setaeBend });
-    } else if (p >= S.cornerSetaeP) {
-      for (const [su, sv] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) setae.push({ du: su * a, dv: sv * b, bend: lin.range(-1, 1) * S.setaeBend });
+    const bend = () => linSetae.range(-1, 1) * S.setaeBend;
+    if (glass > 0.5 && sides) {
+      for (let k = 0; k < sides; k++) setae.push({ du: Math.cos(k * TAU / sides), dv: Math.sin(k * TAU / sides), bend: bend() });
+    } else if (aspect >= S.polarAspect) {
+      for (const su of [1, -1]) setae.push({ du: su, dv: 0, bend: bend() });
+    } else if (p >= S.cornerSetaeP && glass < 0.5) {
+      for (const [su, sv] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) setae.push({ du: su * a, dv: sv * b, bend: bend() });
     } else {
-      const n = 2 + lin.int(4), off = lin.next() * TAU;
-      for (let k = 0; k < n; k++) setae.push({ du: Math.cos(off + k * TAU / n), dv: Math.sin(off + k * TAU / n), bend: lin.range(-1, 1) * S.setaeBend });
+      const n = 2 + linSetae.int(4), off = linSetae.next() * TAU;
+      for (let k = 0; k < n; k++) setae.push({ du: Math.cos(off + k * TAU / n), dv: Math.sin(off + k * TAU / n), bend: bend() });
     }
     for (const s of setae) {
       const len = Math.sqrt(s.du * s.du + s.dv * s.dv);
@@ -961,28 +1005,30 @@ function buildSprite(c, rpx, angle, z, key) {
   const nPl = 1 + Math.floor((g.size - GENES.size[0]) * S.plastidsPerSize);
   const plastids = [];
   for (let k = 0; k < nPl; k++) {
-    const ang = lin.next() * TAU, rad = nPl === 1 ? S.cupOffset : lin.range(0.15, 0.55);
+    const ang = linPl.next() * TAU, rad = nPl === 1 ? S.cupOffset : linPl.range(0.15, 0.5);
     plastids.push({
       u: Math.cos(ang) * rad * a, v: Math.sin(ang) * rad * b,
       r: Math.max(S.plastidMinR, (nPl === 1 ? S.cupR : S.plastidR) * rpx * own.range(0.85, 1.15)),
-      ph: lin.next() * TAU,
+      ph: linPl.next() * TAU,
     });
   }
 
-  const bodyExt = Math.max(a, b) * (1 + S.breathe);
+  const ornament = glass > S.ornamentFrom && rpx >= S.ornamentMinR;
+  const striae = Math.max(6, Math.floor(TAU * rpx / S.striaeSpacing));
+  const bodyExt = Math.max(a, b, glass > 0 && sides ? polyR : 0) * (1 + S.breathe);
   const half = Math.ceil(bodyExt + setaeLen) + 2, size = half * 2 + 1;
   const lo = Math.max(0, half - Math.ceil(bodyExt) - 1), hi = Math.min(size - 1, half + Math.ceil(bodyExt) + 1);
   const frames = [];
   for (let f = 0; f < S.frames; f++) {
-    const ph = TAU * f / S.frames, sw = 1 + S.breathe * Math.sin(ph);
+    const ph = TAU * f / S.frames, sw = 1 + S.breathe * Math.sin(ph) * (1 - glass);   // glass doesn't breathe
     const tones = new Int8Array(size * size).fill(-1);
     const inside = new Uint8Array(size * size);
-    const uAt = new Float32Array(size * size);
+    const uAt = new Float32Array(size * size), vAt = new Float32Array(size * size);
     for (let py = lo; py <= hi; py++) {
       for (let px = lo; px <= hi; px++) {
         const dx = px - half, dy = py - half;
-        const u = dx * ca + dy * sa, v = -dx * sa + dy * ca;
-        if (shape(u, v, sw) <= 1) { inside[py * size + px] = 1; uAt[py * size + px] = u; }
+        const u = dx * ca + dy * sa, v = -dx * sa + dy * ca, k = py * size + px;
+        if (shape(u, v, sw) <= 1) { inside[k] = 1; uAt[k] = u; vAt[k] = v; }
       }
     }
     const pl = plastids.map((P) => {
@@ -995,10 +1041,23 @@ function buildSprite(c, rpx, angle, z, key) {
       for (let px = lo; px <= hi; px++) {
         const k = py * size + px;
         if (!inside[k]) continue;
-        const dx = px - half, dy = py - half, dth = (bayer(px, py) - 0.5) * S.dither;
+        const dx = px - half, dy = py - half, b4 = bayer(px, py), dth = (b4 - 0.5) * S.dither;
+        const u = uAt[k], v = vAt[k];
         // Translucent cytoplasm, darker toward the lower right
         let tone = (-dx - dy) / (bodyExt * 1.4142) + dth < S.cytoShade ? OUTLINE : SHADOW;
-        if (g.timbre > S.girdleFrom && Math.abs(uAt[k]) < 0.5) tone = BASE;   // girdle seam between valves
+        if (g.timbre > S.girdleFrom && glass < 0.5 && Math.abs(u) < 0.5) tone = BASE;   // girdle seam between valves
+        if (ornament) {
+          if (pennate) {
+            const fu = Math.abs(u) / a, edge = Math.abs(v) / (b * (1 - fu * fu));
+            if (Math.abs(v) < 0.5 && fu < 0.85) tone = fu < 0.12 ? BRIGHT : HIGHLIGHT;    // raphe and central nodule
+            else if (edge > 0.35 && (Math.round(u) & 1) === 0) tone = BASE;              // transverse striae
+          } else {
+            const rn = Math.sqrt(u * u + v * v) / rpx;
+            if (rn < 0.18) tone = HIGHLIGHT;                                               // central annulus
+            else if (areolae) { if (rn > 0.3 && (px & 1) === 0 && ((py + (px & 2)) & 1) === 0) tone = BASE; }
+            else if (rn > 0.35 && (Math.floor(mod(Math.atan2(v, u), TAU) / TAU * striae) & 1) === 0) tone = BASE;
+          }
+        }
         for (let j = pl.length - 1; j >= 0; j--) {   // front-most chloroplast wins
           const P = pl[j], ex = dx - P.x, ey = dy - P.y, d = Math.sqrt(ex * ex + ey * ey) / P.r;
           if (d > 1) continue;
@@ -1006,11 +1065,11 @@ function buildSprite(c, rpx, angle, z, key) {
           tone = s > S.toneBright ? BRIGHT : s > S.toneHigh ? HIGHLIGHT : BASE;
           break;
         }
-        // Rim: lit on the upper left, selective dark outline on the lower right
+        // Rim: lit on the upper left (iridescent on glass), selective dark outline on the lower right
         const lowerRight = !isIn(px + 1, py) || !isIn(px, py + 1);
         const upperLeft = !isIn(px - 1, py) || !isIn(px, py - 1);
-        if (upperLeft) tone = HIGHLIGHT;
-        else if (lowerRight) tone = g.timbre > S.glassFrom ? BASE : OUTLINE;
+        if (upperLeft) tone = glass > S.iridFrom && b4 < glass ? IRIDESCENT : HIGHLIGHT;
+        else if (lowerRight) tone = glass > S.iridFrom && b4 < glass * S.rimIrid ? IRIDESCENT : g.timbre > S.glassFrom ? BASE : OUTLINE;
         tones[k] = tone;
       }
     }
@@ -1065,9 +1124,9 @@ function drawFlagella(c, cx, cy, angle, rpx, spr, base) {
 }
 
 // Fixed templates for cells too small on screen to show a form
-const speckSprite = (half, size, tones) => ({ key: -1, half, size, frames: [tones, tones, tones], a: size / 2 });
-const DOT = speckSprite(0, 1, Int8Array.of(BASE));
-const SPECK = speckSprite(0, 2, Int8Array.of(HIGHLIGHT, BASE, BASE, SHADOW));
+const SPECK = { key: -1, half: 0, size: 2, a: 1, frames: [0, 0, 0].map(() => Int8Array.of(HIGHLIGHT, BASE, BASE, SHADOW)) };
+// Iridescent pixels cycle through the bright ends of every pigment ramp
+const IRID_SET = [rampBase(2) + HIGHLIGHT, rampBase(1) + BRIGHT, COL.FOAM, rampBase(0) + BRIGHT, rampBase(3) + BRIGHT];
 
 function drawCell(c, tick, t) {
   const S = PARAMS.sprite, z = cam.zoom, rpx = c.r * z;
@@ -1075,7 +1134,8 @@ function drawCell(c, tick, t) {
   if (cx < -reach || cy < -reach || cx > W + reach || cy > H + reach) return;
   const steps = S.tumbleSteps, angle = tumbleAngle(c, t);
   const step = mod(Math.round(angle / TAU * steps), steps);
-  const spr = rpx < S.dotR ? DOT : rpx < S.speckR ? SPECK : spriteFor(c, rpx, step);
+  const spr = rpx < S.speckR ? SPECK : spriteFor(c, rpx, step);
+  const irPhase = step + c.id + Math.floor(t * S.iridSpeed);
   const base = rampBase(hueRamp(c.g));
   if (!c.dying && spr.key >= 0) drawFlagella(c, cx, cy, step * TAU / steps, rpx, spr, base);
 
@@ -1093,14 +1153,20 @@ function drawCell(c, tick, t) {
     const cl = wy < CAUSTIC_H ? Math.pow(1 - wy / CAUSTIC_H, R.causticFade) * R.cellCaustic : 0;
     for (let px = 0; px < size; px++) {
       const t0 = tones[py * size + px];
-      if (t0 < 0) continue;
+      if (t0 === -1) continue;
       const sx = x0 + px;
       if (sx < 0 || sx >= W) continue;
       const bx = bx0 + sx, b = BAYER[((by & 3) << 2) | (bx & 3)];
       if (fade > 0 && b < fade) continue;                                       // death: dissolve
-      let tt = t0 + glow;
-      if (dark > 0 && tt > 0 && BAYER[(((by + 2) & 3) << 2) | ((bx + 1) & 3)] < dark) tt--;   // deep water mutes colour
-      let idx = tt >= COL.TONES ? COL.GLOW : base + tt;
+      const muted = dark > 0 && BAYER[(((by + 2) & 3) << 2) | ((bx + 1) & 3)] < dark;   // deep water mutes colour
+      let idx;
+      if (t0 === IRIDESCENT) {
+        idx = glow ? COL.GLOW : muted ? base + BASE : IRID_SET[mod(irPhase + ((bx + 2 * by) >> 1), IRID_SET.length)];
+      } else {
+        let tt = t0 + glow;
+        if (muted && tt > 0) tt--;
+        idx = tt >= COL.TONES ? COL.GLOW : base + tt;
+      }
       if (sl > 0 || cl > 0) {                                                    // light shafts and caustics play over the cell
         const wx = (bx + 0.5) / z;
         let lit = sl > 0 ? shaftAt(wx, wy) * sl : 0;
@@ -1160,9 +1226,9 @@ function drawThreads(w) {
   byId.clear();
   for (const c of w.cells) if (!c.dying) byId.set(c.id, c);
   for (const c of w.cells) {
-    if (c.dying || c.parentId === null || c.age > T.maxAge) continue;
+    if (c.dying || c.parentId === null || c.age > T.maxAge || c.r * cam.zoom < PARAMS.sprite.speckR) continue;
     const p = byId.get(c.parentId);
-    if (!p) continue;
+    if (!p || p.r * cam.zoom < PARAMS.sprite.speckR) continue;
     const ax = toSX(c.x), ay = toSY(c.y), dx = toSX(p.x) - ax, dy = toSY(p.y) - ay;
     const len = Math.sqrt(dx * dx + dy * dy);
     if (len < 1) continue;
@@ -1194,6 +1260,117 @@ function drawCysts(w) {
           put(cx + dx, cy + dy, base + SHADOW);
         }
       }
+    }
+  }
+}
+
+// ---- Seafloor scavengers ----
+// Decoration only: they never touch the simulation. They come where detritus has recently fallen
+// (w.fallen), linger to pick at it, then walk on and out of the column.
+const crawlers = [];
+const smell = new Float64Array(PARAMS.grid.cols), fallenSeen = new Float64Array(PARAMS.grid.cols);
+const CRAWLER_TYPES = ['amphipod', 'ostracod', 'isopod'];
+const SLATE_RAMP = [COL.WATER + 1, COL.WATER + 3, COL.SLATE, COL.WATER + 6, COL.WATER + 7];
+let crawlTick = -1;
+
+function crawlerColour(type, tone) {
+  if (type === 'amphipod') return rampBase(2) + tone;   // translucent pink
+  if (type === 'ostracod') return rampBase(1) + tone;   // amber shell
+  return SLATE_RAMP[tone];                               // grey isopod
+}
+
+function updateCrawlers(w) {
+  const C = PARAMS.crawlers, cols = PARAMS.grid.cols;
+  if (crawlTick < 0) { fallenSeen.set(w.fallen); crawlTick = w.tick; return; }
+  const ticks = w.tick - crawlTick;
+  if (ticks <= 0) return;
+  crawlTick = w.tick;
+  const dt = ticks * TICK_DT, decay = Math.exp(-dt / C.smellTau);
+  let total = 0, best = 0;
+  for (let i = 0; i < cols; i++) {
+    smell[i] = smell[i] * decay + (w.fallen[i] - fallenSeen[i]);
+    fallenSeen[i] = w.fallen[i];
+    total += smell[i];
+    if (smell[i] > smell[best]) best = i;
+  }
+  // More scent, more likely an arrival; a stateless hash of the tick keeps it reproducible
+  const chance = 1 - Math.exp(-C.rate * Math.min(1, total / C.smellFull) * dt);
+  if (crawlers.length < C.max && total > 0 && hash01(w.tick * 7919 + w.seed) < chance) {
+    const h = w.tick * 31 + w.seed, type = CRAWLER_TYPES[Math.floor(hash01(h + 1) * CRAWLER_TYPES.length)], T = C[type];
+    const fromLeft = hash01(h + 2) < 0.5;
+    crawlers.push({
+      type, id: h & 0xffff, x: fromLeft ? -C.margin : W + C.margin, dir: fromLeft ? 1 : -1,
+      target: (best + 0.5) * GRID_W, col: best, state: 'in', walk: hash01(h + 5) * TAU,
+      speed: T.speedMin + hash01(h + 3) * (T.speedMax - T.speedMin),
+      feed: C.feedMin + hash01(h + 4) * (C.feedMax - C.feedMin),
+    });
+  }
+  for (let i = crawlers.length - 1; i >= 0; i--) {
+    const cr = crawlers[i];
+    if (cr.state === 'feed') {
+      cr.feed -= dt;
+      smell[cr.col] *= decay;                       // picking the detritus over
+      if (cr.feed <= 0) cr.state = 'out';
+      continue;
+    }
+    cr.x += cr.dir * cr.speed * dt;
+    cr.walk += cr.speed * dt * C.step;
+    if (cr.state === 'in' && (cr.target - cr.x) * cr.dir <= 0) cr.state = 'feed';
+    else if (cr.state === 'out' && (cr.x < -C.margin - 1 || cr.x > W + C.margin + 1)) crawlers.splice(i, 1);
+  }
+}
+
+function worldLine(x0, y0, x1, y1, idx) {
+  const z = cam.zoom, ax = x0 * z - view.bx0, ay = y0 * z - view.by0, bx = x1 * z - view.bx0, by = y1 * z - view.by0;
+  const n = Math.ceil(Math.max(Math.abs(bx - ax), Math.abs(by - ay))) + 1;
+  for (let i = 0; i <= n; i++) put(Math.floor(ax + (bx - ax) * i / n), Math.floor(ay + (by - ay) * i / n), idx);
+}
+
+function drawShell(bl, type) {
+  const z = cam.zoom, cx = bl.x * z - view.bx0, cy = bl.y * z - view.by0;
+  const rx = Math.max(0.7, bl.rx * z), ry = Math.max(0.7, bl.ry * z);
+  for (let y = Math.floor(cy - ry); y <= Math.ceil(cy + ry); y++) {
+    for (let x = Math.floor(cx - rx); x <= Math.ceil(cx + rx); x++) {
+      const dx = (x + 0.5 - cx) / rx, dy = (y + 0.5 - cy) / ry;
+      if (dx * dx + dy * dy > 1) continue;
+      const lit = -dx * 0.6 - dy * 0.8 + (wb(x, y) - 0.5) * 0.3;
+      const tone = dx * dx + dy * dy > 0.7 && dx + dy > 0.4 ? OUTLINE : lit > 0.5 ? HIGHLIGHT : lit > -0.1 ? BASE : SHADOW;
+      put(x, y, crawlerColour(type, tone));
+    }
+  }
+}
+
+function drawCrawlers(t) {
+  const C = PARAMS.crawlers;
+  for (const cr of crawlers) {
+    const ground = floorY(cr.x), moving = cr.state !== 'feed', bob = moving ? Math.sin(cr.walk * 2) * 0.12 : 0;
+    const body = [];   // tail first, so the head is drawn in front
+    if (cr.type === 'ostracod') {
+      const T = C.ostracod;
+      body.push({ x: cr.x, y: ground - C.legH * 0.6 - T.ry + bob, rx: T.rx, ry: T.ry });
+    } else {
+      const T = C[cr.type], n = T.segs, half = (n - 1) * T.segLen / 2;
+      for (let k = n - 1; k >= 0; k--) {
+        const f = k / (n - 1), r = T.rFront + (T.rTail - T.rFront) * f;
+        body.push({
+          x: cr.x + cr.dir * (half - k * T.segLen), y: ground - C.legH - r - T.arch * Math.sin(Math.PI * f) + bob,
+          rx: r, ry: cr.type === 'isopod' ? r * 0.7 : r,
+        });
+      }
+    }
+    const head = body[body.length - 1];
+    // Legs, stepping while walking
+    const legXs = cr.type === 'ostracod' ? [head.x - cr.dir * 0.6, head.x + cr.dir * 0.6] : body.map((s) => s.x);
+    legXs.forEach((lx, k) => {
+      const swing = moving ? Math.sin(cr.walk + k * 1.3) * 0.5 : 0;
+      worldLine(lx, ground - C.legH - 0.3, lx + cr.dir * swing, ground, crawlerColour(cr.type, SHADOW));
+    });
+    for (const s of body) drawShell(s, cr.type);
+    // Antennae, always feeling about
+    const hx = head.x + cr.dir * head.rx * 0.8, hy = head.y - head.ry * 0.4;
+    for (let k = 0; k < 2; k++) {
+      const e = 0.35 + 0.4 * k + Math.sin(t * 3 + k * 2 + cr.id) * 0.15;
+      worldLine(hx, hy, hx + cr.dir * Math.cos(e) * C.antenna, hy - Math.sin(e) * C.antenna, crawlerColour(cr.type, BASE));
     }
   }
 }
@@ -1261,6 +1438,8 @@ function composeFrame(w, now) {
   drawParticles(P.mid, 2000, t, false);
   drawPebbles();
   drawCysts(w);
+  updateCrawlers(w);
+  drawCrawlers(t);
   drawThreads(w);
   drawCells(w, t);
   drawFlashes(w);

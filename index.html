@@ -17,13 +17,14 @@
 'use strict';
 
 // ===== PARAMS =====
-// Units: world pixels (the 180x320 internal canvas) and seconds. Energy is per unit biomass:
-// a cell divides at 1 and each daughter starts at 0.5.
+// Units: world units (the whole column is 180x320; at zoom 1 one unit is one screen pixel) and seconds.
+// Energy is per unit biomass: a cell divides at 1 and each daughter starts at 0.5.
 const PARAMS = {
-  world: { w: 180, h: 320 },
+  world: { w: 180, h: 320, floor: 12 }, // floor: sediment thickness at the bottom
   time: { tickRate: 30, maxTicksPerFrame: 8 },
   grid: { cols: 24, rows: 40 },
-  hash: { cell: 24 },                   // must be >= the largest interaction distance
+  hash: { cell: 12 },                   // must be >= the largest interaction distance
+  cell: { rMin: 1.25, rMax: 4 },        // body radius at size 0.6 .. 1.6
 
   light: { surface: 1.0, atten: 4.0 },  // e-folding depth = a quarter of the column
   nutrients: {
@@ -34,7 +35,7 @@ const PARAMS = {
     upwelling: 1.0,                     // coupling of the bottom row to deep water
   },
 
-  founders: { count: 14, lineages: 3, spread: 18, energyMin: 0.3, energyMax: 0.7, maxAge: 60 },
+  founders: { count: 40, lineages: 4, spread: 12, energyMin: 0.3, energyMax: 0.7, maxAge: 60 },
 
   // Rule 1: drift
   drift: {
@@ -44,7 +45,8 @@ const PARAMS = {
     separation: 18,                     // px/s^2 at full overlap
     separationRange: 1.1,               // x (ri + rj)
     wallBounce: 0.3,
-    surfaceGap: 4,                      // cells stay below the surface film
+    surfaceGap: 7,                      // cells stay below the surface
+    floorGap: 2,                        // and above the sediment ripples
     deadSink: 3,                        // px/s^2 while fading
   },
   // Rule 2: metabolism, per unit biomass:
@@ -54,10 +56,10 @@ const PARAMS = {
     efficiency: 0.2,
     halfSat: 0.3,                       // nutrient half-saturation at size 1, proportional to size
     maintenance: 0.004,
-    uptake: 4.0,                        // nutrient units per unit energy per unit biomass
+    uptake: 1.3,                        // nutrient units per unit energy per unit biomass
   },
   // Rule 3: division
-  division: { threshold: 1.0, maxCells: 120, spread: 0.6 },
+  division: { threshold: 1.0, maxCells: 400, spread: 0.6 },
   lifespan: { base: 240, jitterMin: 0.8, jitterMax: 1.4 },   // x sqrt(size), seconds since last division
   // Rule 4: death
   death: { fadeTicks: 60, recycled: 0.6 },                   // the rest sinks out to the bottom row
@@ -67,37 +69,60 @@ const PARAMS = {
     sink: 6,
     dormancyMin: 40, dormancyMax: 160,
     germRate: 1 / 45, germNutrient: 0.35, germEnergy: 0.4,
-    viability: 600, max: 40,
+    viability: 600, max: 80,
   },
   mutation: { step: 0.08, jumpChance: 0.05, jump: 0.3 },
 
+  // ---- Everything below is visual only; none of it feeds back into the simulation. ----
+  camera: { levels: [1, 1.5, 2, 3, 4], wheelStep: 1 },   // zoom 1 shows the whole column
   sprite: {
-    rMin: 2.5, rMax: 8,                 // body radius at size 0.6 .. 1.6
     frames: 3, wobbleFps: 2,
     aspectMin: 0.75, aspectMax: 2.2,    // lineage trait: squat .. pennate-like
-    tilt: 0.35,
     squareness: 4,                      // superellipse exponent added at timbre 1 (round cell -> frustule box)
-    breathe: 0.04, stream: 0.5,         // membrane swell and chloroplast drift between wobble frames
-    setaeFrom: 0.35, setaeLen: 2.8, setaeMin: 3, setaeMinR: 4, cornerSetaeP: 4, setaeBend: 0.05,
+    breathe: 0.04, stream: 0.3,         // membrane swell; chloroplast drift (world units) between wobble frames
+    setaeFrom: 0.35, setaeLen: 2.8, setaeMin: 3, setaeMinR: 4, cornerSetaeP: 4, polarAspect: 1.4, setaeBend: 0.05,
     setaeSolid: 2, setaeFadeFrom: 0.25,  // px of solid spine at the base; fraction of length where it starts to dissolve
     plastidsPerSize: 5, plastidR: 0.3, plastidMinR: 0.9, cupR: 0.55, cupOffset: 0.25,
     plastidLit: 0.6, toneBright: 0.55, toneHigh: 0.15,
     cytoShade: -0.35, dither: 0.25,
     girdleFrom: 0.55, glassFrom: 0.6,
+    tumbleSteps: 32, maxSpin: 0.1, sway: 0.3, swaySpeed: 0.15,   // slow rotation, rad/s
+    buildBudgetMs: 3,                   // sprite rebuilds per frame; stale sprites are drawn past this
+    dotR: 1.6, speckR: 2.4,             // below these on-screen radii a cell is a 1-px dot or a 2x2 lit speck
   },
-  flash: { glowTicks: 5, ringTicks: 14, ringStart: 1, ringGrow: 0.5, arcs: 3, arcGap: -0.3 },
+  flagella: { maxTimbre: 0.45, minR: 3, length: 1.8, amp: 0.22, waves: 1.3, beat: 3, pairSize: 1.2, spread: 0.35 },
+  flash: {
+    glowTicks: 5,                       // the cell itself brightens
+    haloTicks: 18, haloRadius: 3, haloMinPx: 3, haloMaxPx: 24, haloStrength: 0.8,   // light spilling into the water and onto neighbours
+    ringTicks: 14, ringStart: 1, ringGrow: 0.5, ringMinR: 4, arcs: 3, arcGap: -0.3,
+  },
   thread: { maxAge: 60, dotSpacing: 3 },
   render: {
     waterTop: 6.9, waterBottom: 0.3, waterCurve: 1.5,
     seam: 0.3,                          // fraction of each colour band that is dithered
-    shaftDepth: 0.6, shaftStrength: 2.4, shaftSlope: 0.45,
+    shaftDepth: 0.6, shaftStrength: 2.4, shaftSlope: 0.45, shaftRes: 4,
     shaftA: 0.6, shaftB: 0.4, shaftFreqA: 0.05, shaftFreqB: 0.11, shaftSpeedA: 0.04, shaftSpeedB: 0.03,
-    causticDepth: 0.16, causticCell: 16, causticWidth: 0.9, causticSpeed: 0.12, causticEvery: 3, causticFade: 2.2,
-    surfaceRows: 4, streakFreq: 0.13, streakSpeed: 0.25, streakThreshold: 1.25, foamThreshold: 1.75,
-    snowCount: 48, snowSpeedMin: 1, snowSpeedMax: 3.5, snowSway: 2, snowLift: 2,
+    causticDepth: 0.2, causticCell: 16, causticWidth: 1.0, causticSpeed: 0.12, causticEvery: 3, causticFade: 1.5,
+    cellLight: 0.35, cellCaustic: 0.7,  // how strongly shafts and caustics brighten cells passing through
     deepFrom: 0.55, deepDarken: 0.7,
   },
-  hud: { x: 4, y: 297, line: 7, visibleMs: 6000, fadeMs: 2000 },
+  surface: {
+    base: 3, ampA: 1.0, ampB: 0.6, freqA: 0.09, freqB: 0.23, speedA: 0.5, speedB: 0.8,
+    glint: 1.25, glintFreqA: 0.5, glintSpeedA: 1.1, glintFreqB: 0.17, glintSpeedB: 0.6,
+  },
+  floor: {
+    rippleA: 1.2, rippleB: 0.6, rippleFreqA: 0.31, rippleFreqB: 0.11,
+    mat: 1.2, matPatch: 0.35, grain: 0.14, fade: 9,
+    pebbles: 16, pebbleMin: 0.8, pebbleMax: 2.2,
+  },
+  bloom: { full: 2.5, max: 0.75, tau: 4 },        // biomass per grid node for full tint; tint smoothing (s)
+  particles: {
+    far:  { count: 90, parallax: 0.5, zoomExp: 0.5, speedMin: 0.3, speedMax: 1.0, sway: 1, lift: 1 },
+    mid:  { count: 48, parallax: 1, zoomExp: 1, speedMin: 1, speedMax: 3.5, sway: 2, lift: 2 },
+    near: { count: 14, parallax: 1.6, zoomExp: 1.25, speedMin: 3, speedMax: 6, sway: 4, size: 3 },
+  },
+  cystLook: { r: 0.8, spikesFromPx: 3 },
+  hud: { x: 4, y: 290, line: 7, visibleMs: 6000, fadeMs: 2000 },
   debug: { sampleEvery: 100, historyLength: 180, frameSamples: 120, graphY: 92, graphH: 40, mapX: 126, mapY: 6, mapCell: 2 },
 };
 
@@ -164,8 +189,9 @@ const BAYER = new Float64Array([0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 1
 const bayer = (x, y) => BAYER[((y & 3) << 2) | (x & 3)];
 
 // ===== Palette =====
-// 32 colours. Water ramp (0-7) runs deep navy -> surface teal, then light and accents,
-// then four pigment ramps of five hue-shifted tones (outline, shadow, base, highlight, bright).
+// 38 colours. Water ramp (0-7) runs deep navy -> surface teal, then light and accents,
+// then four pigment ramps of five hue-shifted tones (outline, shadow, base, highlight, bright),
+// then bloom water: greener twins of water steps 2-7, dithered in where cells are dense.
 const PALETTE_HEX = [
   '#070a14', '#0b1322', '#0f1d30', '#12293d', '#15364a', '#194757', '#1f5a64', '#296f70',
   '#3f8b84', // 8  light shaft / caustic / surface film
@@ -176,6 +202,7 @@ const PALETTE_HEX = [
   '#2a1712', '#5b3218', '#9a6122', '#d6a23f', '#f6e3a1', // gold: rust shadows, cream highlights
   '#2a1030', '#5a1d43', '#9b3550', '#d9675f', '#f8b994', // rose: plum shadows, peach highlights
   '#141336', '#2c2a6a', '#4f479e', '#8a76cf', '#d4c0f0', // violet: indigo shadows, lilac highlights
+  '#13231f', '#172f28', '#1b3c30', '#204c37', '#285d3d', '#346f46', // bloom water
 ];
 
 const PAL32 = new Uint32Array(PALETTE_HEX.map((hex) => {
@@ -183,9 +210,21 @@ const PAL32 = new Uint32Array(PALETTE_HEX.map((hex) => {
   return (0xff000000 | ((n & 0xff) << 16) | (n & 0xff00) | ((n >> 16) & 0xff)) >>> 0;
 }));
 
-const COL = { WATER: 0, SHAFT: 8, FOAM: 9, GLOW: 10, SLATE: 11, RAMP: 12, TONES: 5, RAMPS: 4 };
+const COL = { WATER: 0, SHAFT: 8, FOAM: 9, GLOW: 10, SLATE: 11, RAMP: 12, TONES: 5, RAMPS: 4, BLOOM: 32, BLOOM_FROM: 2, BLOOM_TO: 7 };
 const OUTLINE = 0, SHADOW = 1, BASE = 2, HIGHLIGHT = 3, BRIGHT = 4;
 const rampBase = (ramp) => COL.RAMP + ramp * COL.TONES;
+
+// Each colour's next brighter step: light falling on anything is one lookup.
+const LIGHT_UP = new Uint8Array(PALETTE_HEX.length);
+for (let i = 0; i < LIGHT_UP.length; i++) LIGHT_UP[i] = i;
+for (let i = COL.WATER; i < COL.SHAFT; i++) LIGHT_UP[i] = i + 1;
+LIGHT_UP[COL.SHAFT] = COL.FOAM;
+LIGHT_UP[COL.FOAM] = COL.GLOW;
+LIGHT_UP[COL.SLATE] = COL.SHAFT - 1;
+for (let r = 0; r < COL.RAMPS; r++) {
+  for (let t = 0; t < COL.TONES; t++) LIGHT_UP[rampBase(r) + t] = t < BRIGHT ? rampBase(r) + t + 1 : COL.GLOW;
+}
+for (let i = 0; i <= COL.BLOOM_TO - COL.BLOOM_FROM; i++) LIGHT_UP[COL.BLOOM + i] = i < COL.BLOOM_TO - COL.BLOOM_FROM ? COL.BLOOM + i + 1 : COL.SHAFT;
 
 // ===== Fields =====
 const GRID_W = W / PARAMS.grid.cols, GRID_H = H / PARAMS.grid.rows;
@@ -302,8 +341,8 @@ const hueRamp = (g) => Math.floor(g.hue);
 
 // ===== Cells =====
 function cellRadius(g) {
-  const S = PARAMS.sprite, [lo, hi] = GENES.size;
-  return S.rMin + (g.size - lo) / (hi - lo) * (S.rMax - S.rMin);
+  const C = PARAMS.cell, [lo, hi] = GENES.size;
+  return C.rMin + (g.size - lo) / (hi - lo) * (C.rMax - C.rMin);
 }
 
 // Traits that follow from the genome; recomputed whenever the genome changes.
@@ -465,8 +504,9 @@ function move(c, dt) {
   c.y += c.vy * dt;
   if (c.x < r) { c.x = r; c.vx = Math.abs(c.vx) * D.wallBounce; }
   else if (c.x > W - r) { c.x = W - r; c.vx = -Math.abs(c.vx) * D.wallBounce; }
+  const bottom = H - PARAMS.world.floor - D.floorGap - r;
   if (c.y < r + D.surfaceGap) { c.y = r + D.surfaceGap; c.vy = Math.abs(c.vy) * D.wallBounce; }
-  else if (c.y > H - r - 1) { c.y = H - r - 1; c.vy = -Math.abs(c.vy) * D.wallBounce; }
+  else if (c.y > bottom) { c.y = bottom; c.vy = -Math.abs(c.vy) * D.wallBounce; }
 }
 
 // Rule 2: energy += light x nutrients x efficiency - maintenance. Uptake removes nutrients locally.
@@ -543,7 +583,7 @@ function die(w, c, starved) {
     const reserve = give * Cy.reserve;
     give -= reserve;
     w.cysts.push({
-      x: c.x, y: c.y, floorY: H - 2 - w.rng.int(3), g: c.g, spriteSeed: c.spriteSeed,
+      x: c.x, y: c.y, floorY: H - PARAMS.world.floor + w.rng.range(0.5, 2), g: c.g, spriteSeed: c.spriteSeed,
       reserve, age: 0, dormancy: w.rng.range(Cy.dormancyMin, Cy.dormancyMax),
     });
   }
@@ -583,10 +623,47 @@ function updateCysts(w, dt) {
 // Phase 2.
 
 // ===== Render =====
+// Every layer writes palette indices into one buffer; it is converted to colour once per frame.
+// Light (shafts, caustics, flashes) is applied with LIGHT_UP, so every pixel stays on the palette.
 const R = PARAMS.render;
-const view = { canvas: null, ctx: null, off: null, offCtx: null, img: null, buf: null, scale: 1, ox: 0, oy: 0 };
-const waterRow = new Float64Array(H);   // background band value per row, before light
-let shaftTable = null, causticMask = null, causticPts = null, causticTick = -1;
+const ZOOMS = PARAMS.camera.levels;
+const SHAFT_DEPTH = H * R.shaftDepth, CAUSTIC_H = Math.ceil(H * R.causticDepth);
+const FLOOR_TOP = H - PARAMS.world.floor;
+const FLOOR_MIN = FLOOR_TOP - PARAMS.floor.rippleA - PARAMS.floor.rippleB;
+const SURFACE_MAX = PARAMS.surface.base + PARAMS.surface.ampA + PARAMS.surface.ampB + 1;
+
+const view = {
+  canvas: null, ctx: null, off: null, offCtx: null, img: null,
+  buf: null, ibuf: new Uint8Array(W * H),
+  scale: 1, ox: 0, oy: 0,
+  bx0: 0, by0: 0,     // camera offset in whole screen pixels, so dithering stays anchored to the world
+};
+const cam = { level: 0, zoom: 1, x: 0, y: 0 };   // x, y: world point at the screen's top-left
+
+const shaftTable = new Float64Array(Math.ceil((W + H * R.shaftSlope) * R.shaftRes) + 8);
+const CAUSTIC_COLS = W + 2, CAUSTIC_ROWS = CAUSTIC_H + 2;
+const causticF = new Float32Array(CAUSTIC_COLS * CAUSTIC_ROWS);   // gap between nearest and second-nearest point
+let causticPts = null, causticReady = false;
+const chl = new Float64Array(PARAMS.grid.cols * PARAMS.grid.rows);   // smoothed cell biomass per grid node
+const chlNow = new Float64Array(chl.length);
+let chlTick = -1;
+const TINT_W = W >> 2, TINT_H = H >> 2;
+const bloomTint = new Float64Array(TINT_W * TINT_H);              // per 4x4 screen block
+const pebbles = [];
+let buildDeadline = 0;
+
+// Allocations that need no DOM (also used by the headless benchmark)
+function initRenderBuffers() {
+  if (!view.buf) view.buf = new Uint32Array(W * H);
+  const cs = R.causticCell;
+  causticPts = new Float64Array(2 * (Math.ceil(W / cs) + 3) * (Math.ceil(CAUSTIC_H / cs) + 3));
+  const F = PARAMS.floor;
+  pebbles.length = 0;
+  for (let i = 0; i < F.pebbles; i++) {
+    const x = hash01(i * 7 + 101) * W, r = F.pebbleMin + hash01(i * 7 + 102) * (F.pebbleMax - F.pebbleMin);
+    pebbles.push({ x, y: floorY(x) + r * 0.35, r, rx: r * (1 + hash01(i * 7 + 103) * 0.6) });
+  }
+}
 
 function initRender(canvas) {
   view.canvas = canvas;
@@ -597,14 +674,7 @@ function initRender(canvas) {
   view.offCtx = view.off.getContext('2d');
   view.img = view.offCtx.createImageData(W, H);
   view.buf = new Uint32Array(view.img.data.buffer);
-  for (let y = 0; y < H; y++) {
-    const f = y / (H - 1);
-    waterRow[y] = R.waterBottom + (R.waterTop - R.waterBottom) * Math.pow(1 - f, R.waterCurve);
-  }
-  shaftTable = new Float64Array(Math.ceil(W + H * R.shaftSlope) + 2);
-  const causticRows = Math.ceil(H * R.causticDepth);
-  causticMask = new Uint8Array(W * causticRows);
-  causticPts = new Float64Array(2 * (Math.ceil(W / R.causticCell) + 3) * (Math.ceil(causticRows / R.causticCell) + 3));
+  initRenderBuffers();
   resize();
 }
 
@@ -623,14 +693,75 @@ function resize() {
   view.ctx.fillRect(0, 0, cw, ch);
 }
 
-function put(buf, x, y, idx) {
-  if (x >= 0 && x < W && y >= 0 && y < H) buf[y * W + x] = PAL32[idx];
+// ---- Camera ----
+function clampCamera() {
+  cam.x = clamp(cam.x, 0, W - W / cam.zoom);
+  cam.y = clamp(cam.y, 0, H - H / cam.zoom);
 }
 
-// Cellular caustics: thin lines where the two nearest drifting feature points are equidistant.
-function updateCaustics(t) {
-  const cs = R.causticCell, rows = causticMask.length / W;
-  const gw = Math.ceil(W / cs) + 3, gh = Math.ceil(rows / cs) + 3;   // lattice from -1 .. n+1
+// Change zoom level keeping the world point under screen pixel (sx, sy) in place.
+function zoomAt(level, sx, sy) {
+  const wx = cam.x + sx / cam.zoom, wy = cam.y + sy / cam.zoom;
+  cam.level = clamp(level, 0, ZOOMS.length - 1);
+  cam.zoom = ZOOMS[cam.level];
+  cam.x = wx - sx / cam.zoom;
+  cam.y = wy - sy / cam.zoom;
+  clampCamera();
+}
+
+function panBy(dx, dy) {
+  cam.x -= dx / cam.zoom;
+  cam.y -= dy / cam.zoom;
+  clampCamera();
+}
+
+function nearestLevel(zoom) {
+  let best = 0;
+  for (let k = 1; k < ZOOMS.length; k++) {
+    if (Math.abs(Math.log(ZOOMS[k] / zoom)) < Math.abs(Math.log(ZOOMS[best] / zoom))) best = k;
+  }
+  return best;
+}
+
+const toSX = (wx) => Math.round(wx * cam.zoom) - view.bx0;
+const toSY = (wy) => Math.round(wy * cam.zoom) - view.by0;
+const worldY = (py) => (view.by0 + py + 0.5) / cam.zoom;
+const wb = (x, y) => BAYER[(((y + view.by0) & 3) << 2) | ((x + view.bx0) & 3)];   // world-anchored dither
+const mod = (v, m) => ((v % m) + m) % m;
+
+function put(x, y, idx) {
+  if (x >= 0 && x < W && y >= 0 && y < H) view.ibuf[y * W + x] = idx;
+}
+
+function lift(x, y) {
+  if (x >= 0 && x < W && y >= 0 && y < H) { const k = y * W + x; view.ibuf[k] = LIGHT_UP[view.ibuf[k]]; }
+}
+
+// ---- Water ----
+function waterBand(wy) {
+  const f = clamp(wy / H, 0, 1);
+  return R.waterBottom + (R.waterTop - R.waterBottom) * Math.pow(1 - f, R.waterCurve);
+}
+
+function shaftFade(wy) {
+  const sd = wy < SHAFT_DEPTH ? 1 - wy / SHAFT_DEPTH : 0;
+  return R.shaftStrength * sd * sd;
+}
+
+function updateShafts(t) {
+  for (let k = 0; k < shaftTable.length; k++) {
+    const u = k / R.shaftRes;
+    const s = R.shaftA * Math.sin(u * R.shaftFreqA + t * R.shaftSpeedA)
+            + R.shaftB * Math.sin(u * R.shaftFreqB - t * R.shaftSpeedB + 1.3);
+    shaftTable[k] = s > 0 ? s * s * s : 0;
+  }
+}
+
+const shaftAt = (wx, wy) => shaftTable[((wx + wy * R.shaftSlope) * R.shaftRes) | 0];
+
+// Cellular caustics in world space; a third of the rows are refreshed each tick.
+function updateCaustics(t, tick) {
+  const cs = R.causticCell, gw = Math.ceil(W / cs) + 3, gh = Math.ceil(CAUSTIC_H / cs) + 3;
   for (let gj = 0; gj < gh; gj++) {
     for (let gi = 0; gi < gw; gi++) {
       const id = gj * 131 + gi, k = 2 * (gj * gw + gi);
@@ -639,88 +770,181 @@ function updateCaustics(t) {
       causticPts[k + 1] = (gj - 1 + 0.5 + 0.38 * Math.cos(t * sp * 0.8 + hash01(id * 5 + 2) * TAU)) * cs;
     }
   }
-  for (let y = 0; y < rows; y++) {
-    const gj = Math.floor(y / cs) + 1;
-    for (let x = 0; x < W; x++) {
-      const gi = Math.floor(x / cs) + 1;
+  const phase = tick % R.causticEvery;
+  for (let j = 0; j < CAUSTIC_ROWS; j++) {
+    if (causticReady && j % R.causticEvery !== phase) continue;
+    const gj = Math.floor(j / cs) + 1;
+    for (let i = 0; i < CAUSTIC_COLS; i++) {
+      const gi = Math.floor(i / cs) + 1;
       let f1 = 1e9, f2 = 1e9;
       for (let dj = -1; dj <= 1; dj++) {
         for (let di = -1; di <= 1; di++) {
           const k = 2 * ((gj + dj) * gw + gi + di);
-          const dx = causticPts[k] - x, dy = causticPts[k + 1] - y, d = dx * dx + dy * dy;
+          const dx = causticPts[k] - i, dy = causticPts[k + 1] - j, d = dx * dx + dy * dy;
           if (d < f1) { f2 = f1; f1 = d; } else if (d < f2) f2 = d;
         }
       }
-      causticMask[y * W + x] = Math.sqrt(f2) - Math.sqrt(f1) < R.causticWidth ? 1 : 0;
+      causticF[j * CAUSTIC_COLS + i] = Math.sqrt(f2) - Math.sqrt(f1);
+    }
+  }
+  causticReady = true;
+}
+
+function causticAt(wx, wy) {
+  const i = wx | 0, j = wy | 0;
+  if (i >= CAUSTIC_COLS - 1 || j >= CAUSTIC_ROWS - 1) return 1e9;
+  const fx = wx - i, fy = wy - j, k = j * CAUSTIC_COLS + i;
+  return (causticF[k] * (1 - fx) + causticF[k + 1] * fx) * (1 - fy)
+       + (causticF[k + CAUSTIC_COLS] * (1 - fx) + causticF[k + CAUSTIC_COLS + 1] * fx) * fy;
+}
+
+// ---- Surface, seen from below ----
+function surfaceY(wx, t) {
+  const S = PARAMS.surface;
+  return S.base + S.ampA * Math.sin(wx * S.freqA + t * S.speedA) + S.ampB * Math.sin(wx * S.freqB - t * S.speedB);
+}
+
+function surfacePixel(wx, wy, t, b) {
+  const S = PARAMS.surface;
+  const g = Math.sin(wx * S.glintFreqA + t * S.glintSpeedA) + Math.sin(wx * S.glintFreqB - t * S.glintSpeedB + wy * 2);
+  return g > S.glint ? COL.FOAM : b < 0.5 ? COL.SHAFT : COL.SHAFT - 1;
+}
+
+// ---- Seafloor ----
+function floorY(wx) {
+  const F = PARAMS.floor;
+  return FLOOR_TOP + F.rippleA * Math.sin(wx * F.rippleFreqA) + F.rippleB * Math.sin(wx * F.rippleFreqB + 1.7);
+}
+
+function sedimentPixel(wx, wy, d, b) {
+  const F = PARAMS.floor, green = rampBase(0), gold = rampBase(1);
+  if (b < d / F.fade) return COL.WATER;                                    // sinks into darkness below
+  if (d < F.mat && hash01(Math.floor(wx * 1.5) + 7777) > F.matPatch) return b < 0.5 ? green + OUTLINE : green + SHADOW;
+  if (d < 0.8) return gold + SHADOW;                                       // lit crest of the sediment
+  const grain = hash01(Math.imul(Math.floor(wx * 2), 7919) + Math.floor(wy * 2) * 131 + 17);
+  return grain < F.grain ? gold + SHADOW : gold + OUTLINE;
+}
+
+function drawPebbles() {
+  const z = cam.zoom;
+  for (const p of pebbles) {
+    const cx = toSX(p.x), cy = toSY(p.y), rx = p.rx * z, ry = p.r * z * 0.7;
+    for (let y = Math.floor(cy - ry - 1); y <= cy + ry + 1; y++) {
+      for (let x = Math.floor(cx - rx - 1); x <= cx + rx + 1; x++) {
+        const dx = (x - cx) / rx, dy = (y - cy) / ry, d = dx * dx + dy * dy;
+        if (d > 1) continue;
+        const lit = -dx * 0.6 - dy * 0.8 + (wb(x, y) - 0.5) * 0.3;
+        put(x, y, d > 0.75 && dx + dy > 0.3 ? COL.WATER + 1 : lit > 0.45 ? COL.WATER + 6 : lit > -0.1 ? COL.SLATE : COL.WATER + 3);
+      }
     }
   }
 }
 
-// Water: flat colour bands with dithered seams, light shafts near the top, caustic network.
-function drawBackground(buf, t, tick) {
-  if (causticTick < 0 || tick - causticTick >= R.causticEvery) { updateCaustics(t); causticTick = tick; }
-  for (let u = 0; u < shaftTable.length; u++) {
-    const s = R.shaftA * Math.sin(u * R.shaftFreqA + t * R.shaftSpeedA)
-            + R.shaftB * Math.sin(u * R.shaftFreqB - t * R.shaftSpeedB + 1.3);
-    shaftTable[u] = s > 0 ? s * s * s : 0;
+// ---- Bloom tint: water greens where cell biomass is dense ----
+function updateBloom(w) {
+  const B = PARAMS.bloom;
+  if (w.tick !== chlTick) {
+    const steps = chlTick < 0 ? 1e6 : w.tick - chlTick;
+    chlTick = w.tick;
+    chlNow.fill(0);
+    for (const c of w.cells) if (!c.dying) addField(chlNow, c.x, c.y, c.biomass);
+    const k = 1 - Math.exp(-steps * TICK_DT / B.tau);
+    for (let i = 0; i < chl.length; i++) chl[i] += (chlNow[i] - chl[i]) * k;
   }
-  const shaftRows = Math.floor(H * R.shaftDepth), causticRows = causticMask.length / W, seamStart = 1 - R.seam;
-  for (let y = 0; y < H; y++) {
-    const row = y * W, base = waterRow[y];
-    const sd = y < shaftRows ? 1 - y / shaftRows : 0, sf = R.shaftStrength * sd * sd;
-    const cf = y < causticRows ? Math.pow(1 - y / causticRows, R.causticFade) : 0;   // sparse, breaking up with depth
-    for (let x = 0; x < W; x++) {
-      const v = sf > 0 ? base + shaftTable[(x + y * R.shaftSlope) | 0] * sf : base;
+  const z = cam.zoom;
+  for (let j = 0; j < TINT_H; j++) {
+    for (let i = 0; i < TINT_W; i++) {
+      const v = sampleField(chl, (view.bx0 + i * 4 + 2) / z, (view.by0 + j * 4 + 2) / z);
+      bloomTint[j * TINT_W + i] = clamp(v / B.full, 0, 1) * B.max;
+    }
+  }
+}
+
+const surfaceLine = new Float64Array(W), floorLine = new Float64Array(W);   // per screen column, per frame
+
+function drawBackground(t) {
+  const ib = view.ibuf, z = cam.zoom, invz = 1 / z, bx0 = view.bx0, by0 = view.by0;
+  const seamStart = 1 - R.seam, cw = R.causticWidth * invz, du = invz * R.shaftRes;
+  const wx0 = (bx0 + 0.5) * invz;
+  if ((by0 + 0.5) * invz < SURFACE_MAX) for (let px = 0; px < W; px++) surfaceLine[px] = surfaceY(wx0 + px * invz, t);
+  if ((by0 + H) * invz > FLOOR_MIN) for (let px = 0; px < W; px++) floorLine[px] = floorY(wx0 + px * invz);
+  for (let py = 0; py < H; py++) {
+    const by = by0 + py, wy = (by + 0.5) * invz, row = py * W, brow = (by & 3) << 2, brow2 = ((by + 1) & 3) << 2;
+    const base = waterBand(wy), sf = shaftFade(wy), u0 = (wx0 + wy * R.shaftSlope) * R.shaftRes;
+    const cf = wy < CAUSTIC_H ? Math.pow(1 - wy / CAUSTIC_H, R.causticFade) : 0;
+    const nearSurface = wy < SURFACE_MAX, nearFloor = wy > FLOOR_MIN, tintRow = (py >> 2) * TINT_W;
+    for (let px = 0; px < W; px++) {
+      const bx = bx0 + px, b = BAYER[brow | (bx & 3)];
+      if (nearSurface) {
+        const s = surfaceLine[px];
+        if (wy < s) { ib[row + px] = surfacePixel(wx0 + px * invz, wy, t, b); continue; }
+        if (wy < s + invz) { ib[row + px] = COL.FOAM; continue; }
+      }
+      if (nearFloor) {
+        const fy = floorLine[px];
+        if (wy >= fy) { ib[row + px] = sedimentPixel(wx0 + px * invz, wy, wy - fy, b); continue; }
+      }
+      const v = sf > 0 ? base + shaftTable[(u0 + px * du) | 0] * sf : base;
       let i = v | 0;
-      const frac = v - i, b = BAYER[((y & 3) << 2) | (x & 3)];
-      if (frac > seamStart && b < (frac - seamStart) / R.seam) i++;
-      if (cf > 0 && causticMask[row + x] && b < cf) i++;
-      buf[row + x] = PAL32[i > COL.SHAFT ? COL.SHAFT : i];
-    }
-  }
-  // Surface film with broken horizontal streaks
-  for (let y = 0; y < R.surfaceRows; y++) {
-    const dir = y & 1 ? 1 : -0.7;
-    for (let x = 0; x < W; x++) {
-      if (y === 0) { buf[x] = PAL32[COL.SHAFT]; continue; }
-      const s = Math.sin(x * R.streakFreq + y * 2.1 + t * R.streakSpeed * dir) + Math.sin(x * 0.047 - t * 0.09 + y * 1.3);
-      if (s > R.foamThreshold) buf[y * W + x] = PAL32[COL.FOAM];
-      else if (s > R.streakThreshold) buf[y * W + x] = PAL32[COL.SHAFT];
+      const frac = v - i;
+      if (frac > seamStart && b < (frac - seamStart) / R.seam) i++;      // flat bands, dithered seams
+      if (cf > 0 && b < cf && causticAt(wx0 + px * invz, wy) < cw) i++;
+      if (i > COL.SHAFT) i = COL.SHAFT;
+      if (i >= COL.BLOOM_FROM && i <= COL.BLOOM_TO) {
+        const tint = bloomTint[tintRow + (px >> 2)];
+        if (tint > 0 && BAYER[brow2 | ((bx + 2) & 3)] < tint) i = COL.BLOOM + i - COL.BLOOM_FROM;
+      }
+      ib[row + px] = i;
     }
   }
 }
 
-function drawSnow(buf, t) {
-  for (let i = 0; i < R.snowCount; i++) {
-    const speed = R.snowSpeedMin + hash01(i * 3 + 13) * (R.snowSpeedMax - R.snowSpeedMin);
-    const y = Math.floor((hash01(i * 3 + 12) * H + t * speed) % H);
-    const x = Math.floor((hash01(i * 3 + 11) * W + Math.sin(t * 0.2 + i) * R.snowSway + W) % W);
-    if (y < R.surfaceRows) continue;
-    buf[y * W + x] = PAL32[Math.min(COL.SHAFT, Math.floor(waterRow[y]) + R.snowLift)];
+// ---- Particles in three depth layers (far specks, marine snow, near out-of-focus flocs) ----
+function drawParticles(L, seed, t, near) {
+  const zp = Math.pow(cam.zoom, L.zoomExp);
+  const ccx = cam.x + W / (2 * cam.zoom), ccy = cam.y + H / (2 * cam.zoom);
+  const size = near ? Math.max(2, Math.round(L.size * Math.sqrt(zp))) : 1;
+  for (let i = 0; i < L.count; i++) {
+    const h = seed + i * 5;
+    const speed = L.speedMin + hash01(h + 3) * (L.speedMax - L.speedMin);
+    const lx = hash01(h + 1) * W + Math.sin(t * 0.2 + i) * L.sway, ly = hash01(h + 2) * H + t * speed;
+    const sx = Math.floor(mod((lx - ccx * L.parallax) * zp + W / 2, W * zp));
+    const sy = Math.floor(mod((ly - ccy * L.parallax) * zp + H / 2, H * zp));
+    if (sx >= W || sy >= H) continue;
+    if (near) {
+      for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) if (wb(sx + x, sy + y) < 0.5) lift(sx + x, sy + y);
+    } else {
+      const wy = worldY(sy);
+      if (wy < SURFACE_MAX || wy > FLOOR_MIN) continue;
+      put(sx, sy, Math.min(COL.SHAFT, Math.floor(waterBand(wy)) + L.lift));
+    }
   }
 }
 
-// ---- Cell sprites ----
+// ---- Cells ----
 // Morphology follows the genome continuously: size -> cell size and chloroplast count,
 // timbre -> round coccoid .. glassy box-like frustule, coupling -> setae reaching for neighbours.
 // The lineage seed fixes elongation and chloroplast layout, so relatives look alike.
-function buildSprite(c) {
-  const S = PARAMS.sprite, g = c.g, r = c.r;
+// Sprites are rebuilt per zoom level and per 1/32 turn of tumbling.
+function buildSprite(c, rpx, angle, z, key) {
+  const S = PARAMS.sprite, g = c.g;
   const lin = makeRng(c.spriteSeed);
   const own = makeRng(hash32(c.id * 31 + c.gen));
   const aspect = lin.range(S.aspectMin, S.aspectMax);
-  const a = r * Math.sqrt(aspect), b = r / Math.sqrt(aspect);
-  const angle = lin.next() * Math.PI + own.range(-S.tilt, S.tilt);
+  const a = rpx * Math.sqrt(aspect), b = rpx / Math.sqrt(aspect);
   const ca = Math.cos(angle), sa = Math.sin(angle);
   const p = 2 + g.timbre * S.squareness;
   const shape = (u, v, sw) => Math.pow(Math.pow(Math.abs(u / (a * sw)), p) + Math.pow(Math.abs(v / (b * sw)), p), 1 / p);
 
-  // Setae: corner spines on box-like cells, radial spines on round ones
+  // Setae (only once big enough on screen): polar spines on elongated cells,
+  // corner spines on squat box-like cells, radial spines on round ones
   const sk = clamp((g.coupling - S.setaeFrom) / (1 - S.setaeFrom), 0, 1);
-  const setaeLen = r >= S.setaeMinR ? sk * S.setaeLen * r : 0;
+  const setaeLen = rpx >= S.setaeMinR ? sk * S.setaeLen * rpx : 0;
   const setae = [];
   if (setaeLen >= S.setaeMin) {
-    if (p >= S.cornerSetaeP) {
+    if (aspect >= S.polarAspect) {
+      for (const su of [1, -1]) setae.push({ du: su, dv: 0, bend: lin.range(-1, 1) * S.setaeBend });
+    } else if (p >= S.cornerSetaeP) {
       for (const [su, sv] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) setae.push({ du: su * a, dv: sv * b, bend: lin.range(-1, 1) * S.setaeBend });
     } else {
       const n = 2 + lin.int(4), off = lin.next() * TAU;
@@ -729,7 +953,7 @@ function buildSprite(c) {
     for (const s of setae) {
       const len = Math.sqrt(s.du * s.du + s.dv * s.dv);
       s.du /= len; s.dv /= len;
-      s.start = 1 / shape(s.du, s.dv, 1);   // distance from centre to the body edge along this ray
+      s.start = 1 / shape(s.du, s.dv, 1);
     }
   }
 
@@ -740,39 +964,40 @@ function buildSprite(c) {
     const ang = lin.next() * TAU, rad = nPl === 1 ? S.cupOffset : lin.range(0.15, 0.55);
     plastids.push({
       u: Math.cos(ang) * rad * a, v: Math.sin(ang) * rad * b,
-      r: Math.max(S.plastidMinR, (nPl === 1 ? S.cupR : S.plastidR) * r * own.range(0.85, 1.15)),
+      r: Math.max(S.plastidMinR, (nPl === 1 ? S.cupR : S.plastidR) * rpx * own.range(0.85, 1.15)),
       ph: lin.next() * TAU,
     });
   }
 
-  const ext = Math.max(a, b) * (1 + S.breathe) + setaeLen + 2;
-  const half = Math.ceil(ext), size = half * 2 + 1;
+  const bodyExt = Math.max(a, b) * (1 + S.breathe);
+  const half = Math.ceil(bodyExt + setaeLen) + 2, size = half * 2 + 1;
+  const lo = Math.max(0, half - Math.ceil(bodyExt) - 1), hi = Math.min(size - 1, half + Math.ceil(bodyExt) + 1);
   const frames = [];
   for (let f = 0; f < S.frames; f++) {
     const ph = TAU * f / S.frames, sw = 1 + S.breathe * Math.sin(ph);
     const tones = new Int8Array(size * size).fill(-1);
     const inside = new Uint8Array(size * size);
     const uAt = new Float32Array(size * size);
-    for (let py = 0; py < size; py++) {
-      for (let px = 0; px < size; px++) {
+    for (let py = lo; py <= hi; py++) {
+      for (let px = lo; px <= hi; px++) {
         const dx = px - half, dy = py - half;
         const u = dx * ca + dy * sa, v = -dx * sa + dy * ca;
         if (shape(u, v, sw) <= 1) { inside[py * size + px] = 1; uAt[py * size + px] = u; }
       }
     }
     const pl = plastids.map((P) => {
-      const u = P.u + Math.sin(ph + P.ph) * S.stream, v = P.v + Math.cos(ph + P.ph) * S.stream;
+      const u = P.u + Math.sin(ph + P.ph) * S.stream * z, v = P.v + Math.cos(ph + P.ph) * S.stream * z;
       return { x: u * ca - v * sa, y: u * sa + v * ca, r: P.r };
     });
     const isIn = (px, py) => px >= 0 && py >= 0 && px < size && py < size && inside[py * size + px] === 1;
 
-    for (let py = 0; py < size; py++) {
-      for (let px = 0; px < size; px++) {
+    for (let py = lo; py <= hi; py++) {
+      for (let px = lo; px <= hi; px++) {
         const k = py * size + px;
         if (!inside[k]) continue;
         const dx = px - half, dy = py - half, dth = (bayer(px, py) - 0.5) * S.dither;
         // Translucent cytoplasm, darker toward the lower right
-        let tone = (-dx - dy) / (ext * 1.4142) + dth < S.cytoShade ? OUTLINE : SHADOW;
+        let tone = (-dx - dy) / (bodyExt * 1.4142) + dth < S.cytoShade ? OUTLINE : SHADOW;
         if (g.timbre > S.girdleFrom && Math.abs(uAt[k]) < 0.5) tone = BASE;   // girdle seam between valves
         for (let j = pl.length - 1; j >= 0; j--) {   // front-most chloroplast wins
           const P = pl[j], ex = dx - P.x, ey = dy - P.y, d = Math.sqrt(ex * ex + ey * ey) / P.r;
@@ -804,70 +1029,133 @@ function buildSprite(c) {
     }
     frames.push(tones);
   }
-  return { gen: c.gen, half, size, frames };
+  return { key, half, size, frames, a };
 }
 
-function spriteFor(c) {
-  if (!c.spr || c.spr.gen !== c.gen) c.spr = buildSprite(c);
-  return c.spr;
+// Rebuilds are rationed per frame; past the budget a cell keeps its previous sprite for a moment.
+function spriteFor(c, rpx, step) {
+  const key = (c.gen * ZOOMS.length + cam.level) * PARAMS.sprite.tumbleSteps + step;
+  const s = c.spr;
+  if (s && (s.key === key || performance.now() > buildDeadline)) return s;
+  return (c.spr = buildSprite(c, rpx, step * TAU / PARAMS.sprite.tumbleSteps, cam.zoom, key));
 }
 
-function drawCell(buf, c, tick) {
-  const S = PARAMS.sprite, spr = spriteFor(c);
-  const frame = (Math.floor(tick * S.wobbleFps / PARAMS.time.tickRate) + c.id) % S.frames;
-  const tones = spr.frames[frame], size = spr.size;
-  const x0 = Math.round(c.x) - spr.half, y0 = Math.round(c.y) - spr.half;
+// Slow tumbling: each cell turns at its own pace with a gentle sway
+function tumbleAngle(c, t) {
+  const S = PARAMS.sprite, h1 = hash01(c.id * 13 + 5), h2 = hash01(c.id * 13 + 6);
+  return h1 * TAU + (h2 * 2 - 1) * S.maxSpin * t + S.sway * Math.sin(t * S.swaySpeed + h1 * TAU);
+}
+
+// Soft (non-frustule) cells carry flagella that beat with the cell's own phase theta
+function drawFlagella(c, cx, cy, angle, rpx, spr, base) {
+  const F = PARAMS.flagella;
+  if (c.g.timbre > F.maxTimbre || rpx < F.minR) return;
+  const n = c.g.size > F.pairSize ? 2 : 1, len = rpx * F.length, amp = rpx * F.amp, phase = c.theta * F.beat;
+  const back = angle + Math.PI, ox = cx + Math.cos(back) * spr.a * 0.9, oy = cy + Math.sin(back) * spr.a * 0.9;
+  for (let k = 0; k < n; k++) {
+    const dir = back + (n === 2 ? (k ? F.spread : -F.spread) : 0), dx = Math.cos(dir), dy = Math.sin(dir);
+    for (let s = 0; s <= len; s += 0.5) {
+      const f = s / len, side = amp * f * Math.sin(f * TAU * F.waves - phase);
+      const x = Math.round(ox + dx * s - dy * side), y = Math.round(oy + dy * s + dx * side);
+      if (x < 0 || y < 0 || x >= W || y >= H) continue;
+      if (f > 0.6 && wb(x, y) < (f - 0.6) * 2.5) continue;
+      view.ibuf[y * W + x] = base + (f < 0.4 ? BASE : SHADOW);
+    }
+  }
+}
+
+// Fixed templates for cells too small on screen to show a form
+const speckSprite = (half, size, tones) => ({ key: -1, half, size, frames: [tones, tones, tones], a: size / 2 });
+const DOT = speckSprite(0, 1, Int8Array.of(BASE));
+const SPECK = speckSprite(0, 2, Int8Array.of(HIGHLIGHT, BASE, BASE, SHADOW));
+
+function drawCell(c, tick, t) {
+  const S = PARAMS.sprite, z = cam.zoom, rpx = c.r * z;
+  const cx = toSX(c.x), cy = toSY(c.y), reach = rpx * (2 + S.setaeLen) + 4;
+  if (cx < -reach || cy < -reach || cx > W + reach || cy > H + reach) return;
+  const steps = S.tumbleSteps, angle = tumbleAngle(c, t);
+  const step = mod(Math.round(angle / TAU * steps), steps);
+  const spr = rpx < S.dotR ? DOT : rpx < S.speckR ? SPECK : spriteFor(c, rpx, step);
   const base = rampBase(hueRamp(c.g));
+  if (!c.dying && spr.key >= 0) drawFlagella(c, cx, cy, step * TAU / steps, rpx, spr, base);
+
+  const frame = (Math.floor(tick * S.wobbleFps / PARAMS.time.tickRate) + c.id) % S.frames;
+  const tones = spr.frames[frame], size = spr.size, x0 = cx - spr.half, y0 = cy - spr.half;
   const glow = !c.dying && tick - c.flashTick < PARAMS.flash.glowTicks ? 1 : 0;
   const fade = c.dying ? c.dying / PARAMS.death.fadeTicks : 0;
   const depth = c.y / H, dark = depth > R.deepFrom ? (depth - R.deepFrom) / (1 - R.deepFrom) * R.deepDarken : 0;
+  const ib = view.ibuf, bx0 = view.bx0, by0 = view.by0, cw = 2 * R.causticWidth / z;
   for (let py = 0; py < size; py++) {
     const sy = y0 + py;
     if (sy < 0 || sy >= H) continue;
+    const by = by0 + sy, wy = (by + 0.5) / z;
+    const sl = shaftFade(wy) * R.cellLight;
+    const cl = wy < CAUSTIC_H ? Math.pow(1 - wy / CAUSTIC_H, R.causticFade) * R.cellCaustic : 0;
     for (let px = 0; px < size; px++) {
+      const t0 = tones[py * size + px];
+      if (t0 < 0) continue;
       const sx = x0 + px;
       if (sx < 0 || sx >= W) continue;
-      const t = tones[py * size + px];
-      if (t < 0) continue;
-      if (fade > 0 && bayer(sx, sy) < fade) continue;     // death: dissolve
-      let tt = t + glow;
-      if (dark > 0 && tt > 0 && bayer(sx + 1, sy + 2) < dark) tt--;   // deep water mutes colour
-      buf[sy * W + sx] = PAL32[tt >= COL.TONES ? COL.GLOW : base + tt];
+      const bx = bx0 + sx, b = BAYER[((by & 3) << 2) | (bx & 3)];
+      if (fade > 0 && b < fade) continue;                                       // death: dissolve
+      let tt = t0 + glow;
+      if (dark > 0 && tt > 0 && BAYER[(((by + 2) & 3) << 2) | ((bx + 1) & 3)] < dark) tt--;   // deep water mutes colour
+      let idx = tt >= COL.TONES ? COL.GLOW : base + tt;
+      if (sl > 0 || cl > 0) {                                                    // light shafts and caustics play over the cell
+        const wx = (bx + 0.5) / z;
+        let lit = sl > 0 ? shaftAt(wx, wy) * sl : 0;
+        if (cl > 0 && causticAt(wx, wy) < cw) lit += cl;
+        if (BAYER[(((by + 3) & 3) << 2) | ((bx + 1) & 3)] < lit) idx = LIGHT_UP[idx];
+      }
+      ib[sy * W + sx] = idx;
     }
   }
 }
 
 const drawOrder = [];
-function drawCells(buf, w) {
+function drawCells(w, t) {
   drawOrder.length = 0;
   for (let i = 0; i < w.cells.length; i++) drawOrder.push(w.cells[i]);
   drawOrder.sort((p, q) => q.r - p.r || p.id - q.id);
-  for (let i = 0; i < drawOrder.length; i++) drawCell(buf, drawOrder[i], w.tick);
+  for (let i = 0; i < drawOrder.length; i++) drawCell(drawOrder[i], w.tick, t);
 }
 
-// Bioluminescent flash: partial pixel arcs spreading and breaking up
-function drawRings(buf, w) {
-  const F = PARAMS.flash;
+// Bioluminescence: the flash spills light into the water and onto neighbours, plus broken arcs on large cells
+function drawFlashes(w) {
+  const F = PARAMS.flash, z = cam.zoom;
   for (const c of w.cells) {
     if (c.dying) continue;
     const age = w.tick - c.flashTick;
-    if (age < 0 || age >= F.ringTicks) continue;
-    const k = age / F.ringTicks, rad = c.r + F.ringStart + age * F.ringGrow;
+    if (age < 0 || age >= F.haloTicks) continue;
+    const cx = toSX(c.x), cy = toSY(c.y), rpx = c.r * z;
+    const rh = clamp(rpx * F.haloRadius, F.haloMinPx, F.haloMaxPx), strength = F.haloStrength * (1 - age / F.haloTicks);
+    const y0 = Math.max(0, Math.floor(cy - rh)), y1 = Math.min(H - 1, Math.ceil(cy + rh));
+    const x0 = Math.max(0, Math.floor(cx - rh)), x1 = Math.min(W - 1, Math.ceil(cx + rh));
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const b = wb(x, y);
+        if (b >= strength) continue;                      // can't pass anywhere in the halo
+        const dx = x - cx, dy = y - cy, d = Math.sqrt(dx * dx + dy * dy);
+        if (d <= rh && b < strength * (1 - d / rh)) { const k = y * W + x; view.ibuf[k] = LIGHT_UP[view.ibuf[k]]; }
+      }
+    }
+    if (rpx < F.ringMinR || age >= F.ringTicks) continue;
+    const k = age / F.ringTicks, rad = rpx + F.ringStart + age * F.ringGrow * z;
+    if (cx < -rad || cy < -rad || cx > W + rad || cy > H + rad) continue;
     const idx = rampBase(hueRamp(c.g)) + (k < 0.5 ? BRIGHT : HIGHLIGHT);
     const steps = Math.ceil(TAU * rad * 1.5), seed = c.id * 1.7;
     for (let s = 0; s < steps; s++) {
       const ang = s / steps * TAU;
       if (Math.sin(ang * F.arcs + seed) < F.arcGap) continue;
-      const x = Math.round(c.x + Math.cos(ang) * rad), y = Math.round(c.y + Math.sin(ang) * rad);
-      if (x < 0 || x >= W || y < 0 || y >= H || bayer(x, y) < k) continue;
-      buf[y * W + x] = PAL32[idx];
+      const x = Math.round(cx + Math.cos(ang) * rad), y = Math.round(cy + Math.sin(ang) * rad);
+      if (wb(x, y) >= k) put(x, y, idx);
     }
   }
 }
 
 // Dotted thread from a young daughter to her living sister-mother, thinning with age
 const byId = new Map();
-function drawThreads(buf, w) {
+function drawThreads(w) {
   const T = PARAMS.thread;
   byId.clear();
   for (const c of w.cells) if (!c.dying) byId.set(c.id, c);
@@ -875,25 +1163,38 @@ function drawThreads(buf, w) {
     if (c.dying || c.parentId === null || c.age > T.maxAge) continue;
     const p = byId.get(c.parentId);
     if (!p) continue;
-    const dx = p.x - c.x, dy = p.y - c.y, len = Math.sqrt(dx * dx + dy * dy);
+    const ax = toSX(c.x), ay = toSY(c.y), dx = toSX(p.x) - ax, dy = toSY(p.y) - ay;
+    const len = Math.sqrt(dx * dx + dy * dy);
     if (len < 1) continue;
     const fade = c.age / T.maxAge, idx = rampBase(hueRamp(c.g)) + BASE;
     for (let s = 0; s <= len; s += T.dotSpacing) {
-      const x = Math.round(c.x + dx * s / len), y = Math.round(c.y + dy * s / len);
-      if (x < 0 || x >= W || y < 0 || y >= H || bayer(x, y) < fade) continue;
-      buf[y * W + x] = PAL32[idx];
+      const x = Math.round(ax + dx * s / len), y = Math.round(ay + dy * s / len);
+      if (wb(x, y) >= fade) put(x, y, idx);
     }
   }
 }
 
-function drawCysts(buf, w) {
+// Resting cysts on the sediment: a lit dot when small, a spiny dinocyst when zoomed in
+function drawCysts(w) {
+  const C = PARAMS.cystLook, rpx = C.r * cam.zoom, ri = Math.ceil(rpx) + 1;
   for (const q of w.cysts) {
-    const x = Math.round(q.x), y = Math.round(q.y), base = rampBase(hueRamp(q.g));
-    put(buf, x, y - 1, base + HIGHLIGHT);
-    put(buf, x - 1, y, base + BASE);
-    put(buf, x, y, base + SHADOW);
-    put(buf, x + 1, y, base + OUTLINE);
-    put(buf, x, y + 1, base + OUTLINE);
+    const cx = toSX(q.x), cy = toSY(q.y), base = rampBase(hueRamp(q.g));
+    if (rpx < 1.5) {
+      put(cx, cy - 1, base + HIGHLIGHT); put(cx - 1, cy, base + BASE); put(cx, cy, base + SHADOW);
+      put(cx + 1, cy, base + OUTLINE); put(cx, cy + 1, base + OUTLINE);
+      continue;
+    }
+    for (let dy = -ri; dy <= ri; dy++) {
+      for (let dx = -ri; dx <= ri; dx++) {
+        const d = Math.sqrt(dx * dx + dy * dy) / rpx;
+        if (d <= 1) {
+          const lit = (-dx - dy) / (rpx * 1.4142);
+          put(cx + dx, cy + dy, base + (lit > 0.35 ? HIGHLIGHT : lit > -0.3 ? BASE : d > 0.7 ? OUTLINE : SHADOW));
+        } else if (rpx >= C.spikesFromPx && d <= 1 + 1.2 / rpx && mod(Math.round(Math.atan2(dy, dx) / TAU * 12), 2) === 0) {
+          put(cx + dx, cy + dy, base + SHADOW);
+        }
+      }
+    }
   }
 }
 
@@ -910,7 +1211,7 @@ const FONT = {
   ' ': [0, 0, 0, 0, 0],
 };
 
-function drawGlyphs(buf, x, y, text, idx, vis, dx) {
+function drawGlyphs(x, y, text, idx, vis, dx) {
   for (let n = 0; n < text.length; n++) {
     const glyph = FONT[text[n]] || FONT[' '];
     for (let row = 0; row < 5; row++) {
@@ -918,15 +1219,15 @@ function drawGlyphs(buf, x, y, text, idx, vis, dx) {
         if (!(glyph[row] & (4 >> col))) continue;
         const px = x + n * 4 + col, py = y + row;
         if (vis < 1 && bayer(px, py) >= vis) continue;
-        put(buf, px + dx, py + dx, idx);
+        put(px + dx, py + dx, idx);
       }
     }
   }
 }
 
-function drawText(buf, x, y, text, idx, vis) {
-  drawGlyphs(buf, x, y, text, COL.WATER, vis, 1);   // 1-px drop shadow
-  drawGlyphs(buf, x, y, text, idx, vis, 0);
+function drawText(x, y, text, idx, vis) {
+  drawGlyphs(x, y, text, COL.WATER, vis, 1);   // 1-px drop shadow
+  drawGlyphs(x, y, text, idx, vis, 0);
 }
 
 const pad = (n, len) => String(n).padStart(len, '0');
@@ -936,42 +1237,116 @@ function clock(seconds) {
 }
 
 // Microscope readout, bottom left; dissolves after inactivity
-function drawHud(buf, w, now) {
+function drawHud(w, now) {
   const Hd = PARAMS.hud;
   const vis = debug.on ? 1 : clamp(1 - (now - input.lastActivity - Hd.visibleMs) / Hd.fadeMs, 0, 1);
   if (vis <= 0) return;
-  drawText(buf, Hd.x, Hd.y, 'SEED ' + seedLabel, COL.FOAM, vis);
-  drawText(buf, Hd.x, Hd.y + Hd.line, 'T ' + clock(w.tick * TICK_DT), COL.FOAM, vis);
-  drawText(buf, Hd.x, Hd.y + Hd.line * 2, 'POP ' + pad(aliveCount(w), 3), rampBase(1) + HIGHLIGHT, vis);
+  drawText(Hd.x, Hd.y, 'SEED ' + seedLabel, COL.FOAM, vis);
+  drawText(Hd.x, Hd.y + Hd.line, 'T ' + clock(w.tick * TICK_DT), COL.FOAM, vis);
+  drawText(Hd.x, Hd.y + Hd.line * 2, 'POP ' + pad(aliveCount(w), 3), rampBase(1) + HIGHLIGHT, vis);
+  drawText(Hd.x, Hd.y + Hd.line * 3, 'MAG ' + cam.zoom + 'X', COL.FOAM, vis);
 }
 
-// Returns the time spent on the debug overlay, so frame timing can leave it out.
-function render(w, now) {
-  const buf = view.buf, t = w.tick * TICK_DT;
-  drawBackground(buf, t, w.tick);
-  drawSnow(buf, t);
-  drawCysts(buf, w);
-  drawThreads(buf, w);
-  drawCells(buf, w);
-  drawRings(buf, w);
-  drawHud(buf, w, now);
+// All pixel work for one frame. Returns the time spent on the debug overlay, so frame timing can leave it out.
+function composeFrame(w, now) {
+  const t = w.tick * TICK_DT, P = PARAMS.particles;
+  view.bx0 = clamp(Math.round(cam.x * cam.zoom), 0, Math.round(W * cam.zoom) - W);
+  view.by0 = clamp(Math.round(cam.y * cam.zoom), 0, Math.round(H * cam.zoom) - H);
+  buildDeadline = performance.now() + PARAMS.sprite.buildBudgetMs;
+  updateShafts(t);
+  updateCaustics(t, w.tick);
+  updateBloom(w);
+  drawBackground(t);
+  drawParticles(P.far, 1000, t, false);
+  drawParticles(P.mid, 2000, t, false);
+  drawPebbles();
+  drawCysts(w);
+  drawThreads(w);
+  drawCells(w, t);
+  drawFlashes(w);
+  drawParticles(P.near, 3000, t, true);
+  drawHud(w, now);
   let overlayMs = 0;
-  if (debug.on) { const t0 = performance.now(); drawDebug(buf, w); overlayMs = performance.now() - t0; }
+  if (debug.on) { const t0 = performance.now(); drawDebug(w); overlayMs = performance.now() - t0; }
+  const ib = view.ibuf, buf = view.buf;
+  for (let i = 0; i < ib.length; i++) buf[i] = PAL32[ib[i]];
+  return overlayMs;
+}
+
+function render(w, now) {
+  const overlayMs = composeFrame(w, now);
   view.offCtx.putImageData(view.img, 0, 0);
   view.ctx.drawImage(view.off, view.ox, view.oy, W * view.scale, H * view.scale);
   return overlayMs;
 }
 
 // ===== Input =====
-const input = { lastActivity: 0 };
+// One finger or mouse drag pans, two fingers pinch-zoom, the mouse wheel zooms at the cursor.
+const input = { lastActivity: 0, pointers: new Map(), pinch: null };
+
+function toInternal(e) {
+  const dpr = window.devicePixelRatio || 1;
+  return { x: (e.clientX * dpr - view.ox) / view.scale, y: (e.clientY * dpr - view.oy) / view.scale };
+}
+
+function startPinch() {
+  const [a, b] = [...input.pointers.values()];
+  const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+  input.pinch = {
+    d0: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), zoom0: cam.zoom,
+    wx: cam.x + mx / cam.zoom, wy: cam.y + my / cam.zoom,   // world point held under the fingers
+  };
+}
 
 function setupInput() {
+  const el = view.canvas;
   input.lastActivity = performance.now();
-  const wake = () => { input.lastActivity = performance.now(); };
-  for (const type of ['pointerdown', 'pointermove', 'wheel', 'touchstart']) window.addEventListener(type, wake, { passive: true });
+  const wake = () => { input.lastActivity = performance.now(); needsRender = true; };
+
+  el.addEventListener('pointerdown', (e) => {
+    wake();
+    el.setPointerCapture(e.pointerId);
+    input.pointers.set(e.pointerId, toInternal(e));
+    if (input.pointers.size === 2) startPinch();
+  });
+  el.addEventListener('pointermove', (e) => {
+    wake();
+    const prev = input.pointers.get(e.pointerId);
+    if (!prev) return;
+    const p = toInternal(e);
+    input.pointers.set(e.pointerId, p);
+    if (input.pinch && input.pointers.size >= 2) {
+      const [a, b] = [...input.pointers.values()];
+      const d = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      cam.level = nearestLevel(input.pinch.zoom0 * d / input.pinch.d0);
+      cam.zoom = ZOOMS[cam.level];
+      cam.x = input.pinch.wx - mx / cam.zoom;
+      cam.y = input.pinch.wy - my / cam.zoom;
+      clampCamera();
+    } else if (input.pointers.size === 1) {
+      panBy(p.x - prev.x, p.y - prev.y);
+    }
+  });
+  const release = (e) => {
+    input.pointers.delete(e.pointerId);
+    if (input.pointers.size < 2) input.pinch = null;
+  };
+  el.addEventListener('pointerup', release);
+  el.addEventListener('pointercancel', release);
+
+  el.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    wake();
+    const p = toInternal(e);
+    zoomAt(cam.level + (e.deltaY < 0 ? 1 : -1) * PARAMS.camera.wheelStep, p.x, p.y);
+  }, { passive: false });
+
   window.addEventListener('keydown', (e) => {
     wake();
-    if (e.key === 'd' || e.key === 'D') { debug.on = !debug.on; needsRender = true; }
+    if (e.key === 'd' || e.key === 'D') debug.on = !debug.on;
+    else if (e.key === '+' || e.key === '=') zoomAt(cam.level + 1, W / 2, H / 2);
+    else if (e.key === '-' || e.key === '_') zoomAt(cam.level - 1, W / 2, H / 2);
   });
   window.addEventListener('resize', () => { resize(); needsRender = true; });
   document.addEventListener('visibilitychange', () => { lastTime = 0; });
@@ -1008,8 +1383,9 @@ function recordFrame(ms) {
   debug.frameCount++;
 }
 
-// Mini-maps in the top-right corner: nutrients (green) with cells as dots, light (gold) beside it.
-function drawFieldMaps(buf, w) {
+// Mini-maps in the top-right corner: nutrients (green) with cells as dots, light (gold) beside it,
+// and the camera's view as a dotted frame.
+function drawFieldMaps(w) {
   const D = PARAMS.debug, { cols, rows } = PARAMS.grid, m = D.mapCell, green = rampBase(0), gold = rampBase(1);
   const node = (field, ramp, i, j, ox) => {
     const v = clamp(field[j * cols + i], 0, 1) * 4;
@@ -1018,7 +1394,7 @@ function drawFieldMaps(buf, w) {
         const px = ox + i * m + x, py = D.mapY + j * m + y;
         let k = v | 0;
         if (bayer(px, py) < v - k) k++;
-        put(buf, px, py, ramp + (k > BRIGHT ? BRIGHT : k));
+        put(px, py, ramp + (k > BRIGHT ? BRIGHT : k));
       }
     }
   };
@@ -1027,11 +1403,17 @@ function drawFieldMaps(buf, w) {
     node(w.fields.light, gold, 0, j, D.mapX + cols * m + 1);
   }
   for (const c of w.cells) {
-    if (!c.dying) put(buf, D.mapX + Math.floor(c.x / GRID_W * m), D.mapY + Math.floor(c.y / GRID_H * m), COL.FOAM);
+    if (!c.dying) put(D.mapX + Math.floor(c.x / GRID_W * m), D.mapY + Math.floor(c.y / GRID_H * m), COL.FOAM);
+  }
+  if (cam.zoom > 1) {
+    const x0 = D.mapX + Math.floor(cam.x / GRID_W * m), y0 = D.mapY + Math.floor(cam.y / GRID_H * m);
+    const x1 = x0 + Math.round(W / cam.zoom / GRID_W * m), y1 = y0 + Math.round(H / cam.zoom / GRID_H * m);
+    for (let x = x0; x <= x1; x += 2) { put(x, y0, COL.GLOW); put(x, y1, COL.GLOW); }
+    for (let y = y0; y <= y1; y += 2) { put(x0, y, COL.GLOW); put(x1, y, COL.GLOW); }
   }
 }
 
-function drawDebug(buf, w) {
+function drawDebug(w) {
   const D = PARAMS.debug, pop = aliveCount(w);
   let sx = 0, sy = 0;
   for (const c of w.cells) if (!c.dying) { sx += Math.cos(c.theta); sy += Math.sin(c.theta); }
@@ -1048,17 +1430,17 @@ function drawDebug(buf, w) {
     'DROP ' + debug.droppedTicks,
     'CK ' + ck,
   ];
-  for (let i = 0; i < lines.length; i++) drawText(buf, 3, 6 + i * 7, lines[i], COL.FOAM, 1);
-  drawFieldMaps(buf, w);
+  for (let i = 0; i < lines.length; i++) drawText(3, 6 + i * 7, lines[i], COL.FOAM, 1);
+  drawFieldMaps(w);
 
-  // Population (foam) and mean nutrient (gold) over the last ~10 minutes; slate line = cap
-  const gy = D.graphY, gh = D.graphH;
-  for (let y = gy; y < gy + gh; y++) for (let x = 0; x < W; x++) buf[y * W + x] = PAL32[COL.WATER];
-  for (let x = 0; x < W; x += 2) put(buf, x, gy, COL.SLATE);
+  // Population (foam) and mean nutrient (gold) over the last ~10 minutes; dotted slate line = cap
+  const gy = D.graphY, gh = D.graphH, ib = view.ibuf;
+  for (let y = gy; y < gy + gh; y++) for (let x = 0; x < W; x++) ib[y * W + x] = COL.WATER;
+  for (let x = 0; x < W; x += 2) put(x, gy, COL.SLATE);
   const hist = debug.history, x0 = W - hist.length;
   for (let i = 0; i < hist.length; i++) {
-    put(buf, x0 + i, gy + gh - 1 - Math.round(hist[i].pop / PARAMS.division.maxCells * (gh - 1)), COL.FOAM);
-    put(buf, x0 + i, gy + gh - 1 - Math.round(clamp(hist[i].nut, 0, 1) * (gh - 1)), rampBase(1) + HIGHLIGHT);
+    put(x0 + i, gy + gh - 1 - Math.round(hist[i].pop / PARAMS.division.maxCells * (gh - 1)), COL.FOAM);
+    put(x0 + i, gy + gh - 1 - Math.round(clamp(hist[i].nut, 0, 1) * (gh - 1)), rampBase(1) + HIGHLIGHT);
   }
 }
 
@@ -1079,7 +1461,7 @@ function frame(now) {
     ticks++;
   }
   if (acc >= TICK_DT) { debug.droppedTicks += Math.floor(acc / TICK_DT); acc = 0; }
-  // Everything visible is tied to simulation ticks, so frames between ticks would be identical.
+  // Everything visible is tied to simulation ticks or the camera, so other frames would be identical.
   if (ticks > 0 || needsRender) {
     const overlayMs = render(world, now);
     needsRender = false;
@@ -1094,7 +1476,8 @@ function hashString(s) {
   return h >>> 0;
 }
 
-// ?seed=  (number or word), ?debug, ?stress (start at the cell cap), ?ff=seconds (fast-forward)
+// ?seed= (number or word), ?debug, ?stress (start at the cell cap), ?ff=seconds (fast-forward),
+// ?zoom=1..4 with ?at=x,y (world point to centre on)
 function readOptions() {
   const q = new URLSearchParams(location.search);
   let label = (q.get('seed') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12), seed;
@@ -1105,7 +1488,11 @@ function readOptions() {
   } else {
     seed = /^\d+$/.test(label) ? Number(label) >>> 0 : hashString(label);
   }
-  return { seed, label, debug: q.has('debug'), stress: q.has('stress'), ff: Math.max(0, Number(q.get('ff')) || 0) };
+  const at = (q.get('at') || '').split(',').map(Number);
+  return {
+    seed, label, debug: q.has('debug'), stress: q.has('stress'), ff: Math.max(0, Number(q.get('ff')) || 0),
+    zoom: Number(q.get('zoom')) || 1, atX: at.length === 2 ? at[0] : W / 2, atY: at.length === 2 ? at[1] : H / 2,
+  };
 }
 
 function init() {
@@ -1116,6 +1503,11 @@ function init() {
   const ffTicks = Math.floor(opts.ff * PARAMS.time.tickRate);
   for (let i = 0; i < ffTicks; i++) { stepWorld(world); debugSample(world); }
   initRender(document.getElementById('screen'));
+  cam.level = nearestLevel(opts.zoom);
+  cam.zoom = ZOOMS[cam.level];
+  cam.x = opts.atX - W / (2 * cam.zoom);
+  cam.y = opts.atY - H / (2 * cam.zoom);
+  clampCamera();
   setupInput();
   requestAnimationFrame(frame);
 }

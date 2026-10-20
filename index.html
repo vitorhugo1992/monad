@@ -416,6 +416,16 @@ const PARAMS = {
   murk: { from: 0.8, full: 3 },         // bloom biomass summed down the upper column: rays fade in murky water
   hud: { x: 4, y: 290, line: 7, visibleMs: 6000, fadeMs: 2000, epitaphFade: 20, listenY: 200, listenVis: 1 },   // epitaph fades in over 20 simulated s; listen: the solid TAP TO LISTEN hint
   debug: { syncEvery: 15, sampleEvery: 100, historyLength: 180, frameSamples: 120, graphY: 172, graphH: 48, mapX: 126, mapY: 6, mapCell: 2 },
+  // Field notebook: the world's records behind one small glyph (top right, fades with the HUD). Observation only:
+  // a row every sampleEvery simulated s for the whole life (when maxSamples fill up, every other row is dropped and
+  // rows come half as often). spans: windows the graphs zoom between (s; 0 = the whole life). Rects in pixels.
+  // nightBelow: surface light drawn as night behind the graphs; seaStates: wind for breeze, windy, storm;
+  // noonHour: the clock reads solar time (noon halfway through the daylight).
+  notebook: {
+    sampleEvery: 5, maxSamples: 65536, spans: [600, 1800, 3600, 10800, 0], startSpan: 4,
+    page: { x: 6, y: 14, w: 168, h: 292 }, chart: { x: 20, w: 140 }, glyph: { x: 167, y: 4 }, bar: { x: 64, w: 84 },
+    dim: 0.55, swipe: 20, nightBelow: 0.15, seaStates: [0.15, 0.35, 0.6], noonHour: 12, dialR: 34,
+  },
 };
 
 // ===== RNG =====
@@ -3933,7 +3943,7 @@ const FONT = {
   P: [6, 5, 6, 4, 4], Q: [2, 5, 5, 7, 3], R: [6, 5, 6, 5, 5], S: [3, 4, 2, 1, 6], T: [7, 2, 2, 2, 2],
   U: [5, 5, 5, 5, 7], V: [5, 5, 5, 5, 2], W: [5, 5, 7, 7, 5], X: [5, 5, 2, 5, 5], Y: [5, 5, 2, 2, 2],
   Z: [7, 1, 2, 4, 7], '#': [5, 7, 5, 7, 5], ':': [0, 2, 0, 2, 0], '.': [0, 0, 0, 0, 2], '-': [0, 0, 7, 0, 0], '/': [1, 1, 2, 4, 4],
-  ' ': [0, 0, 0, 0, 0],
+  '<': [1, 2, 4, 2, 1], '>': [4, 2, 1, 2, 4], '%': [5, 1, 2, 4, 5], '+': [0, 2, 7, 2, 0], ' ': [0, 0, 0, 0, 0],
 };
 
 function drawGlyphs(x, y, text, idx, vis, dx) {
@@ -3961,6 +3971,8 @@ function clock(seconds) {
   return (h ? h + ':' : '') + pad(m, 2) + ':' + pad(s % 60, 2);
 }
 
+const hudVisibility = (now) => (debug.on ? 1 : clamp(1 - (now - input.lastActivity - PARAMS.hud.visibleMs) / PARAMS.hud.fadeMs, 0, 1));
+
 // Microscope readout, bottom left; dissolves after inactivity
 function drawHud(w, now) {
   const Hd = PARAMS.hud;
@@ -3971,7 +3983,7 @@ function drawHud(w, now) {
     drawText(Hd.x, Hd.y + Hd.line * 2, 'EXTINCT', rampBase(ROSE) + HIGHLIGHT, vis);
     return;
   }
-  const vis = debug.on ? 1 : clamp(1 - (now - input.lastActivity - Hd.visibleMs) / Hd.fadeMs, 0, 1);
+  const vis = hudVisibility(now);
   if (vis <= 0) return;
   drawText(Hd.x, Hd.y, 'SEED ' + seedLabel, COL.FOAM, vis);
   drawText(Hd.x, Hd.y + Hd.line, 'T ' + clock(w.tick * TICK_DT), COL.FOAM, vis);
@@ -4026,7 +4038,10 @@ function composeFrame(w, now) {
   drawListenHint();
   let overlayMs = 0;
   if (debug.on) { const t0 = performance.now(); drawDebug(w); overlayMs = performance.now() - t0; }
+  drawNotebookGlyph(now);
+  if (notebook.open) drawNotebook(w);
   blitTimeOfDay(w);
+  if (notebook.open) inkNotebook();
   return overlayMs;
 }
 
@@ -4035,6 +4050,574 @@ function render(w, now) {
   view.offCtx.putImageData(view.img, 0, 0);
   view.ctx.drawImage(view.off, view.ox, view.oy, W * view.scale, H * view.scale);
   return overlayMs;
+}
+
+// ===== Notebook =====
+// The field notebook: the world's records behind one small glyph. It only watches: every sampleEvery simulated
+// seconds it writes one row (the forms counted as the sprite and the voice split them, their mean depth and spread,
+// light, wind, nutrients, grazers, deaths so far) and it never writes to the world, so a seed still grows the same.
+// Four pages: the day, the census, migration, the ledger. The graphs share one time window, from the last
+// minutes to the whole life.
+
+// The seven forms as drawn. Icons are 7x7 masks in the form's ramp: h bright, b highlight, o base.
+const FORMS = [
+  { name: 'FLAGELLATE', ramp: GREEN, icon: ['......o', '.....o.', '..bbo..', '.bhhbb.', '.bhbbb.', '.bbbbb.', '..bbb..'] },
+  { name: 'ALEXANDRIUM', ramp: GOLD, icon: ['..bbb..', '.bhhbb.', 'bhbbbbb', 'ooooooo', 'bbbbbbb', '.bbbbb.', '..bbb..'] },
+  { name: 'DINOPHYSIS', ramp: ROSE, icon: ['.o...o.', '..ooo..', '..bhb..', '.bhbbbo', '.bbbbo.', '..bbbo.', '...b...'] },
+  { name: 'TRIPOS', ramp: VIOLET, icon: ['o.....o', '.o...o.', '..bhb..', '..bbb..', '...b...', '...b...', '...o...'] },
+  { name: 'PROROCENTRUM', ramp: EMERALD, icon: ['...o...', '..bbb..', '.bhbbb.', '.bhbbb.', '.bbbbb.', '.bbbbb.', '..bbb..'] },
+  { name: 'CENTRIC DIATOM', ramp: LIGHTBLUE, icon: ['..ooo..', '.ohhbo.', 'ohbobbo', 'obooobo', 'obbobbo', '.obbbo.', '..ooo..'] },
+  { name: 'PENNATE DIATOM', ramp: BLUE, icon: ['......o', '....bbo', '...bhb.', '..bhb..', '.bhb...', 'obb....', 'o......'] },
+];
+const CAUSES = [
+  { key: 'starved', name: 'STARVED', ramp: GOLD }, { key: 'old', name: 'OLD AGE', ramp: VIOLET },
+  { key: 'grazed', name: 'GRAZED', ramp: ROSE }, { key: 'sardines', name: 'SARDINES', ramp: LIGHTBLUE },
+  { key: 'salps', name: 'SALPS', ramp: EMERALD },
+];
+const VISITOR_INK = [
+  { kind: 'sardines', name: 'SARDINES', ramp: LIGHTBLUE }, { kind: 'salps', name: 'SALPS', ramp: VIOLET },
+  { kind: 'sunfish', name: 'SUNFISH', ramp: GOLD },
+];
+const PAGES = ['THE DAY', 'CENSUS', 'MIGRATION', 'LEDGER'];
+const SEA_STATES = ['CALM', 'BREEZE', 'WINDY', 'STORM'];
+const GLYPH = ['.##...##.', '#..#.#..#', '#.#.#.#.#', '#...#...#', '#.#.#.#.#', '.###.###.'];
+const PAGE_INK = 1;   // the page: one step above the darkest water
+
+// One row of the record: offsets into the flat Float32Array (N, DEPTH and SD hold one value per form)
+const NB = { TICK: 0, LIGHT: 1, WIND: 2, NUT: 3, GRAZ: 4, POP: 5, CYSTS: 6, CHAINED: 7, GLOW: 8, N: 9, DEPTH: 16, SD: 23, DEATHS: 30, STRIDE: 35 };
+
+const notebook = {
+  open: false, page: 0, span: PARAMS.notebook.startSpan, solo: -1, hits: [],
+  rows: new Float32Array(4096 * NB.STRIDE), count: 0, every: PARAMS.notebook.sampleEvery * PARAMS.time.tickRate, next: 0,
+  visits: [], seenVisitor: 1, cols: null, colsKey: '',
+};
+
+// The form a cell is drawn as: soft flagellate, one of the four dinoflagellates, centric or pennate diatom
+function formOf(c) {
+  const Dn = PARAMS.dino, tb = c.g.timbre;
+  if (dinoWeight(tb) > 0.5) return 1 + Dn.forms.indexOf(lineageDinoForm(c.spriteSeed));
+  if (tb < Dn.full) return 0;
+  return lineagePennate(c.spriteSeed) ? 6 : 5;
+}
+
+// Called after every tick: visitors are logged as they arrive, the rest every sampleEvery s
+function notebookSample(w) {
+  const nb = notebook, S = NB.STRIDE, F = FORMS.length;
+  if (w.nextVisitorId > nb.seenVisitor) {
+    for (const v of w.visitors) if (v.id >= nb.seenVisitor) nb.visits.push({ tick: w.tick, kind: v.kind });
+    nb.seenVisitor = w.nextVisitorId;
+  }
+  if (w.tick < nb.next) return;
+  nb.next = w.tick + nb.every;
+  if ((nb.count + 1) * S > nb.rows.length) makeRoom();
+  const r = nb.rows, o = nb.count++ * S, column = H - PARAMS.world.floor, graz = w.fields.graz;
+  r.fill(0, o, o + S);
+  r[o + NB.TICK] = w.tick;
+  r[o + NB.LIGHT] = w.surfaceLight;
+  r[o + NB.WIND] = w.wind;
+  r[o + NB.NUT] = meanNutrient(w);
+  let z = 0;
+  for (let i = 0; i < graz.length; i++) z += graz[i];
+  r[o + NB.GRAZ] = z / graz.length;
+  r[o + NB.CYSTS] = w.cysts.length;
+  for (const c of w.cells) {
+    if (c.dying) continue;
+    const f = formOf(c), d = clamp(c.y / column, 0, 1);
+    r[o + NB.POP]++;
+    r[o + NB.N + f]++;
+    r[o + NB.DEPTH + f] += d;
+    r[o + NB.SD + f] += d * d;
+    if (c.chainLen > 1) r[o + NB.CHAINED]++;
+    if (isLuminous(c)) r[o + NB.GLOW]++;
+  }
+  for (let f = 0; f < F; f++) {
+    const n = r[o + NB.N + f];
+    if (!n) continue;
+    const m = r[o + NB.DEPTH + f] / n;
+    r[o + NB.DEPTH + f] = m;
+    r[o + NB.SD + f] = Math.sqrt(Math.max(0, r[o + NB.SD + f] / n - m * m));
+  }
+  CAUSES.forEach((k, i) => { r[o + NB.DEATHS + i] = w.deaths[k.key]; });
+}
+
+// More rows: grow up to maxSamples, then keep every other row and sample half as often, so the whole life still fits
+function makeRoom() {
+  const nb = notebook, S = NB.STRIDE;
+  if (nb.rows.length / S < PARAMS.notebook.maxSamples) {
+    const more = new Float32Array(nb.rows.length * 2);
+    more.set(nb.rows);
+    nb.rows = more;
+    return;
+  }
+  const half = Math.ceil(nb.count / 2);
+  for (let i = 1; i < half; i++) nb.rows.copyWithin(i * S, 2 * i * S, 2 * i * S + S);
+  nb.count = half;
+  nb.every *= 2;
+}
+
+const spanLabel = (s) => (!s ? 'ALL' : s >= 3600 ? s / 3600 + 'H' : s / 60 + 'M');
+
+// First row at or after tick t
+function rowAt(t) {
+  const r = notebook.rows, S = NB.STRIDE;
+  let lo = 0, hi = notebook.count;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (r[mid * S + NB.TICK] < t) lo = mid + 1; else hi = mid; }
+  return lo;
+}
+
+// The graphs' time window (the last span, or the whole life), one column per pixel: the mean of the rows in each
+// column; the forms' depths are weighted by their numbers. An empty column (window finer than the rows) holds the last.
+function notebookColumns() {
+  const nb = notebook, key = nb.span + ':' + nb.count;
+  if (nb.cols && nb.colsKey === key) return nb.cols;
+  const CW = PARAMS.notebook.chart.w, F = FORMS.length, S = NB.STRIDE, r = nb.rows, n = nb.count;
+  const t1 = n ? r[(n - 1) * S + NB.TICK] : 0, s = PARAMS.notebook.spans[nb.span] * PARAMS.time.tickRate;
+  const t0 = s && s < t1 ? t1 - s : 0;
+  const cols = {
+    t0, t1, first: rowAt(t0), has: new Uint8Array(CW), k: new Float32Array(CW),
+    light: new Float32Array(CW), nut: new Float32Array(CW), graz: new Float32Array(CW), pop: new Float32Array(CW),
+    n: new Float32Array(CW * F), depth: new Float32Array(CW * F), sd: new Float32Array(CW * F),
+  };
+  for (let i = cols.first; i < n; i++) {
+    const o = i * S, c = t1 > t0 ? Math.min(CW - 1, Math.floor((r[o + NB.TICK] - t0) / (t1 - t0) * CW)) : CW - 1;
+    cols.k[c]++;
+    cols.light[c] += r[o + NB.LIGHT]; cols.nut[c] += r[o + NB.NUT]; cols.graz[c] += r[o + NB.GRAZ]; cols.pop[c] += r[o + NB.POP];
+    for (let f = 0; f < F; f++) {
+      const m = r[o + NB.N + f], d = r[o + NB.DEPTH + f], sd = r[o + NB.SD + f];
+      cols.n[c * F + f] += m;
+      cols.depth[c * F + f] += m * d;
+      cols.sd[c * F + f] += m * (sd * sd + d * d);
+    }
+  }
+  const scalars = [cols.light, cols.nut, cols.graz, cols.pop], perForm = [cols.n, cols.depth, cols.sd];
+  for (let c = 0; c < CW; c++) {
+    const k = cols.k[c];
+    if (k) {
+      cols.has[c] = 1;
+      for (const a of scalars) a[c] /= k;
+      for (let f = 0; f < F; f++) {
+        const j = c * F + f, m = cols.n[j];
+        if (m) {
+          cols.depth[j] /= m;
+          cols.sd[j] = Math.sqrt(Math.max(0, cols.sd[j] / m - cols.depth[j] * cols.depth[j]));
+        }
+        cols.n[j] = m / k;
+      }
+    } else if (c && cols.has[c - 1]) {
+      cols.has[c] = 1;
+      for (const a of scalars) a[c] = a[c - 1];
+      for (const a of perForm) for (let f = 0; f < F; f++) a[c * F + f] = a[(c - 1) * F + f];
+    }
+  }
+  nb.cols = cols;
+  nb.colsKey = key;
+  return cols;
+}
+
+// ---- Opening, turning, zooming ----
+function openNotebook(on) {
+  notebook.open = on;
+  needsRender = true;
+}
+function turnPage(dir) {
+  notebook.page = (notebook.page + dir + PAGES.length) % PAGES.length;
+  needsRender = true;
+}
+function setSpan(i) {
+  notebook.span = clamp(i, 0, PARAMS.notebook.spans.length - 1);
+  needsRender = true;
+}
+function onGlyph(p) {
+  const G = PARAMS.notebook.glyph;
+  return p.x >= G.x - 4 && p.x < G.x + 13 && p.y >= G.y - 4 && p.y < G.y + 11;
+}
+function notebookKey(key) {
+  if (key === 'Escape') openNotebook(false);
+  else if (key === 'ArrowLeft') turnPage(-1);
+  else if (key === 'ArrowRight') turnPage(1);
+  else if (key === 'ArrowUp' || key === '+' || key === '=') setSpan(notebook.span - 1);
+  else if (key === 'ArrowDown' || key === '-' || key === '_') setSpan(notebook.span + 1);
+  else return false;
+  return true;
+}
+// A finger lifted over the open notebook: a sideways swipe turns the page, a tap outside the page (or on the glyph)
+// closes it, a tap on the page presses whatever is there
+function notebookRelease(d, p) {
+  const P = PARAMS.notebook.page, dx = p.x - d.x;
+  needsRender = true;
+  if (d.moved > PARAMS.touch.tapMove) {
+    if (Math.abs(dx) >= PARAMS.notebook.swipe && Math.abs(dx) > Math.abs(p.y - d.y)) turnPage(dx < 0 ? 1 : -1);
+    return;
+  }
+  if (onGlyph(p) || p.x < P.x || p.x >= P.x + P.w || p.y < P.y || p.y >= P.y + P.h) { openNotebook(false); return; }
+  for (const h of notebook.hits) {
+    if (p.x >= h.x && p.x < h.x + h.w && p.y >= h.y && p.y < h.y + h.h) { h.fn(); return; }
+  }
+}
+
+// ---- Ink ----
+const textWidth = (s) => s.length * 4 - 1;
+const ink = (x, y, text, idx) => drawGlyphs(x, y, text, idx, 1, 0);
+const inkRight = (xr, y, text, idx) => ink(xr - textWidth(text) + 1, y, text, idx);
+const inkCentre = (y, text, idx) => { const P = PARAMS.notebook.page; ink(P.x + Math.floor((P.w - textWidth(text)) / 2), y, text, idx); };
+const hit = (x, y, w, h, fn) => notebook.hits.push({ x, y, w, h, fn });
+
+function fillRect(x, y, w, h, idx) {
+  for (let j = y; j < y + h; j++) for (let i = x; i < x + w; i++) put(i, j, idx);
+}
+function dotted(x0, x1, y, idx) {
+  for (let x = x0; x <= x1; x += 2) put(x, y, idx);
+}
+// Twice the size: the clock on the day page
+function inkBig(x, y, text, idx) {
+  for (let n = 0; n < text.length; n++) {
+    const glyph = FONT[text[n]] || FONT[' '];
+    for (let row = 0; row < 5; row++) {
+      for (let col = 0; col < 3; col++) if (glyph[row] & (4 >> col)) fillRect(x + n * 8 + col * 2, y + row * 2, 2, 2, idx);
+    }
+  }
+}
+// A three-pixel bar in a ramp (lit top row) on a dotted slate track
+function bar(x, y, w, frac, ramp) {
+  const len = Math.round(clamp(frac, 0, 1) * w), rb = rampBase(ramp);
+  dotted(x, x + w - 1, y + 1, COL.SLATE);
+  for (let i = 0; i < len; i++) { put(x + i, y, rb + HIGHLIGHT); put(x + i, y + 1, rb + BASE); put(x + i, y + 2, rb + BASE); }
+}
+function drawIcon(x, y, f, faded) {
+  const rb = rampBase(FORMS[f].ramp), icon = FORMS[f].icon;
+  for (let j = 0; j < icon.length; j++) {
+    for (let i = 0; i < icon[j].length; i++) {
+      const ch = icon[j][i];
+      if (ch === '.') continue;
+      const t = ch === 'h' ? BRIGHT : ch === 'b' ? HIGHLIGHT : BASE;
+      put(x + i, y + j, rb + (faded ? t - 2 : t));
+    }
+  }
+}
+const niceCeil = (v) => [5, 10, 20, 50, 100, 150, 200, 300, 400, 500].find((s) => s >= v) || Math.ceil(v / 100) * 100;
+
+// The notebook glyph, top right: shows with the HUD, bright while the notebook is open
+function drawNotebookGlyph(now) {
+  const G = PARAMS.notebook.glyph, vis = notebook.open ? 1 : hudVisibility(now);
+  if (vis <= 0) return;
+  for (const dx of [1, 0]) {
+    for (let j = 0; j < GLYPH.length; j++) {
+      for (let i = 0; i < GLYPH[j].length; i++) {
+        const x = G.x + i, y = G.y + j;
+        if (GLYPH[j][i] !== '#' || (vis < 1 && bayer(x, y) >= vis)) continue;
+        put(x + dx, y + dx, dx ? COL.WATER : notebook.open ? COL.GLOW : COL.FOAM);
+      }
+    }
+  }
+}
+
+// Behind every time graph: day and night as the water saw them (night dark, full sun lighter)
+function chartBackground(cols, y0, h) {
+  const N = PARAMS.notebook, CX = N.chart.x;
+  for (let c = 0; c < N.chart.w; c++) {
+    const L = cols.light[c], day = smoothstep(N.nightBelow, 0.7, L);
+    for (let y = y0; y < y0 + h; y++) {
+      put(CX + c, y, !cols.has[c] ? PAGE_INK : L < N.nightBelow ? COL.WATER : bayer(CX + c, y) < day ? 3 : 2);
+    }
+  }
+  for (let y = y0; y < y0 + h; y++) put(CX - 1, y, COL.SLATE);
+}
+function drawTimeAxis(cols, y) {
+  const N = PARAMS.notebook, CX = N.chart.x, span = cols.t0 > 0;
+  ink(CX, y, span ? '-' + clock((cols.t1 - cols.t0) * TICK_DT) : 'BIRTH', COL.SLATE);
+  inkRight(CX + N.chart.w - 1, y, span ? 'NOW' : clock(cols.t1 * TICK_DT), COL.SLATE);
+}
+// A line over the window: value(c) gives a row (0 = top) or -1 where there is nothing to draw; gaps break it
+function chartLine(y0, valueAt, idx) {
+  const N = PARAMS.notebook;
+  let prev = -1;
+  for (let c = 0; c < N.chart.w; c++) {
+    const v = valueAt(c);
+    if (v < 0) { prev = -1; continue; }
+    const a = prev < 0 ? v : Math.min(prev, v), b = prev < 0 ? v : Math.max(prev, v);
+    for (let y = a; y <= b; y++) put(N.chart.x + c, y0 + y, idx);
+    prev = v;
+  }
+}
+// The time windows, centred on a row; spans longer than the life so far show the whole life (drawn faint)
+function drawSpanRow(y) {
+  const N = PARAMS.notebook, life = notebook.count ? notebook.rows[(notebook.count - 1) * NB.STRIDE + NB.TICK] * TICK_DT : 0;
+  const labels = N.spans.map(spanLabel), gap = 8;
+  let x = N.page.x + Math.floor((N.page.w - labels.reduce((s, l) => s + textWidth(l), 0) - gap * (labels.length - 1)) / 2);
+  labels.forEach((l, i) => {
+    const on = i === notebook.span, tw = textWidth(l);
+    ink(x, y, l, on ? COL.FOAM : N.spans[i] && N.spans[i] >= life ? COL.SLATE : COL.SHAFT);
+    if (on) for (let k = 0; k < tw; k++) put(x + k, y + 6, COL.FOAM);
+    hit(x - 3, y - 3, tw + 6, 12, () => setSpan(i));
+    x += tw + gap;
+  });
+}
+
+// ---- The pages ----
+function drawNotebook(w) {
+  const N = PARAMS.notebook, P = N.page, ib = view.ibuf, x1 = P.x + P.w, y1 = P.y + P.h;
+  notebook.hits.length = 0;
+  for (let y = 0; y < H; y++) {   // the water stays in view around the page, dimmed
+    for (let x = 0; x < W; x++) {
+      if (x >= P.x && x < x1 && y >= P.y && y < y1) ib[y * W + x] = PAGE_INK;
+      else if (bayer(x, y) < N.dim) ib[y * W + x] = COL.WATER;
+    }
+  }
+  for (let x = P.x + 1; x < x1 - 1; x++) { put(x, P.y, COL.SLATE); put(x, y1 - 1, COL.SLATE); }
+  for (let y = P.y + 1; y < y1 - 1; y++) { put(P.x, y, COL.SLATE); put(x1 - 1, y, COL.SLATE); }
+  for (let x = P.x + 3; x < x1 - 3; x += 2) { put(x, P.y + 2, 2); put(x, y1 - 3, 2); }
+  for (let y = P.y + 3; y < y1 - 3; y += 2) { put(P.x + 2, y, 2); put(x1 - 3, y, 2); }
+
+  ink(P.x + 6, P.y + 6, PAGES[notebook.page], COL.FOAM);
+  inkRight(x1 - 7, P.y + 6, (notebook.page + 1) + '/' + PAGES.length, COL.SLATE);
+  dotted(P.x + 6, x1 - 7, P.y + 13, COL.SLATE);
+
+  const fy = y1 - 11, dx0 = P.x + Math.floor(P.w / 2) - 3 * PAGES.length;
+  ink(P.x + 6, fy, '<', COL.SHAFT);
+  inkRight(x1 - 7, fy, '>', COL.SHAFT);
+  hit(P.x, fy - 5, 28, 15, () => turnPage(-1));
+  hit(x1 - 28, fy - 5, 28, 15, () => turnPage(1));
+  for (let i = 0; i < PAGES.length; i++) {
+    fillRect(dx0 + i * 6 + 2, fy + 2, 2, 2, i === notebook.page ? COL.FOAM : COL.SLATE);
+    hit(dx0 + i * 6, fy - 3, 6, 11, () => { notebook.page = i; });
+  }
+  [drawDayPage, drawCensusPage, drawMigrationPage, drawLedgerPage][notebook.page](w, P.y + 19);
+}
+
+// The notebook keeps day colours at every hour, so it reads the same at night
+function inkNotebook() {
+  const P = PARAMS.notebook.page, G = PARAMS.notebook.glyph, ib = view.ibuf, buf = view.buf;
+  const copy = (x0, y0, x1, y1) => {
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) buf[y * W + x] = PAL32[ib[y * W + x]];
+  };
+  copy(P.x, P.y, P.x + P.w, P.y + P.h);
+  copy(G.x, G.y, Math.min(W, G.x + GLYPH[0].length + 1), G.y + GLYPH.length + 1);
+}
+
+// I. The day: a sun and moon dial over the sea, the hour, the weather and the water, the day in one strip
+function drawDayPage(w, y) {
+  const N = PARAMS.notebook, D = PARAMS.diel, P = N.page, ph = dayPhase(w), R = N.dialR;
+  const cx = P.x + (P.w >> 1), cy = y + 40, x1 = P.x + P.w;
+  for (let j = 1; j <= 12; j++) {   // the sea under the horizon
+    for (let x = cx - R - 12; x <= cx + R + 12; x++) put(x, cy + j, bayer(x, cy + j) < 1 - j / 12 ? 4 : 2);
+  }
+  for (let x = cx - R - 12; x <= cx + R + 12; x++) put(x, cy, COL.SHAFT);
+  for (let a = 0; a <= 32; a++) {
+    const t = a / 32 * Math.PI;
+    put(Math.round(cx - R * Math.cos(t)), Math.round(cy - R * 0.85 * Math.sin(t)), COL.SLATE);
+  }
+  ink(cx - R - 11, cy - 7, 'E', COL.SLATE);
+  ink(cx + R + 9, cy - 7, 'W', COL.SLATE);
+  const day = ph < D.dayFrac, t = day ? ph / D.dayFrac : (ph - D.dayFrac) / (1 - D.dayFrac);
+  const bx = Math.round(cx - R * Math.cos(Math.PI * t)), by = Math.round(cy - R * 0.85 * Math.sin(Math.PI * t));
+  for (let dy = -3; dy <= 3; dy++) {
+    for (let dx = -3; dx <= 3; dx++) {
+      if (dx * dx + dy * dy > 10 || by + dy >= cy) continue;
+      if (day) put(bx + dx, by + dy, rampBase(GOLD) + (dx + dy < -1 ? BRIGHT : HIGHLIGHT));
+      else if ((dx - 1.5) * (dx - 1.5) + (dy + 1) * (dy + 1) > 5) put(bx + dx, by + dy, COL.FOAM);   // a crescent moon
+    }
+  }
+  if (day) {
+    for (const [dx, dy] of [[5, 0], [-5, 0], [0, -5], [0, 5], [4, 4], [-4, 4], [4, -4], [-4, -4]]) {
+      if (by + dy < cy) put(bx + dx, by + dy, rampBase(GOLD) + BASE);
+    }
+  }
+  const hour = mod(N.noonHour + (ph - D.dayFrac / 2) * 24, 24), hh = Math.floor(hour), mm = Math.floor((hour - hh) * 60);
+  const time = pad(hh, 2) + ':' + pad(mm, 2);
+  inkBig(cx - ((time.length * 8 - 2) >> 1), cy + 16, time, COL.FOAM);
+  const dayNum = Math.floor(w.tick * TICK_DT / w.dayLength + D.start) + 1;
+  const next = (day ? D.dayFrac - ph : 1 - ph) * w.dayLength;
+  inkCentre(cy + 31, 'DAY ' + dayNum + '   ' + (day ? 'SUNSET IN ' : 'SUNRISE IN ') + clock(next), COL.SHAFT);
+
+  let ry = cy + 44;
+  const row = (label, draw) => { ink(P.x + 6, ry, label, COL.SHAFT); draw(N.bar.x, ry); ry += 9; };
+  const value = (text, idx) => (x, yy) => ink(x, yy, text, idx || COL.FOAM);
+  const divide = () => { dotted(P.x + 6, x1 - 7, ry, COL.SLATE); ry += 5; };
+  let sea = 0;
+  while (sea < N.seaStates.length && w.wind >= N.seaStates[sea]) sea++;
+  let z = 0;
+  for (let i = 0; i < w.fields.graz.length; i++) z += w.fields.graz[i];
+  row('SUNLIGHT', (x, yy) => bar(x, yy + 1, N.bar.w, w.surfaceLight, GOLD));
+  row('SEA ' + SEA_STATES[sea], (x, yy) => bar(x, yy + 1, N.bar.w, w.wind, EMERALD));
+  row('UPWELLING', value(w.pulses.length ? 'A PLUME RISES' : 'NONE', w.pulses.length ? rampBase(GREEN) + HIGHLIGHT : COL.SLATE));
+  row('NUTRIENTS', (x, yy) => bar(x, yy + 1, N.bar.w, meanNutrient(w), GREEN));
+  row('GRAZERS', (x, yy) => bar(x, yy + 1, N.bar.w, z / w.fields.graz.length / 2, ROSE));
+  divide();
+  if (w.extinctTick >= 0) {
+    row('LIVED', value(clock(w.extinctTick * TICK_DT)));
+    row('', value('EXTINCT', rampBase(ROSE) + HIGHLIGHT));
+  } else {
+    row('ALIVE FOR', value(clock(w.tick * TICK_DT)));
+    row('POPULATION', value(aliveCount(w) + '   CYSTS ' + w.cysts.length));
+  }
+  // The whole day in one strip, midnight to midnight: surface light by the hour, and where the day is now
+  divide();
+  const sx = P.x + 6, sw = P.w - 12, toPhase = (h) => mod((h - N.noonHour) / 24 + D.dayFrac / 2, 1);
+  const hhmm = (h) => { const m = Math.round(mod(h, 24) * 60) % 1440; return pad(Math.floor(m / 60), 2) + ':' + pad(m % 60, 2); };
+  for (let i = 0; i < sw; i++) {
+    const L = surfaceLightAt(toPhase((i + 0.5) / sw * 24)), lit = smoothstep(D.moon, 1, L);
+    for (let k = 0; k < 5; k++) {
+      const x = sx + i, yy = ry + 2 + k;
+      put(x, yy, toPhase((i + 0.5) / sw * 24) >= D.dayFrac ? 2 : rampBase(GOLD) + (bayer(x, yy) < lit ? HIGHLIGHT : BASE));
+    }
+  }
+  const nx = sx + Math.round(hour / 24 * (sw - 1));
+  for (let k = 0; k < 9; k++) put(nx, ry + k, COL.FOAM);
+  const rise = N.noonHour - D.dayFrac * 12, set = N.noonHour + D.dayFrac * 12;
+  ink(sx, ry + 11, 'SUNRISE ' + hhmm(rise), COL.SHAFT);
+  inkRight(sx + sw - 1, ry + 11, 'SUNSET ' + hhmm(set), COL.SHAFT);
+}
+
+// II. The census: how many of each form live in the column now, and who ruled the water over the window
+function drawCensusPage(w, y) {
+  const N = PARAMS.notebook, P = N.page, F = FORMS.length, x1 = P.x + P.w, counts = new Array(F).fill(0);
+  let chained = 0, glow = 0;
+  for (const c of w.cells) {
+    if (c.dying) continue;
+    counts[formOf(c)]++;
+    if (c.chainLen > 1) chained++;
+    if (isLuminous(c)) glow++;
+  }
+  const most = Math.max(1, ...counts), BX = 82, BW = 58;
+  for (let f = 0; f < F; f++) {
+    const ry = y + f * 11;
+    drawIcon(P.x + 6, ry, f, !counts[f]);
+    ink(P.x + 16, ry + 1, FORMS[f].name, counts[f] ? COL.FOAM : COL.SLATE);
+    bar(BX, ry + 2, BW, counts[f] / most, FORMS[f].ramp);
+    inkRight(x1 - 7, ry + 1, String(counts[f]), counts[f] ? COL.FOAM : COL.SLATE);
+  }
+  ink(P.x + 6, y + 80, 'IN CHAINS ' + chained + '   CYSTS ' + w.cysts.length + '   GLOWING ' + glow, COL.SHAFT);
+  dotted(P.x + 6, x1 - 7, y + 89, COL.SLATE);
+  drawSpanRow(y + 95);
+
+  const cols = notebookColumns(), cy0 = y + 107, ch = 129, CX = N.chart.x;
+  chartBackground(cols, cy0, ch);
+  let top = 1;
+  for (let c = 0; c < N.chart.w; c++) {
+    let tot = 0;
+    for (let f = 0; f < F; f++) tot += cols.n[c * F + f];
+    top = Math.max(top, tot);
+  }
+  const scale = niceCeil(top);
+  for (let c = 0; c < N.chart.w; c++) {   // stacked by form, soft flagellates at the bottom
+    if (!cols.has[c]) continue;
+    let acc = 0;
+    for (let f = 0; f < F; f++) {
+      const v = cols.n[c * F + f];
+      if (!v) continue;
+      const a = Math.round(acc / scale * ch), b = Math.round((acc + v) / scale * ch), rb = rampBase(FORMS[f].ramp);
+      for (let k = a; k < b; k++) put(CX + c, cy0 + ch - 1 - k, rb + (k === b - 1 ? HIGHLIGHT : BASE));
+      acc += v;
+    }
+  }
+  inkRight(CX - 3, cy0, String(scale), COL.SLATE);
+  inkRight(CX - 3, cy0 + ch - 5, '0', COL.SLATE);
+  drawTimeAxis(cols, cy0 + ch + 3);
+}
+
+// III. Migration: each form's mean depth over the window, nights dark behind (the diel vertical migration figure).
+// Tap a form to follow it alone, with its spread. The strip on the right is the column now.
+function drawMigrationPage(w, y) {
+  const N = PARAMS.notebook, P = N.page, F = FORMS.length, CX = N.chart.x, CW = N.chart.w, solo = notebook.solo;
+  drawSpanRow(y);
+  const cols = notebookColumns(), cy0 = y + 10, ch = 196, column = H - PARAMS.world.floor;
+  chartBackground(cols, cy0, ch);
+  ink(CX + 2, cy0 + 2, 'SURFACE', COL.SLATE);
+  ink(CX + 2, cy0 + ch - 7, 'FLOOR', COL.SLATE);
+  if (solo >= 0) {   // the spread: one standard deviation either side, dithered
+    const rb = rampBase(FORMS[solo].ramp);
+    for (let c = 0; c < CW; c++) {
+      const j = c * F + solo;
+      if (!cols.has[c] || cols.n[j] < 0.5) continue;
+      const a = Math.round(clamp(cols.depth[j] - cols.sd[j], 0, 1) * (ch - 1)), b = Math.round(clamp(cols.depth[j] + cols.sd[j], 0, 1) * (ch - 1));
+      for (let k = a; k <= b; k++) if (bayer(CX + c, cy0 + k) < 0.5) put(CX + c, cy0 + k, rb + SHADOW);
+    }
+  }
+  for (let f = 0; f < F; f++) {
+    if (solo >= 0 && f !== solo) continue;
+    chartLine(cy0, (c) => (cols.has[c] && cols.n[c * F + f] >= 0.5 ? Math.round(cols.depth[c * F + f] * (ch - 1)) : -1),
+      rampBase(FORMS[f].ramp) + (solo >= 0 ? BRIGHT : HIGHLIGHT));
+  }
+  const NX = CX + CW + 3, L = w.surfaceLight, day = smoothstep(N.nightBelow, 0.7, L), now = new Array(F).fill(0);
+  let deep = 0;
+  for (let k = 0; k < ch; k++) {
+    for (let i = 0; i < 7; i++) put(NX + i, cy0 + k, L < N.nightBelow ? COL.WATER : bayer(NX + i, cy0 + k) < day ? 3 : 2);
+  }
+  for (const c of w.cells) {
+    if (c.dying) continue;
+    const f = formOf(c);
+    now[f]++;
+    if (solo >= 0 && f !== solo) continue;
+    if (f === solo) deep += clamp(c.y / column, 0, 1);
+    put(NX + Math.floor(hash01(c.id * 7 + 3) * 7), cy0 + Math.round(clamp(c.y / column, 0, 1) * (ch - 1)), rampBase(FORMS[f].ramp) + HIGHLIGHT);
+  }
+  drawTimeAxis(cols, cy0 + ch + 3);
+
+  const ly = cy0 + ch + 12, lx0 = P.x + Math.floor((P.w - (6 * 22 + 7)) / 2);
+  for (let f = 0; f < F; f++) {
+    let seen = now[f] > 0;
+    for (let c = 0; c < CW && !seen; c++) seen = cols.n[c * F + f] > 0;
+    const lx = lx0 + f * 22;
+    drawIcon(lx, ly, f, !seen || (solo >= 0 && f !== solo));
+    if (f === solo) for (let k = -1; k < 8; k++) put(lx + k, ly + 9, COL.FOAM);
+    hit(lx - 7, ly - 4, 21, 16, () => { notebook.solo = notebook.solo === f ? -1 : f; });
+  }
+  if (solo < 0) inkCentre(ly + 13, 'ALL FORMS   TAP ONE TO FOLLOW', COL.SHAFT);
+  else {
+    inkCentre(ly + 13, FORMS[solo].name, COL.FOAM);
+    inkCentre(ly + 21, 'NOW ' + now[solo] + (now[solo] ? '   AT ' + Math.round(deep / now[solo] * 100) + '% DEPTH' : ''), COL.SHAFT);
+  }
+}
+
+// IV. The ledger: deaths by cause in the window, the population against the grazers and the nutrients, and visitors
+function drawLedgerPage(w, y) {
+  const N = PARAMS.notebook, P = N.page, CX = N.chart.x, CW = N.chart.w, x1 = P.x + P.w, S = NB.STRIDE, r = notebook.rows;
+  drawSpanRow(y);
+  const cols = notebookColumns(), last = (notebook.count - 1) * S, before = cols.t0 > 0 && cols.first > 0 ? (cols.first - 1) * S : -1;
+  const deaths = CAUSES.map((k, i) => (notebook.count ? r[last + NB.DEATHS + i] - (before >= 0 ? r[before + NB.DEATHS + i] : 0) : 0));
+  const total = deaths.reduce((s, v) => s + v, 0), most = Math.max(1, ...deaths);
+  ink(P.x + 6, y + 11, 'DEATHS', COL.SHAFT);
+  inkRight(x1 - 7, y + 11, String(total), COL.SHAFT);
+  CAUSES.forEach((k, i) => {
+    const ry = y + 20 + i * 9;
+    ink(P.x + 6, ry, k.name, deaths[i] ? COL.FOAM : COL.SLATE);
+    bar(52, ry + 1, 92, deaths[i] / most, k.ramp);
+    inkRight(x1 - 7, ry, String(deaths[i]), deaths[i] ? COL.FOAM : COL.SLATE);
+  });
+
+  const series = [
+    { name: 'NUTRIENTS', a: cols.nut, idx: rampBase(GOLD) + HIGHLIGHT },
+    { name: 'GRAZERS', a: cols.graz, idx: rampBase(ROSE) + HIGHLIGHT },
+    { name: 'CELLS', a: cols.pop, idx: COL.FOAM },
+  ];
+  let lx = P.x + 6;
+  for (const s of [...series].reverse()) { ink(lx, y + 69, s.name, s.idx); lx += textWidth(s.name) + 8; }
+  const cy0 = y + 78, ch = 110;
+  chartBackground(cols, cy0, ch);
+  for (const s of series) {   // each scaled to its own peak in the window
+    let top = 0;
+    for (let c = 0; c < CW; c++) if (cols.has[c]) top = Math.max(top, s.a[c]);
+    if (top <= 0) continue;
+    chartLine(cy0, (c) => (cols.has[c] ? ch - 1 - Math.round(s.a[c] / top * (ch - 1)) : -1), s.idx);
+  }
+  drawTimeAxis(cols, cy0 + ch + 3);
+
+  const vy = cy0 + ch + 13, counts = VISITOR_INK.map(() => 0);
+  dotted(CX, CX + CW - 1, vy + 6, COL.SLATE);
+  for (const v of notebook.visits) {
+    if (v.tick < cols.t0) continue;
+    const i = VISITOR_INK.findIndex((k) => k.kind === v.kind), rb = rampBase(VISITOR_INK[i].ramp);
+    const x = CX + (cols.t1 > cols.t0 ? Math.min(CW - 1, Math.floor((v.tick - cols.t0) / (cols.t1 - cols.t0) * CW)) : CW - 1);
+    counts[i]++;
+    put(x, vy, rb + BRIGHT);
+    for (let k = 1; k < 6; k++) put(x, vy + k, rb + HIGHLIGHT);
+  }
+  lx = P.x + 6;
+  VISITOR_INK.forEach((k, i) => {
+    const text = k.name + ' ' + counts[i];
+    ink(lx, vy + 11, text, rampBase(k.ramp) + HIGHLIGHT);
+    lx += textWidth(text) + 9;
+  });
 }
 
 // ===== Input =====
@@ -4083,12 +4666,13 @@ function setupInput() {
   const wake = () => { input.lastActivity = performance.now(); needsRender = true; };
 
   el.addEventListener('pointerdown', (e) => {
+    const hud = hudVisibility(performance.now());
     wake();
     startAudio();
     el.setPointerCapture(e.pointerId);
     const p0 = toInternal(e);
     input.pointers.set(e.pointerId, p0);
-    input.down = input.pointers.size === 1 ? { id: e.pointerId, x: p0.x, y: p0.y, t: performance.now(), moved: 0 } : null;
+    input.down = input.pointers.size === 1 ? { id: e.pointerId, x: p0.x, y: p0.y, t: performance.now(), moved: 0, hud } : null;
     if (input.pointers.size === 2) startPinch();
   });
   el.addEventListener('pointermove', (e) => {
@@ -4097,6 +4681,11 @@ function setupInput() {
     if (!prev) return;
     const p = toInternal(e);
     input.pointers.set(e.pointerId, p);
+    const d0 = input.down;
+    if (notebook.open) {   // the open notebook takes the finger: no panning, no strumming behind the page
+      if (d0 && d0.id === e.pointerId) d0.moved = Math.max(d0.moved, Math.hypot(p.x - d0.x, p.y - d0.y));
+      return;
+    }
     if (input.pinch && input.pointers.size >= 2) {
       const [a, b] = [...input.pointers.values()];
       const d = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
@@ -4124,8 +4713,12 @@ function setupInput() {
   });
   const release = (e) => {
     const d = input.down;
-    if (d && d.id === e.pointerId) {
-      if (d.moved <= PARAMS.touch.tapMove && performance.now() - d.t < PARAMS.touch.tapMs) {   // a tap scatters the cells
+    const p = input.pointers.get(e.pointerId) || d;
+    if (d && d.id === e.pointerId && notebook.open) { notebookRelease(d, p); input.down = null; }
+    else if (d && d.id === e.pointerId) {
+      const tap = d.moved <= PARAMS.touch.tapMove && performance.now() - d.t < PARAMS.touch.tapMs;
+      if (tap && onGlyph(p) && d.hud > 0) openNotebook(true);   // the glyph answers only while it can be seen
+      else if (tap) {   // a tap scatters the cells
         const q = toWorld(input.pointers.get(e.pointerId) || d);
         world.inputs.push({ kind: 'tap', x: q.x, y: q.y });
       }
@@ -4142,6 +4735,7 @@ function setupInput() {
   el.addEventListener('wheel', (e) => {
     e.preventDefault();
     wake();
+    if (notebook.open) { setSpan(notebook.span + (e.deltaY < 0 ? -1 : 1)); return; }   // the graphs zoom in time
     const p = toInternal(e);
     zoomAt(cam.level + (e.deltaY < 0 ? 1 : -1) * PARAMS.camera.wheelStep, p.x, p.y);
   }, { passive: false });
@@ -4150,7 +4744,9 @@ function setupInput() {
     wake();
     if (e.key === 'm' || e.key === 'M') { if (audio.started) setMuted(!audio.muted); else startAudio(); return; }
     startAudio();
-    if (e.key === 'd' || e.key === 'D') debug.on = !debug.on;
+    if (e.key === 'n' || e.key === 'N') openNotebook(!notebook.open);
+    else if (notebook.open && notebookKey(e.key)) e.preventDefault();
+    else if (e.key === 'd' || e.key === 'D') debug.on = !debug.on;
     else if (e.key === '+' || e.key === '=') zoomAt(cam.level + 1, W / 2, H / 2);
     else if (e.key === '-' || e.key === '_') zoomAt(cam.level - 1, W / 2, H / 2);
     else if (e.key === ']') setSpeed(speedLevel + 1);
@@ -4299,6 +4895,7 @@ function frame(now) {
   while (acc >= TICK_DT && ticks < PARAMS.time.maxTicksPerFrame * speed) {
     stepWorld(world);
     debugSample(world);
+    notebookSample(world);
     hearNotes(world);
     acc -= TICK_DT;
     ticks++;
@@ -4322,7 +4919,8 @@ function hashString(s) {
 }
 
 // ?seed= (number or word), ?debug, ?stress (start at the cell cap), ?ff=seconds (fast-forward),
-// ?zoom=1..4 with ?at=x,y (world point to centre on), ?speed=1|2|4|8 (time-lapse), ?day=5|10|30 (minutes). M mutes.
+// ?zoom=1..4 with ?at=x,y (world point to centre on), ?speed=1|2|4|8 (time-lapse), ?day=5|10|30 (minutes),
+// ?notebook=1..4 (open the field notebook on that page). M mutes, N opens the notebook.
 function readOptions() {
   const q = new URLSearchParams(location.search);
   let label = (q.get('seed') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12), seed;
@@ -4337,7 +4935,7 @@ function readOptions() {
   return {
     seed, label, debug: q.has('debug'), stress: q.has('stress'), ff: Math.max(0, Number(q.get('ff')) || 0),
     zoom: Number(q.get('zoom')) || 1, atX: at.length === 2 ? at[0] : W / 2, atY: at.length === 2 ? at[1] : H / 2,
-    speed: Number(q.get('speed')) || 1,
+    speed: Number(q.get('speed')) || 1, notebook: Math.floor(Number(q.get('notebook')) || 0),
     dayLength: PARAMS.diel.dayMinutes.includes(Number(q.get('day'))) ? Number(q.get('day')) * 60 : PARAMS.diel.dayLength,
   };
 }
@@ -4348,7 +4946,7 @@ function init() {
   world = createWorld(opts.seed, opts.stress ? PARAMS.division.maxCells : 0, opts.dayLength);
   debug.on = opts.debug;
   const ffTicks = Math.floor(opts.ff * PARAMS.time.tickRate);
-  for (let i = 0; i < ffTicks; i++) { stepWorld(world); debugSample(world); world.music.notes.length = 0; }
+  for (let i = 0; i < ffTicks; i++) { stepWorld(world); debugSample(world); notebookSample(world); world.music.notes.length = 0; }
   initRender(document.getElementById('screen'));
   cam.level = nearestLevel(opts.zoom);
   cam.zoom = ZOOMS[cam.level];
@@ -4356,6 +4954,7 @@ function init() {
   cam.y = opts.atY - H / (2 * cam.zoom);
   clampCamera();
   setSpeed(Math.max(0, PARAMS.time.speeds.indexOf(opts.speed)));
+  if (opts.notebook >= 1 && opts.notebook <= PAGES.length) { notebook.page = opts.notebook - 1; openNotebook(true); }
   setupInput();
   requestAnimationFrame(frame);
 }

@@ -200,6 +200,7 @@ const PARAMS = {
   dino: {
     from: 0.22, full: 0.34, fade: 0.48, gone: 0.58,
     forms: ['alexandrium', 'dinophysis', 'tripos', 'prorocentrum'],
+    chainForms: ['alexandrium', 'tripos'],   // these build short chains; Dinophysis and Prorocentrum live single
     scale: 1.6,                         // drawn this much larger than the size gene's radius (dinoflagellates are big cells)
     detailR: 3, groove: 0.09, grooveMin: 0.5, spiral: 0.18, sulcus: 0.55,
     alexandrium: { a: 1.0, b: 0.95, cingulum: 0, plates: 0.05, platesFromR: 6 },
@@ -222,6 +223,10 @@ const PARAMS = {
   // Brighter than the soft flash of other cells, but still palette colours and dithered.
   glow: { halo: 0.8, haloRadius: 4, haloMaxPx: 24, touch: 2, refractory: 75,
           chopFrom: 0.45, chopDepth: 40, chopRate: 0.25 },
+  // Singing made visible: the cell swells and brightens with the note's own envelope (a dot grows to a speck),
+  // and one ring of its pigment spreads from it, so every note can be traced to its singer at any zoom.
+  song: { ringPx: 9, ringZoom: 0.6, ringTime: 1.6, ringStart: 1.5, swell: 0.35, lift: 0.9,
+          haloRadius: 2.5, haloMinPx: 3, haloMaxPx: 16, haloStrength: 0.45 },
   // Lineage threads: only while the sisters are still close (maxDist x their radii), fading with age and distance;
   // drawn only between cells big enough on screen to show a form
   thread: { maxAge: 20, maxDist: 4, dotSpacing: 3 },
@@ -686,10 +691,12 @@ function dinoWeight(tb) {
   return smoothstep(Dn.from, Dn.full, tb) * (1 - smoothstep(Dn.fade, Dn.gone, tb));
 }
 
-// How long a chain this form can build: diatoms long, dinoflagellates short, soft flagellates none (< 2)
-function chainMax(g) {
-  const Ch = PARAMS.chain, Dn = PARAMS.dino;
-  return Math.floor(Ch.diatomMax * smoothstep(Dn.fade, Dn.gone, g.timbre) + Ch.dinoMax * dinoWeight(g.timbre));
+// How long a chain this form can build: diatoms long, chain-forming dinoflagellates (Alexandrium, Tripos) short,
+// Dinophysis, Prorocentrum and soft flagellates none (< 2)
+function chainMax(c) {
+  const Ch = PARAMS.chain, Dn = PARAMS.dino, g = c.g;
+  const dw = dinoWeight(g.timbre), dino = dw > 0 && Dn.chainForms.includes(lineageDinoForm(c.spriteSeed)) ? dw : 0;
+  return Math.floor(Ch.diatomMax * smoothstep(Dn.fade, Dn.gone, g.timbre) + Ch.dinoMax * dino);
 }
 
 function chainHead(c) {
@@ -731,6 +738,7 @@ function createCell(w, x, y, g, energy, parentId, spriteSeed) {
     r: 0, rv: 0, dinoW: 0, biomass: 0, gainK: 0, halfSat: 0, maintK: 0, targetLight: 0,
     spr: null, ox: 0, oy: 0, swimPh: 0, vt: 0, tempo: 1,   // sprite cache and swimming (own clock, tempo): render only
     glowTick: -1000,                                       // render only: last disturbance flash
+    songAt: -1e9, songAtk: 0, songRel: 0, songLast: false,  // render only: the note it is sounding (real-time ms, s)
   };
   deriveTraits(c);
   c.lifespan = lifespanFor(c, w.rng);
@@ -1254,7 +1262,7 @@ function divide(w, c) {
   const rng = w.rng, Ch = PARAMS.chain;
   const gA = mutateGenome(c.g, rng), gB = mutateGenome(c.g, rng);
   const lumA = inheritGlow(c, rng), lumB = inheritGlow(c, rng);
-  const max = chainMax(c.g);
+  const max = chainMax(c);
   const link = max >= 2 && chainLength(c) < max && rng.chance(Ch.chance * smoothstep(Ch.from, Ch.full, c.g.coupling));
   let ox = gauss(rng), oy = gauss(rng);
   if (link && c.lb) { ox = c.lb.x - c.x; oy = c.lb.y - c.y; }        // daughters split along the chain axis
@@ -1485,7 +1493,7 @@ function emitNote(w, c, last) {
   m.onsets++;
   m.notes.push({
     id: m.nextNote++, tick: w.tick, cell: c.id, midi: notePitch(m, c), pc: (m.root + m.scale[c.deg]) % 12,
-    x: c.x, y: c.y, timbre: c.g.timbre, attack, release, last, locked: c.locked,
+    x: c.x, y: c.y, timbre: c.g.timbre, attack, release, last, locked: c.locked, c,
   });
 }
 
@@ -1608,11 +1616,15 @@ function playNote(n) {
 
 // Drains the tick's note events. In time-lapse only a share of them plays (about the real-time density);
 // the simulation is unchanged.
+// Every note that plays is also seen: its cell swells and sends out a ring (even when muted or before the first tap).
 function hearNotes(w) {
-  const notes = w.music.notes;
-  if (audio.started && !audio.muted && audio.ctx.state === 'running') {
-    const keep = 1 / PARAMS.time.speeds[speedLevel];
-    for (const n of notes) if (keep >= 1 || hash01(Math.imul(n.id, 0x9e3779b1)) < keep) playNote(n);
+  const notes = w.music.notes, keep = 1 / PARAMS.time.speeds[speedLevel];
+  const sound = audio.started && !audio.muted && audio.ctx.state === 'running', at = performance.now() + PARAMS.audio.lookahead * 1000;
+  for (const n of notes) {
+    if (keep < 1 && hash01(Math.imul(n.id, 0x9e3779b1)) >= keep) continue;
+    const c = n.c;
+    c.songAt = at; c.songAtk = n.attack; c.songRel = n.release; c.songLast = n.last;
+    if (sound) playNote(n);
   }
   notes.length = 0;
 }
@@ -2372,14 +2384,15 @@ function drawCell(c, tick, t) {
   if (cx < -reach || cy < -reach || cx > W + reach || cy > H + reach) return;
   const steps = S.tumbleSteps, angle = c.la || c.lb ? chainAngle(c, t) : tumbleAngle(c, c.vt);   // tumbles on its own clock unless chained
   const step = mod(Math.round(angle / TAU * steps), steps);
-  const spr = rpx < S.dotR ? DOT : rpx < S.speckR ? SPECK : spriteFor(c, rpx, step);
+  const sung = songLevel(c);
+  const spr = rpx < S.dotR && sung < PARAMS.song.swell ? DOT : rpx < S.speckR ? SPECK : spriteFor(c, rpx, step);   // a singing dot swells
   const irPhase = step + c.id + Math.floor(t * S.iridSpeed);
   const base = rampBase(hueRamp(c.g)), base2 = rampBase(hueNeighbour(c.g));
   if (!c.dying && spr.key >= 0) drawFlagella(c, cx, cy, step * TAU / steps, rpx, spr, base);
 
   const frame = (Math.floor(tick * S.wobbleFps / PARAMS.time.tickRate) + c.id) % S.frames;
   const tones = spr.frames[frame], size = spr.size, x0 = cx - spr.half, y0 = cy - spr.half;
-  const lum = glowing(c), pulse = flashLevel(c, tick) * (lum ? glowNight : PARAMS.flash.cellLift);
+  const lum = glowing(c), pulse = Math.max(flashLevel(c, tick) * (lum ? glowNight : PARAMS.flash.cellLift), sung * PARAMS.song.lift);
   const fade = c.dying ? c.dying / PARAMS.death.fadeTicks : 0;
   const depth = c.y / H, dark = depth > R.deepFrom ? (depth - R.deepFrom) / (1 - R.deepFrom) * R.deepDarken : 0;
   const ib = view.ibuf, bx0 = view.bx0, by0 = view.by0, cw = 2 * R.causticWidth / z;
@@ -2477,6 +2490,49 @@ function flashLevel(c, tick) {
   const F = PARAMS.flash, a = tick - (c.glowTick > c.flashTick ? c.glowTick : c.flashTick);
   if (c.dying || a < 0 || a >= F.rise + F.fall) return 0;
   return a < F.rise ? smoothstep(0, F.rise, a) : 1 - smoothstep(F.rise, F.rise + F.fall, a);
+}
+
+// How loud the cell's note is now, 0..1, following the audio envelope (linear attack, exponential release)
+let songNow = 0;
+function songLevel(c) {
+  const a = (songNow - c.songAt) / 1000;
+  if (a < 0 || a > c.songAtk + c.songRel) return 0;
+  if (a < c.songAtk) return a / c.songAtk;
+  return Math.pow(1e-4, (a - c.songAtk) / c.songRel) * (c.songLast ? 0.6 : 1);
+}
+
+// A singing cell lights the water around it while its note sounds, and one ring of its pigment spreads out
+function drawSongs(w) {
+  const Sg = PARAMS.song, z = cam.zoom;
+  for (const c of w.cells) {
+    const level = songLevel(c);
+    if (level <= 0.002) continue;
+    const cx = toSX(c.x + c.ox), cy = toSY(c.y + c.oy), rpx = c.rv * z;
+    const rh = clamp(rpx * Sg.haloRadius, Sg.haloMinPx, Sg.haloMaxPx), strength = Sg.haloStrength * level;
+    if (cx > -rh && cy > -rh && cx < W + rh && cy < H + rh) {
+      const y0 = Math.max(0, Math.floor(cy - rh)), y1 = Math.min(H - 1, Math.ceil(cy + rh));
+      const x0 = Math.max(0, Math.floor(cx - rh)), x1 = Math.min(W - 1, Math.ceil(cx + rh));
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+          const b = wb(x, y);
+          if (b >= strength) continue;
+          const dx = x - cx, dy = y - cy, d = Math.sqrt(dx * dx + dy * dy);
+          if (d > rh || b >= strength * (1 - d / rh)) continue;
+          view.ibuf[y * W + x] = LIGHT_UP[view.ibuf[y * W + x]];
+        }
+      }
+    }
+    const a = (songNow - c.songAt) / 1000 / Sg.ringTime;
+    if (a < 0 || a >= 1) continue;
+    const k = 1 - (1 - a) * (1 - a), rad = rpx + Sg.ringStart + k * Sg.ringPx * (1 + Sg.ringZoom * (z - 1));
+    if (cx < -rad || cy < -rad || cx > W + rad || cy > H + rad) continue;
+    const idx = rampBase(hueRamp(c.g)) + (c.songLast ? BASE : a < 0.4 ? BRIGHT : HIGHLIGHT), vis = (1 - a) * (c.songLast ? 0.6 : 1);
+    const steps = Math.ceil(TAU * rad * 1.5);
+    for (let s = 0; s < steps; s++) {
+      const ang = s / steps * TAU, x = Math.round(cx + Math.cos(ang) * rad), y = Math.round(cy + Math.sin(ang) * rad);
+      if (x >= 0 && y >= 0 && x < W && y < H && wb(x, y) < vis) put(x, y, idx);
+    }
+  }
 }
 
 // Bioluminescence: the flash spills faint light into the water and onto neighbours, plus broken arcs on large cells
@@ -3158,6 +3214,7 @@ function drawListenHint() {
 // All pixel work for one frame. Returns the time spent on the debug overlay, so frame timing can leave it out.
 function composeFrame(w, now) {
   const t = w.tick * TICK_DT, ta = ambientT >= 0 ? ambientT : t, P = PARAMS.particles;
+  songNow = now;
   view.bx0 = clamp(Math.round(cam.x * cam.zoom), 0, Math.round(W * cam.zoom) - W);
   view.by0 = clamp(Math.round(cam.y * cam.zoom), 0, Math.round(H * cam.zoom) - H);
   buildDeadline = performance.now() + PARAMS.sprite.buildBudgetMs;
@@ -3183,6 +3240,7 @@ function composeFrame(w, now) {
   drawThreads(w);
   drawCells(w, t);
   drawFlashes(w);
+  drawSongs(w);
   drawVisitors(w, ta);
   drawParticles(P.near, 3000, ta, true);
   drawHud(w, now);

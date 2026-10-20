@@ -103,11 +103,11 @@ const PARAMS = {
   // density (living biomass between attractLo and attractHi), so blooms draw them in; never on a timer.
   // What they eat is partly excreted in place, partly sinks as pellets, and partly leaves the column with them.
   visitors: {
-    attractLo: 120, attractHi: 360,
-    sardines: { rate: 1 / 160, speedMin: 10, speedMax: 15, rx: 38, ry: 20, eat: 0.8, steer: 8, drag: 1.5, wave: 6,
+    attractLo: 30, attractHi: 120,   // retuned to the populations the later phases grow (biomass peaks ~170): ~8 schools/h
+    sardines: { rate: 1 / 120, speedMin: 10, speedMax: 15, rx: 38, ry: 20, eat: 0.8, steer: 8, drag: 1.5, wave: 6,
                 fishMin: 28, fishMax: 42, excreted: 0.3, pellets: 0.2,     // the rest is carried away
                 turnIfAte: 25, passes: 3 },                                 // a rich pass makes the school turn back for more
-    salps: { rate: 1 / 220, speedMin: 1.5, speedMax: 2.6, barrelsMin: 4, barrelsMax: 8, spacing: 6.5, tilt: 0.3,
+    salps: { rate: 1 / 160, speedMin: 1.5, speedMax: 2.6, barrelsMin: 4, barrelsMax: 8, spacing: 6.5, tilt: 0.3,
              reach: 4.5, eat: 0.25, sway: 2, excreted: 0.3, pellets: 0.5 },  // salp pellets sink fast
     sunfish: { rate: 1 / 90, speed: 4.5, turn: 1.2, r: 18, bite: 7, stay: 150, baskY: 30, baskSpeed: 0.35 },   // comes for salps, never eats cells; basks at the surface after
   },

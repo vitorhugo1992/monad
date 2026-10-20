@@ -432,7 +432,11 @@ const PARAMS = {
   // One world that lives on between visits (unless the URL picks a seed or another start: a scratch world, never saved).
   // every: real s between autosaves (also on hiding the page); chunkRows: notebook rows per stored chunk, so a save
   // writes only the rows that changed.
-  persist: { db: 'monad', every: 30, chunkRows: 1024, version: 1 },
+  persist: { db: 'monad', every: 30, chunkRows: 1024, version: 2,
+    // Catching up: the time away is lived again, exactly, up to maxAway (s); beyond it the water rests. A worker runs
+    // it out of sight and shows a frame every show s (a silent time-lapse); the last tail simulated s play on the page,
+    // from tailSpeed x slowing to real time, so the recap glides into the live world. bench: s measured by ?bench.
+    maxAway: 12 * 3600, show: 0.25, tail: 40, tailSpeed: 8, bench: 20 },
 };
 
 // ===== RNG =====
@@ -842,10 +846,19 @@ function lifespanFor(c, rng) {
 
 // Returns a new cell; the caller adds it to the world.
 function createCell(w, x, y, g, energy, parentId, spriteSeed) {
-  const c = {
-    id: w.nextId++, parentId, x, y, vx: 0, vy: 0,
+  const c = cellObject(w.nextId++, parentId, x, y, g, energy, w.rng.next() * TAU, spriteSeed);
+  deriveTraits(c);
+  c.lifespan = lifespanFor(c, w.rng);
+  c.held = PARAMS.metabolism.uptake * c.biomass * energy;
+  return c;
+}
+
+// Every cell is built from this one literal (a restored cell too), so the engine sees one shape for them all
+function cellObject(id, parentId, x, y, g, energy, theta, spriteSeed) {
+  return {
+    id, parentId, x, y, vx: 0, vy: 0,
     energy, held: 0, age: 0, lifespan: 0, vigor: 0,   // vigor: smoothed growth conditions, observed only
-    theta: w.rng.next() * TAU, flashTick: -1000, dying: 0, grazed: false, eaten: null,
+    theta, flashTick: -1000, dying: 0, grazed: false, eaten: null,
     pull: 0, nbrs: 0, locked: 0,                       // Kuramoto: sum of sin(theta_j - theta_i), neighbours, those in phase
     deg: 0, noteTick: -1000, startleTick: -1000, motif: null, bout: 0,
     elder: 0, elderAge: 0, droneNext: 0, droneEnd: 0, rvBase: 0, arpTick: -1e9,   // elder (0..1), time as a full elder; drones     // scale degree (rule 7); last phrase began; lineage tune; flashes left to sing
@@ -859,26 +872,30 @@ function createCell(w, x, y, g, energy, parentId, spriteSeed) {
     glowTick: -1000,                                       // render only: last disturbance flash
     songAt: -1e9, songAtk: 0, songRel: 0, songLast: false, songDrone: false,  // render only: the note it is sounding (real-time ms, s)
   };
-  deriveTraits(c);
-  c.lifespan = lifespanFor(c, w.rng);
-  c.held = PARAMS.metabolism.uptake * c.biomass * energy;
-  return c;
 }
 
+// Neighbour grid, rebuilt every tick and read only after that: bucket k holds items[start[k] .. start[k + 1]),
+// in the order of w.cells (a counting sort). Never saved.
 function createHash() {
-  const s = PARAMS.hash.cell, cols = Math.ceil(W / s), rows = Math.ceil(H / s), buckets = [];
-  for (let i = 0; i < cols * rows; i++) buckets.push([]);
-  return { s, cols, rows, buckets };
+  const s = PARAMS.hash.cell, cols = Math.ceil(W / s), rows = Math.ceil(H / s);
+  return { s, cols, rows, start: new Int32Array(cols * rows + 1), fill: new Int32Array(cols * rows), items: [], keys: new Int32Array(64) };
 }
 
 function buildHash(w) {
-  const hs = w.hash;
-  for (let i = 0; i < hs.buckets.length; i++) hs.buckets[i].length = 0;
-  for (let n = 0; n < w.cells.length; n++) {
-    const c = w.cells[n];
+  const hs = w.hash, cells = w.cells, n = cells.length, start = hs.start, nb = hs.cols * hs.rows;
+  if (hs.keys.length < n) hs.keys = new Int32Array(n * 2);
+  const keys = hs.keys;
+  start.fill(0);
+  for (let m = 0; m < n; m++) {
+    const c = cells[m];
     const i = clamp(Math.floor(c.x / hs.s), 0, hs.cols - 1), j = clamp(Math.floor(c.y / hs.s), 0, hs.rows - 1);
-    hs.buckets[j * hs.cols + i].push(c);
+    keys[m] = j * hs.cols + i;
+    start[keys[m] + 1]++;
   }
+  for (let k = 0; k < nb; k++) start[k + 1] += start[k];
+  hs.fill.set(start.subarray(0, nb));
+  hs.items.length = n;
+  for (let m = 0; m < n; m++) hs.items[hs.fill[keys[m]]++] = cells[m];
 }
 
 function createWorld(seed, founderCount, dayLength) {
@@ -933,6 +950,17 @@ function nutrientInventory(w) {
   for (let i = 0; i < w.cysts.length; i++) s += w.cysts[i].reserve;
   return s;
 }
+
+function meanNutrient(w) {
+  const nut = w.fields.nut;
+  let s = 0;
+  for (let i = 0; i < nut.length; i++) s += nut[i];
+  return s / nut.length;
+}
+
+// Glowing Alexandrium (an inherited trait, see PARAMS.luminous); a daughter whose form drifted out of the
+// dinoflagellate range keeps the flag but no longer shows it
+const isLuminous = (c) => c.lum && dinoWeight(c.g.timbre) > 0.5;
 
 const CK_VIEW = new DataView(new ArrayBuffer(8));
 function worldChecksum(w) {
@@ -1056,9 +1084,9 @@ function steer(w, c, dt) {
     if (j < 0 || j >= hs.rows) continue;
     for (let i = ci - 1; i <= ci + 1; i++) {
       if (i < 0 || i >= hs.cols) continue;
-      const bucket = hs.buckets[j * hs.cols + i];
-      for (let n = 0; n < bucket.length; n++) {
-        const o = bucket[n];
+      const b = j * hs.cols + i;
+      for (let n = hs.start[b], end = hs.start[b + 1]; n < end; n++) {
+        const o = hs.items[n];
         if (o === c) continue;
         const dx = c.x - o.x, dy = c.y - o.y, d2 = dx * dx + dy * dy;
         if (d2 < PHASE_R2 && !o.dying) {
@@ -1654,9 +1682,9 @@ function attractDegree(w, c) {
     if (j < 0 || j >= hs.rows) continue;
     for (let i = ci - 1; i <= ci + 1; i++) {
       if (i < 0 || i >= hs.cols) continue;
-      const bucket = hs.buckets[j * hs.cols + i];
-      for (let k = 0; k < bucket.length; k++) {
-        const o = bucket[k];
+      const b = j * hs.cols + i;
+      for (let k = hs.start[b], end = hs.start[b + 1]; k < end; k++) {
+        const o = hs.items[k];
         if (o === c || o.dying || w.tick - o.flashTick > RECENT_TICKS) continue;
         const dx = c.x - o.x, dy = c.y - o.y;
         if (dx * dx + dy * dy >= LISTEN2) continue;
@@ -1885,9 +1913,9 @@ function heardNote(w, c) {
     if (j < 0 || j >= hs.rows) continue;
     for (let i = ci - 1; i <= ci + 1; i++) {
       if (i < 0 || i >= hs.cols) continue;
-      const bucket = hs.buckets[j * hs.cols + i];
-      for (let k = 0; k < bucket.length; k++) {
-        const o = bucket[k];
+      const b = j * hs.cols + i;
+      for (let k = hs.start[b], end = hs.start[b + 1]; k < end; k++) {
+        const o = hs.items[k];
         if (o === c || o.noteTick < since || o.dying) continue;
         const dx = c.x - o.x, dy = c.y - o.y;
         if (dx * dx + dy * dy < LISTEN2) return true;
@@ -1956,7 +1984,7 @@ const keyName = (m) => NOTE_NAMES[m.root] + ' ' + m.scaleName.toUpperCase();
 // world steps on exactly as if it had never stopped. Shared objects and cycles (chains, the cells notes point at)
 // survive; references into PARAMS are kept as paths, so a restored world reads the very same constants. Render
 // caches are left out and rebuilt. The snapshot is structured-cloneable (IndexedDB, and later a worker).
-const SNAP_SKIP = new Set(['spr', 'along', 'songAt', 'songAtk', 'songRel', 'songLast', 'songDrone', 'pluckAt']);
+const SNAP_SKIP = new Set(['hash', 'spr', 'along', 'songAt', 'songAtk', 'songRel', 'songLast', 'songDrone', 'pluckAt']);
 let paramPaths = null;
 
 function paramPathMap() {
@@ -2016,22 +2044,75 @@ function decodeSnap(root) {
   return revive(root);
 }
 
-// Fields a newer version added get the values a fresh world starts with, so an old saved world wakes up in new code
-function fillMissing(to, from) {
-  for (const k of Object.keys(from)) if (!(k in to)) to[k] = from[k];
-}
-
 function snapshotWorld(w) {
   return { v: PARAMS.persist.version, world: encodeSnap(w, new Map()) };
 }
 
+// Restored objects come back with shapes of their own, and the hot loops run at half speed over them; cells and
+// genomes are rebuilt in their usual shapes and every reference is pointed at the rebuilt ones. Fields a newer
+// version added to cells keep their fresh defaults.
+function reshape(w) {
+  const swap = new Map(), genomes = new Map();
+  const genome = (g) => { if (!genomes.has(g)) { const n = {}; for (const k of GENE_KEYS) n[k] = g[k]; genomes.set(g, n); } return genomes.get(g); };
+  const visit = (v, seen) => {
+    if (!v || typeof v !== 'object' || ArrayBuffer.isView(v) || seen.has(v) || v instanceof Rng) return;
+    seen.add(v);
+    if (v.spriteSeed !== undefined && v.g && !swap.has(v)) {   // a cell, living or still referred to
+      const n = cellObject(v.id, v.parentId, v.x, v.y, genome(v.g), v.energy, v.theta, v.spriteSeed);
+      for (const k of Object.keys(v)) if (k !== 'g') n[k] = v[k];
+      swap.set(v, n);
+    }
+    for (const k of Object.keys(v)) visit(v[k], seen);
+  };
+  visit(w, new Set());
+  const point = (v, seen) => {
+    if (!v || typeof v !== 'object' || ArrayBuffer.isView(v) || seen.has(v) || v instanceof Rng) return;
+    seen.add(v);
+    for (const k of Object.keys(v)) {
+      const n = swap.get(v[k]);
+      if (n) v[k] = n; else point(v[k], seen);
+    }
+  };
+  const seen = new Set();
+  point(w, seen);
+  for (const n of swap.values()) point(n, seen);
+}
+
+// The world, its fields and its music are copied onto a fresh world's own objects: their usual shapes, and any
+// field a newer version added keeps the value a fresh world starts with
 function restoreWorld(snap) {
-  const w = decodeSnap(snap.world), fresh = createWorld(w.seed, 1, w.dayLength), cell = fresh.cells[0];
-  fillMissing(w, fresh);
-  fillMissing(w.music, fresh.music);
-  fillMissing(w.fields, fresh.fields);
-  for (const c of w.cells) for (const k of Object.keys(cell)) if (!(k in c) && (cell[k] === null || typeof cell[k] !== 'object')) c[k] = cell[k];
-  return w;
+  const w = decodeSnap(snap.world), fresh = createWorld(w.seed, 1, w.dayLength);
+  reshape(w);
+  const fields = Object.assign(fresh.fields, w.fields), music = Object.assign(fresh.music, w.music);
+  Object.assign(fresh, w);
+  fresh.fields = fields;
+  fresh.music = music;
+  return fresh;
+}
+
+// Runs inside the catch-up worker (built from this page's own simulation and notebook code): steps the world to the
+// target it is given (the page moves it on as real time passes), records the notebook, shows a frame now and then.
+function catchupWorker() {
+  let w = null, target = 0;
+  const run = () => {
+    const t0 = performance.now(), S = NB.STRIDE;
+    while (w.tick < target && performance.now() - t0 < PARAMS.persist.show * 1000) {
+      for (let k = 0; k < 30 && w.tick < target; k++) { stepWorld(w); notebookSample(w); w.music.notes.length = 0; }
+    }
+    if (w.tick < target) {
+      postMessage({ kind: 'progress', snap: snapshotWorld(w) });
+      setTimeout(run, 0);   // lets the next target in
+      return;
+    }
+    const rows = notebook.rows.slice(0, notebook.count * S);
+    postMessage({ kind: 'done', snap: snapshotWorld(w), nb: notebookState(), rows }, [rows.buffer]);
+    w = null;
+  };
+  self.onmessage = (e) => {
+    const m = e.data;
+    target = m.target;
+    if (m.snap) { w = restoreWorld(m.snap); restoreNotebook(m.nb, [m.rows]); run(); }
+  };
 }
 
 // ---- Storage: one IndexedDB store; 'world' holds the snapshot, 'rows:i' the notebook in chunks ----
@@ -2299,7 +2380,7 @@ function playNote(n) {
 // whole phrases so tunes stay whole; the simulation is unchanged. Every note that plays is also seen: its cell
 // swells and sends out a ring (even when muted or before the first tap).
 function hearNotes(w) {
-  const notes = w.music.notes, keep = 1 / PARAMS.time.speeds[speedLevel];
+  const notes = w.music.notes, keep = 1 / playSpeed();
   const sound = audio.started && !audio.muted && audio.ctx.state === 'running', at = performance.now() + PARAMS.audio.lookahead * 1000;
   for (const n of notes) {
     if (keep < 1 && hash01(Math.imul(n.phrase, 0x9e3779b1)) >= keep) continue;
@@ -3377,10 +3458,6 @@ function drawCells(w, t) {
 }
 
 // ---- Bioluminescence ----
-// Glowing Alexandrium (an inherited trait, see PARAMS.luminous); a daughter whose form drifted out of the
-// dinoflagellate range keeps the flag but no longer shows it
-const isLuminous = (c) => c.lum && dinoWeight(c.g.timbre) > 0.5;
-
 // At night disturbed water sets them flashing: visitors brushing past, breaking chop near the surface
 let glowNight = 0, glowSeen = -1;
 function updateGlow(w) {
@@ -4132,6 +4209,12 @@ function clock(seconds) {
   return (h ? h + ':' : '') + pad(m, 2) + ':' + pad(s % 60, 2);
 }
 
+// A span of time away: 2D 4H, 7H 12M, 12M, 40S
+function duration(seconds) {
+  const s = Math.floor(seconds), d = Math.floor(s / 86400), h = Math.floor(s / 3600) % 24, m = Math.floor(s / 60) % 60;
+  return d ? d + 'D ' + h + 'H' : h ? h + 'H ' + m + 'M' : m ? m + 'M' : s + 'S';
+}
+
 const hudVisibility = (now) => (debug.on ? 1 : clamp(1 - (now - input.lastActivity - PARAMS.hud.visibleMs) / PARAMS.hud.fadeMs, 0, 1));
 
 // Microscope readout, bottom left; dissolves after inactivity
@@ -4145,8 +4228,16 @@ function drawHud(w, now) {
     if (keeper.db) drawText(Hd.x, Hd.y + Hd.line * 3, 'TAP TO SEED NEW WATER', COL.FOAM, vis);   // only the kept world
     return;
   }
-  const vis = hudVisibility(now);
+  const vis = catchup.phase || catchup.bench ? 1 : hudVisibility(now);
   if (vis <= 0) return;
+  if (catchup.bench) {
+    const b = catchup.bench;
+    drawText(Hd.x, Hd.y - Hd.line, 'BENCH ' + Math.round(b.result) + 'X REAL TIME' + (b.done ? '' : '...'), rampBase(1) + HIGHLIGHT, vis);
+  } else if (catchup.phase) {   // the recap: how long it was away, the days going by
+    const day = Math.floor(w.tick * TICK_DT / w.dayLength + PARAMS.diel.start) + 1;
+    drawText(Hd.x, Hd.y - Hd.line, 'AWAY ' + duration(catchup.lived + catchup.rested) + '  DAY ' + day, rampBase(1) + HIGHLIGHT, vis);
+    if (catchup.rested > 0) drawText(Hd.x, Hd.y - Hd.line * 2, 'RESTED ' + duration(catchup.rested), rampBase(ROSE) + HIGHLIGHT, vis);
+  }
   drawText(Hd.x, Hd.y, 'SEED ' + seedLabel, COL.FOAM, vis);
   drawText(Hd.x, Hd.y + Hd.line, 'T ' + clock(w.tick * TICK_DT), COL.FOAM, vis);
   drawText(Hd.x, Hd.y + Hd.line * 2, 'POP ' + pad(aliveCount(w), 3), rampBase(1) + HIGHLIGHT, vis);
@@ -4271,14 +4362,17 @@ const SEA_STATES = ['CALM', 'BREEZE', 'WINDY', 'STORM'];
 const GLYPH = ['.##...##.', '#..#.#..#', '#.#.#.#.#', '#...#...#', '#.#.#.#.#', '.###.###.'];
 const PAGE_INK = 1;   // the page: one step above the darkest water
 
-// One row of the record: offsets into the flat Float32Array (N, DEPTH and SD hold one value per form)
+// One row of the record: offsets into the flat Float32Array (N, DEPTH and SD hold one value per form).
+// TICK holds simulated seconds (whole numbers, exact in a Float32 for ~194 days of life); rowTick turns it back.
 const NB = { TICK: 0, LIGHT: 1, WIND: 2, NUT: 3, GRAZ: 4, POP: 5, CYSTS: 6, CHAINED: 7, GLOW: 8, N: 9, DEPTH: 16, SD: 23, DEATHS: 30, STRIDE: 35 };
 
 const notebook = {
   open: false, page: 0, span: PARAMS.notebook.startSpan, solo: -1, hits: [],
   rows: new Float32Array(4096 * NB.STRIDE), count: 0, every: PARAMS.notebook.sampleEvery * PARAMS.time.tickRate, next: 0,
   visits: [], seenVisitor: 1, cols: null, colsKey: '',
+  rests: [],   // the kept world resting while away beyond the catch-up limit: { tick, s }
 };
+const rowTick = (r, i) => r[i * NB.STRIDE + NB.TICK] * PARAMS.time.tickRate;
 
 // The form a cell is drawn as: soft flagellate, one of the four dinoflagellates, centric or pennate diatom
 function formOf(c) {
@@ -4300,7 +4394,7 @@ function notebookSample(w) {
   if ((nb.count + 1) * S > nb.rows.length) makeRoom();
   const r = nb.rows, o = nb.count++ * S, column = H - PARAMS.world.floor, graz = w.fields.graz;
   r.fill(0, o, o + S);
-  r[o + NB.TICK] = w.tick;
+  r[o + NB.TICK] = w.tick / PARAMS.time.tickRate;
   r[o + NB.LIGHT] = w.surfaceLight;
   r[o + NB.WIND] = w.wind;
   r[o + NB.NUT] = meanNutrient(w);
@@ -4347,7 +4441,7 @@ function makeRoom() {
 // saves, until a thinning rewrites them all)
 function notebookState() {
   const nb = notebook;
-  return { count: nb.count, every: nb.every, next: nb.next, visits: nb.visits, seenVisitor: nb.seenVisitor, cap: nb.rows.length / NB.STRIDE };
+  return { count: nb.count, every: nb.every, next: nb.next, visits: nb.visits, seenVisitor: nb.seenVisitor, rests: nb.rests, cap: nb.rows.length / NB.STRIDE };
 }
 
 function notebookChunk(i) {
@@ -4360,6 +4454,8 @@ function restoreNotebook(st, chunks) {
   nb.rows = new Float32Array(Math.max(st.cap, 4096) * S);
   chunks.forEach((rows, i) => nb.rows.set(rows, i * R * S));
   nb.count = st.count; nb.every = st.every; nb.next = st.next; nb.visits = st.visits; nb.seenVisitor = st.seenVisitor;
+  nb.rests = st.rests || [];
+  nb.cols = null;
 }
 
 const spanLabel = (s) => (!s ? 'ALL' : s >= 3600 ? s / 3600 + 'H' : s / 60 + 'M');
@@ -4368,7 +4464,7 @@ const spanLabel = (s) => (!s ? 'ALL' : s >= 3600 ? s / 3600 + 'H' : s / 60 + 'M'
 function rowAt(t) {
   const r = notebook.rows, S = NB.STRIDE;
   let lo = 0, hi = notebook.count;
-  while (lo < hi) { const mid = (lo + hi) >> 1; if (r[mid * S + NB.TICK] < t) lo = mid + 1; else hi = mid; }
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (rowTick(r, mid) < t) lo = mid + 1; else hi = mid; }
   return lo;
 }
 
@@ -4378,7 +4474,7 @@ function notebookColumns() {
   const nb = notebook, key = nb.span + ':' + nb.count;
   if (nb.cols && nb.colsKey === key) return nb.cols;
   const CW = PARAMS.notebook.chart.w, F = FORMS.length, S = NB.STRIDE, r = nb.rows, n = nb.count;
-  const t1 = n ? r[(n - 1) * S + NB.TICK] : 0, s = PARAMS.notebook.spans[nb.span] * PARAMS.time.tickRate;
+  const t1 = n ? rowTick(r, n - 1) : 0, s = PARAMS.notebook.spans[nb.span] * PARAMS.time.tickRate;
   const t0 = s && s < t1 ? t1 - s : 0;
   const cols = {
     t0, t1, first: rowAt(t0), has: new Uint8Array(CW), k: new Float32Array(CW),
@@ -4386,7 +4482,7 @@ function notebookColumns() {
     n: new Float32Array(CW * F), depth: new Float32Array(CW * F), sd: new Float32Array(CW * F),
   };
   for (let i = cols.first; i < n; i++) {
-    const o = i * S, c = t1 > t0 ? Math.min(CW - 1, Math.floor((r[o + NB.TICK] - t0) / (t1 - t0) * CW)) : CW - 1;
+    const o = i * S, c = t1 > t0 ? Math.min(CW - 1, Math.floor((rowTick(r, i) - t0) / (t1 - t0) * CW)) : CW - 1;
     cols.k[c]++;
     cols.light[c] += r[o + NB.LIGHT]; cols.nut[c] += r[o + NB.NUT]; cols.graz[c] += r[o + NB.GRAZ]; cols.pop[c] += r[o + NB.POP];
     for (let f = 0; f < F; f++) {
@@ -4533,6 +4629,11 @@ function drawTimeAxis(cols, y) {
   const N = PARAMS.notebook, CX = N.chart.x, span = cols.t0 > 0;
   ink(CX, y, span ? '-' + clock((cols.t1 - cols.t0) * TICK_DT) : 'BIRTH', COL.SLATE);
   inkRight(CX + N.chart.w - 1, y, span ? 'NOW' : clock(cols.t1 * TICK_DT), COL.SLATE);
+  for (const r of notebook.rests) {   // where the water rested while away: a small rose notch under the graph
+    if (r.tick < cols.t0 || r.tick > cols.t1) continue;
+    const x = CX + (cols.t1 > cols.t0 ? Math.min(N.chart.w - 1, Math.floor((r.tick - cols.t0) / (cols.t1 - cols.t0) * N.chart.w)) : N.chart.w - 1);
+    put(x, y - 3, rampBase(ROSE) + HIGHLIGHT); put(x, y - 2, rampBase(ROSE) + BASE);
+  }
 }
 // A line over the window: value(c) gives a row (0 = top) or -1 where there is nothing to draw; gaps break it
 function chartLine(y0, valueAt, idx) {
@@ -4548,7 +4649,7 @@ function chartLine(y0, valueAt, idx) {
 }
 // The time windows, centred on a row; spans longer than the life so far show the whole life (drawn faint)
 function drawSpanRow(y) {
-  const N = PARAMS.notebook, life = notebook.count ? notebook.rows[(notebook.count - 1) * NB.STRIDE + NB.TICK] * TICK_DT : 0;
+  const N = PARAMS.notebook, life = notebook.count ? notebook.rows[(notebook.count - 1) * NB.STRIDE + NB.TICK] : 0;
   const labels = N.spans.map(spanLabel), gap = 8;
   let x = N.page.x + Math.floor((N.page.w - labels.reduce((s, l) => s + textWidth(l), 0) - gap * (labels.length - 1)) / 2);
   labels.forEach((l, i) => {
@@ -4976,13 +5077,6 @@ const debug = {
   droppedTicks: 0, checksum: null, sync: null, syncTick: 0,
 };
 
-function meanNutrient(w) {
-  const nut = w.fields.nut;
-  let s = 0;
-  for (let i = 0; i < nut.length; i++) s += nut[i];
-  return s / nut.length;
-}
-
 // Called after every tick so samples and checksums land on exact ticks.
 function debugSample(w) {
   const D = PARAMS.debug, minute = 60 * PARAMS.time.tickRate;
@@ -5097,9 +5191,10 @@ function setSpeed(level) {
 function frame(now) {
   requestAnimationFrame(frame);
   if (!lastTime) lastTime = now;
-  const speed = PARAMS.time.speeds[speedLevel];
+  const speed = playSpeed();
   const real = Math.min((now - lastTime) / 1000, 1);
-  acc += real * speed;
+  if (catchup.phase === 'worker') needsRender = true;   // the worker lives the world; the page only shows it
+  else acc += real * speed;
   lastTime = now;
   if (ambientT < 0) ambientT = world.tick * TICK_DT;
   ambientT += real * Math.max(PARAMS.ambient.rate, speed);
@@ -5114,6 +5209,7 @@ function frame(now) {
     ticks++;
   }
   if (acc >= TICK_DT) { debug.droppedTicks += Math.floor(acc / TICK_DT); acc = 0; }
+  if (catchup.phase === 'tail' && world.tick >= catchupTarget()) endCatchup();
   // Everything visible is tied to simulation ticks or the camera, so other frames would be identical.
   if (ticks > 0 || needsRender) {
     const overlayMs = render(world, now);
@@ -5136,10 +5232,11 @@ function hashString(s) {
 // any of them starts a scratch world that is never saved, so trying a seed never overwrites the kept one.
 // ?seed= (number or word), ?debug, ?stress (start at the cell cap), ?ff=seconds (fast-forward),
 // ?zoom=1..4 with ?at=x,y (world point to centre on), ?speed=1|2|4|8 (time-lapse), ?day=5|10|30 (minutes),
-// ?notebook=1..4 (open the field notebook on that page). M turns the music off, N opens the notebook.
+// ?notebook=1..4 (open the field notebook on that page), ?bench (how fast this device lives a world out of sight).
+// M turns the music off, N opens the notebook.
 function readOptions() {
   const q = new URLSearchParams(location.search);
-  const kept = !q.has('seed') && !q.has('stress') && !q.has('ff') && !q.has('day');
+  const kept = !q.has('seed') && !q.has('stress') && !q.has('ff') && !q.has('day') && !q.has('bench');
   let label = (q.get('seed') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12), seed;
   if (!label) {
     seed = crypto.getRandomValues(new Uint32Array(1))[0] % 1000000;   // the one non-seeded draw: picking the seed
@@ -5154,7 +5251,7 @@ function readOptions() {
     zoom: Number(q.get('zoom')) || 1, atX: at.length === 2 ? at[0] : W / 2, atY: at.length === 2 ? at[1] : H / 2,
     speed: Number(q.get('speed')) || 1, notebook: Math.floor(Number(q.get('notebook')) || 0),
     dayLength: PARAMS.diel.dayMinutes.includes(Number(q.get('day'))) ? Number(q.get('day')) * 60 : PARAMS.diel.dayLength,
-    kept,
+    kept, bench: q.has('bench'),
   };
 }
 
@@ -5165,7 +5262,7 @@ const keeper = { db: null, lastSave: 0, busy: false, off: false, saved: null };
 function saveWorld() {
   const k = keeper;
   k.lastSave = performance.now();
-  if (!k.db || k.busy || k.off) return;
+  if (!k.db || k.busy || k.off || catchup.phase) return;   // mid catch-up the last save stands (and is caught up again)
   const R = PARAMS.persist.chunkRows, nb = notebookState(), chunks = Math.ceil(nb.count / R);
   const puts = {
     world: { v: PARAMS.persist.version, label: seedLabel, savedAt: Date.now(), snap: snapshotWorld(world), notebook: nb, chunks, prefs: { muted: audio.muted } },
@@ -5186,13 +5283,115 @@ async function loadWorld(db) {
   const keys = [];
   for (let i = 0; i < rec.chunks; i++) keys.push('rows:' + i);
   const rows = await storeGet(db, keys);
-  return { rec, world: restoreWorld(rec.snap), rows: keys.map((k) => rows[k] || new Float32Array(0)) };
+  const chunks = keys.map((k) => rows[k] || new Float32Array(0));
+  if (rec.v < 2) for (const c of chunks) for (let o = 0; o < c.length; o += NB.STRIDE) c[o + NB.TICK] /= PARAMS.time.tickRate;   // rows kept ticks before v2
+  return { rec, world: restoreWorld(rec.snap), rows: chunks };
 }
 
 // After an extinction: the kept world is let go and new water is seeded on reload
 function seedNewWater() {
   keeper.off = true;
   storeClear(keeper.db).finally(() => location.reload());
+}
+
+// ---- Catching up: the kept world lives the time it was away ----
+// phase: 'worker' (a worker lives the time out of sight; the page shows its frames), 'tail' (the page plays the
+// rest, slowing to real time), '' (live). The target keeps moving: real time goes on while it catches up.
+const catchup = { phase: '', base: 0, lived: 0, rested: 0, openedAt: 0, worker: null, bench: null };
+const RENDER_KEYS = ['spr', 'tempo', 'vt', 'swimPh', 'ox', 'oy', 'along', 'glowTick', 'songAt', 'songAtk', 'songRel', 'songLast', 'songDrone', 'pluckAt'];
+
+const catchupTarget = () => catchup.base + Math.floor((catchup.lived + (performance.now() - catchup.openedAt) / 1000) * PARAMS.time.tickRate);
+const tailTicks = () => PARAMS.persist.tail * PARAMS.time.tickRate;
+
+// The simulation and notebook code of this very page, run in a worker
+function workerSource() {
+  const src = document.querySelector('script').textContent;
+  const part = (a, b) => src.slice(src.indexOf('// ===== ' + a + ' ====='), src.indexOf('// ===== ' + b + ' ====='));
+  return part('PARAMS', 'Audio') + part('Notebook', 'Input') + '\ncatchupWorker();\n';
+}
+
+// A frame from the worker replaces the world on screen; cells keep their sprites and swimming where they still live
+function showWorld(snap) {
+  const w = restoreWorld(snap), old = new Map();
+  for (const c of world.cells) old.set(c.id, c);
+  for (const c of w.cells) { const o = old.get(c.id); if (o) for (const k of RENDER_KEYS) c[k] = o[k]; }
+  world = w;
+  needsRender = true;
+}
+
+function startWorker(onMessage) {
+  const url = URL.createObjectURL(new Blob([workerSource()], { type: 'text/javascript' }));
+  const wk = new Worker(url);
+  URL.revokeObjectURL(url);
+  wk.onmessage = onMessage;
+  wk.postMessage({ snap: snapshotWorld(world), nb: notebookState(), rows: notebook.rows.slice(0, notebook.count * NB.STRIDE), target: catchupTarget() - tailTicks() });
+  return wk;
+}
+
+function startCatchup(savedAt) {
+  const P = PARAMS.persist, away = Math.max(0, (Date.now() - savedAt) / 1000);
+  catchup.lived = Math.min(away, P.maxAway);
+  catchup.rested = away - catchup.lived;
+  catchup.base = world.tick;
+  catchup.openedAt = performance.now();
+  if (catchup.rested > 0) notebook.rests.push({ tick: world.tick, s: catchup.rested });
+  catchup.phase = 'tail';
+  if (catchup.lived <= P.tail) return;
+  try {
+    catchup.worker = startWorker((e) => {
+      const m = e.data;
+      if (catchup.phase !== 'worker') return;
+      showWorld(m.snap);
+      if (m.kind === 'progress') { catchup.worker.postMessage({ target: catchupTarget() - tailTicks() }); return; }
+      restoreNotebook(m.nb, [m.rows]);
+      catchup.worker.terminate();
+      catchup.phase = 'tail';
+    });
+    catchup.worker.onerror = () => { catchup.worker.terminate(); restRemainder(); };
+    catchup.phase = 'worker';
+  } catch (e) { restRemainder(); }
+}
+
+// Without a worker the page cannot live hours quickly: the time beyond the tail is rested instead
+function restRemainder() {
+  const behind = (catchupTarget() - world.tick) / PARAMS.time.tickRate - PARAMS.persist.tail;
+  if (behind > 0) {
+    catchup.lived -= behind;
+    catchup.rested += behind;
+    notebook.rests.push({ tick: world.tick, s: behind });
+  }
+  catchup.phase = 'tail';
+}
+
+function endCatchup() {
+  catchup.phase = '';
+  input.lastActivity = performance.now();   // the readout stays a while, then fades
+  saveWorld();
+}
+
+// How fast the world runs on the page: the time-lapse chosen, or faster while the tail of a catch-up plays
+function playSpeed() {
+  const user = PARAMS.time.speeds[speedLevel], P = PARAMS.persist;
+  if (catchup.phase === 'worker') return P.tailSpeed;
+  if (catchup.phase !== 'tail') return user;
+  const behind = (catchupTarget() - world.tick) / PARAMS.time.tickRate;
+  return Math.max(user, 1 + (P.tailSpeed - 1) * Math.sqrt(clamp(behind / P.tail, 0, 1)));
+}
+
+// ?bench: a scratch world lived in the worker for a while; the readout shows how many times real time it ran
+function startBench() {
+  const t0 = performance.now(), tick0 = world.tick;
+  catchup.phase = 'worker';
+  catchup.bench = { result: 0 };
+  catchup.base = 1e12;   // a target it never reaches
+  catchup.worker = startWorker((e) => {
+    if (catchup.phase !== 'worker') return;
+    showWorld(e.data.snap);
+    const secs = (performance.now() - t0) / 1000;
+    catchup.bench.result = (world.tick - tick0) / PARAMS.time.tickRate / secs;
+    if (secs < PARAMS.persist.bench) catchup.worker.postMessage({ target: 1e12 });
+    else { catchup.worker.terminate(); catchup.phase = ''; catchup.bench.done = true; input.lastActivity = 1e12; }
+  });
 }
 
 async function init() {
@@ -5212,8 +5411,10 @@ async function init() {
     restoreNotebook(found.rec.notebook, found.rows);
     keeper.saved = { count: found.rec.notebook.count, every: found.rec.notebook.every, chunks: found.rec.chunks };
     audio.muted = !!(found.rec.prefs && found.rec.prefs.muted);
+    startCatchup(found.rec.savedAt);
   } else {
     world = createWorld(opts.seed, opts.stress ? PARAMS.division.maxCells : 0, opts.dayLength);
+    if (opts.bench) startBench();
   }
   if (keeper.db) {
     saveWorld();

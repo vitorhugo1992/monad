@@ -217,8 +217,9 @@ const PARAMS = {
     // the wind, the deep hum darker at night, a groan while an upwelling plume rises, a whoosh as a school passes,
     // and a chirp for every bubble you see.
     // Filter sweep by hand: closing lowers a master lowpass by up to closeOctaves below open (20 kHz), opening lifts
-    // a high shelf by up to openDb; both follow the finger (glide s) and ease back when it lifts (back s)
-    bend: { open: 20000, closeOctaves: 6, shelfHz: 2500, openDb: 9, glide: 0.06, back: 2 },
+    // a high shelf by up to openDb; both follow the finger (glide s) and ease back when it lifts (back s).
+    // Stirring sends up to stir of the music into the echoes and the reverb (the water swirls), settling the same way.
+    bend: { open: 20000, closeOctaves: 6, shelfHz: 2500, openDb: 9, glide: 0.06, back: 2, stir: 0.9 },
     ambience: {
       gain: 0.55, wet: 0.25, noiseSeconds: 3,
       swell: { everyCalm: 6, everyStorm: 2.2, durCalm: 10, durStorm: 5, gainCalm: 0.012, gainStorm: 0.09, freqCalm: 320, freqStorm: 1300 },
@@ -227,10 +228,23 @@ const PARAMS = {
       school: { every: 2.4, dur: 2.4, gain: 0.05, freq: 260, freqEnd: 950, q: 1.2 },
       bubble: { gain: 0.035, perSecond: 10, rise: 1.8, durMin: 0.04, durMax: 0.12, freqMin: 500, freqMax: 1600, seepFreq: 260 },
     },
+    // Krill crackle: tiny clicks in short trains, denser with the visible swarm but saturating (half: krill for
+    // half the top rate), panned to the swarm. A soft fizz, never a wall.
+    krill: { rate: 7, half: 10, trainMin: 2, trainMax: 4, gap: 0.035, gain: 0.018, dur: 0.012, freqMin: 2600, freqMax: 5200, q: 5 },
+    // Drones evolve: a second sub detuned by beat Hz beats against the first; a partial two octaves up blooms late
+    // (peaking at bloomAt of the drone)
+    droneBeat: 0.22, droneBloom: 0.035, droneBloomAt: 0.6,
     drone: { gain: 0.2, pad: 0.06, cutLow: 160, cutHigh: 950, detune: 7, wet: 0.55, pan: 0.35, maxNodes: 4 },   // startle blurts: a little quieter, drier and brighter
-    vibrato: { rateMin: 0.15, rateMax: 0.45, cents: 7 },   // soft cells' slow breathing, each note at its own rate
+    vibrato: { rateMin: 0.15, rateMax: 0.45, cents: 7 },
+    // Richer voices: soft notes' filter breathes (from breathLow of its cutoff, open at the top of the swell, back to
+    // breathEnd); steadied pads add a shimmer an octave up that swells in late; every note varies a little in
+    // loudness and brightness (louder is brighter) and timing, so nothing sounds stamped.
+    breathLow: 0.35, breathEnd: 0.5, shimmer: 0.22, shimmerDetune: 5, shimmerLate: 2,
+    humanGain: 0.15, humanBright: 0.25, humanTime: 0.015,   // soft cells' slow breathing, each note at its own rate
     // The world as macros, eased every update s: brightness follows daylight, echoes follow the sea state (long in
     // glassy calm, broken up by wind), the room follows bloom density, and visitors in the water cast an audible shadow.
+    // Echoes wander: the delay time drifts with the water's own motion (rate rad per water-second, depth as a share)
+    flutter: { rate: 0.13, rate2: 0.047, depth: 0.05 },
     weather: { update: 0.5, dark: 1100, bright: 3400, echoCalm: 0.45, echoStorm: 0.12, sendCalm: 0.16, sendStorm: 0.05,
                roomClear: 0.24, roomBloom: 0.45, bloomFull: 300, shadow: { sardines: 0.55, sunfish: 0.35, salps: 0.2 } },
     reverbSeconds: 4.5, reverbSend: 0.3, reverbDark: 0.6,
@@ -297,8 +311,9 @@ const PARAMS = {
              seepRate: 0.025, seepMin: 2, seepMax: 5, rMin: 0.35, rMax: 1.1, riseMin: 5, riseMax: 13, drag: 2, wobble: 0.6, wobbleRate: 5, max: 120 },
   // Touch: a tap is a short press that barely moves; at zoom 1 a drag strums (each touched cell plucks its note,
   // within touch units of the finger, at most once per pluckRest s, at most plucksPerSecond overall) and leaves a
-  // wake fading over trail s. Sideways movement bends the master filter (bendSpan of the column = full bend).
-  touch: { tapMs: 300, tapMove: 4, touch: 2.5, pluckRest: 0.4, plucksPerSecond: 16, trail: 1.5, trailSpacing: 2, bendSpan: 0.6 },
+  // wake fading over trail s. Moving toward the surface opens the master filter, toward the deep closes it (bendSpan
+  // of the column = full bend); sweeping sideways stirs the water (stirFull px/s of sideways speed = full swirl).
+  touch: { tapMs: 300, tapMove: 4, touch: 2.5, pluckRest: 0.4, plucksPerSecond: 16, trail: 1.5, trailSpacing: 2, bendSpan: 0.6, stirFull: 150, stirEase: 0.25 },
   elderLook: { darken: 0.55, ringSlow: 3.5, ringBig: 2.5, haloBig: 2 },   // elders: darker pigment; slow, wide rings and halo while droning
   song: { ringPx: 9, ringZoom: 0.6, ringTime: 1.6, ringStart: 1.5, swell: 0.35, lift: 0.9,
           haloRadius: 2.5, haloMinPx: 3, haloMaxPx: 16, haloStrength: 0.45 },
@@ -381,7 +396,9 @@ const PARAMS = {
     salp: { rx: 3.3, ry: 2.3, pellets: 5, pelletFall: 7, pelletSpan: 70 },
     sunfish: { rx: 16, ry: 18, fin: 17, finBase: 5.5, sweep: 6, finBeat: 1.4, finTurn: 0.7, bob: 0.8, pectoral: 2.6, gulp: 1.8 },
     // Krill are the grazer field made visible: giants next to the cells, so only a sparse share of the swarm is drawn
-    krill: { zFrom: 0.3, zSpan: 0.6, coverage: 0.25, len: 8, thick: 0.15, curl: 0.12, flick: 0.35,
+    // hungry: share still drawn where there is no food (swarms move off empty water); foodFull: biomass per node
+    // for a feeding swarm; fedTau: s to follow the food
+    krill: { hungry: 0.2, foodFull: 0.5, fedTau: 10, zFrom: 0.3, zSpan: 0.6, coverage: 0.25, len: 8, thick: 0.15, curl: 0.12, flick: 0.35,
              feelers: 0.95, legBeat: 3, swimBeat: 9, glide: 0.45, wander: 8, dartEvery: 4.5, dartDist: 7, dartTime: 0.6 },
   },
   murk: { from: 0.8, full: 3 },         // bloom biomass summed down the upper column: rays fade in murky water
@@ -1888,6 +1905,7 @@ function emitNote(w, c, step, last, final, phrase, startled, stretch) {
     sh.release = V.startle.release;
   }
   if (!last && !startled && sh.soft > 0 && w.music.elders.length && steadied(w, c)) {
+    sh.steady = true;
     sh.release *= 1 + V.drone.steadyHold * sh.soft;
     sh.attack *= 1 + V.drone.steadyAttack * sh.soft;
   }
@@ -1899,7 +1917,7 @@ function emitNote(w, c, step, last, final, phrase, startled, stretch) {
   m.onsets++;
   m.notes.push({
     id: m.nextNote++, phrase, tick: w.tick, cell: c.id, c, midi, pc: midi % 12, x: c.x, y: c.y, timbre: c.g.timbre,
-    attack: sh.attack, release: sh.release, soft: sh.soft, dino: sh.dino, glass: sh.glass, last, startled: !!startled, muffle,
+    attack: sh.attack, release: sh.release, soft: sh.soft, dino: sh.dino, glass: sh.glass, last, startled: !!startled, muffle, steady: !!sh.steady,
   });
 }
 
@@ -1973,15 +1991,16 @@ function startAudio() {
   const bus = gain(1), lp = ctx.createBiquadFilter();
   lp.type = 'lowpass'; lp.frequency.value = A.busCutoff; lp.Q.value = 0.5;
   bus.connect(lp); lp.connect(master); lp.connect(verbIn); lp.connect(delayIn);
-  const wet = gain(1);
+  const wet = gain(1), stirIn = gain(0.0001);   // stirIn: the hand stirring the water into echoes and reverb
   wet.connect(verb);
+  lp.connect(stirIn); stirIn.connect(delay); stirIn.connect(verb);
 
   const Am = A.ambience, amb = gain(Am.gain), ambWet = gain(Am.wet);
   amb.connect(master); amb.connect(ambWet); ambWet.connect(verb);
   const noise = ctx.createBuffer(1, Math.floor(Am.noiseSeconds * ctx.sampleRate), ctx.sampleRate), nrng = makeRng(0x5ea);
   const nd = noise.getChannelData(0);
   for (let i = 0; i < nd.length; i++) nd[i] = nrng.next() * 2 - 1;
-  Object.assign(audio, { ctx, master, bendLP, bendShelf, bus, wet, lp, fb, delayIn, verbIn, amb, noise, waves: buildWaves(ctx), started: true });
+  Object.assign(audio, { ctx, master, bendLP, bendShelf, stirIn, bus, wet, lp, fb, delay, delayIn, verbIn, amb, noise, waves: buildWaves(ctx), started: true });
   if (ctx.state !== 'running') ctx.resume();
 }
 
@@ -1998,7 +2017,6 @@ function playDrone(n) {
   padA.setPeriodicWave(audio.waves[0]); padA.frequency.value = f * 2; padA.detune.value = Dr.detune;
   padB.setPeriodicWave(audio.waves[0]); padB.frequency.value = f * 3; padB.detune.value = -Dr.detune;
   const subG = ctx.createGain(), padG = ctx.createGain(), filt = ctx.createBiquadFilter(), env = ctx.createGain();
-  subG.gain.value = 1;
   padG.gain.value = Dr.pad / Dr.gain;
   filt.type = 'lowpass'; filt.Q.value = 0.5;
   filt.frequency.setValueAtTime(Dr.cutLow, t0);
@@ -2011,17 +2029,25 @@ function playDrone(n) {
   const dry = ctx.createGain(), wet = ctx.createGain();
   dry.gain.value = 1 - Dr.wet;
   wet.gain.value = Dr.wet;
-  sub.connect(subG); padA.connect(padG); padB.connect(padG);
+  const beat = ctx.createOscillator(), bloom = ctx.createOscillator(), bloomEnv = ctx.createGain();
+  beat.frequency.value = f + A.droneBeat;                                    // a second sub, slowly beating
+  bloom.setPeriodicWave(audio.waves[0]); bloom.frequency.value = f * 4;      // two octaves up, blooming late
+  const bAt = t0 + (n.attack + n.release) * A.droneBloomAt;
+  bloomEnv.gain.setValueAtTime(0.0001, t0);
+  bloomEnv.gain.linearRampToValueAtTime(A.droneBloom / Dr.gain, bAt);
+  bloomEnv.gain.exponentialRampToValueAtTime(0.0001, end);
+  sub.connect(subG); beat.connect(subG); padA.connect(padG); padB.connect(padG); bloom.connect(bloomEnv); bloomEnv.connect(filt);
+  subG.gain.value = 0.6;
   subG.connect(env); padG.connect(filt); filt.connect(env);
   let out = env;
   if (pan) { pan.pan.value = (n.x / W * 2 - 1) * Dr.pan; env.connect(pan); out = pan; }
   out.connect(dry); out.connect(wet);
   dry.connect(audio.bus); wet.connect(audio.wet);
-  for (const o of [sub, padA, padB]) { o.start(t0); o.stop(end + 0.05); }
+  for (const o of [sub, beat, padA, padB, bloom]) { o.start(t0); o.stop(end + 0.05); }
   audio.drones++;
   audio.played++;
   sub.onended = () => {
-    for (const node of [sub, padA, padB, subG, padG, filt, env, pan, dry, wet]) if (node) node.disconnect();
+    for (const node of [sub, beat, padA, padB, bloom, bloomEnv, subG, padG, filt, env, pan, dry, wet]) if (node) node.disconnect();
     audio.drones--;
   };
 }
@@ -2031,9 +2057,10 @@ function playNote(n) {
   if (audio.active >= A.maxNodes) return;
   const s = n.soft, d = n.dino, g = n.glass, mix = (k) => s * Pt.soft[k] + d * Pt.dino[k] + g * Pt.glass[k];
   const depth = clamp(n.y / (H - PARAMS.world.floor), 0, 1), wetK = (A.wetMin + (A.wetMax - A.wetMin) * depth) * (n.startled ? A.startleDry : 1);
-  const t0 = ctx.currentTime + A.lookahead, end = t0 + n.attack + n.release;
+  const hv = hash01(n.id * 7 + 3) * 2 - 1, ht = hash01(n.id * 7 + 4);   // this note's own small variations
+  const t0 = ctx.currentTime + A.lookahead + ht * A.humanTime, end = t0 + n.attack + n.release;
   const level = s * A.level.soft + d * A.level.dino + g * A.level.glass;
-  const peak = A.voiceGain * level * (1 - A.depthQuiet * depth) * (n.last ? A.lastGain : 1) * (n.startled ? A.startleGain : 1);
+  const peak = A.voiceGain * (1 + A.humanGain * hv) * level * (1 - A.depthQuiet * depth) * (n.last ? A.lastGain : 1) * (n.startled ? A.startleGain : 1);
   const freq = 440 * Math.pow(2, (n.midi - 69) / 12);
   const wave = audio.waves[Math.round(n.timbre * (audio.waves.length - 1))];
 
@@ -2050,8 +2077,13 @@ function playNote(n) {
 
   const filt = ctx.createBiquadFilter();
   filt.type = 'lowpass';
-  filt.frequency.value = (s * A.cutoff.soft + d * A.cutoff.dino + g * A.cutoff.glass) * (n.last ? 0.6 : 1)
-    * (1 - PARAMS.voices.muffle.cutoff * n.muffle) * (n.startled ? A.startleBright : 1);
+  const cut = (s * A.cutoff.soft + d * A.cutoff.dino + g * A.cutoff.glass) * (n.last ? 0.6 : 1)
+    * (1 - PARAMS.voices.muffle.cutoff * n.muffle) * (n.startled ? A.startleBright : 1) * (1 + A.humanBright * hv);
+  if (s > 0.5) {   // soft pads breathe: the filter opens through the swell and closes through the fade
+    filt.frequency.setValueAtTime(cut * A.breathLow, t0);
+    filt.frequency.linearRampToValueAtTime(cut, t0 + n.attack);
+    filt.frequency.exponentialRampToValueAtTime(cut * A.breathEnd, end);
+  } else filt.frequency.value = cut;
   filt.Q.value = 0.3;
   const env = ctx.createGain();
   env.gain.setValueAtTime(0.0001, t0);
@@ -2066,6 +2098,16 @@ function playNote(n) {
   if (pan) { pan.pan.value = (n.x / W * 2 - 1) * A.pan; env.connect(pan); out = pan; }
   out.connect(dry); out.connect(wet);
   dry.connect(audio.bus); wet.connect(audio.wet);
+  let shim = null, shimEnv = null;
+  if (n.steady) {   // a steadied pad shimmers an octave up, swelling in late
+    shim = ctx.createOscillator(); shimEnv = ctx.createGain();
+    shim.setPeriodicWave(wave); shim.frequency.value = freq * 2; shim.detune.value = A.shimmerDetune;
+    shimEnv.gain.setValueAtTime(0.0001, t0);
+    shimEnv.gain.linearRampToValueAtTime(A.shimmer, t0 + n.attack * A.shimmerLate);
+    shimEnv.gain.exponentialRampToValueAtTime(0.0001, end);
+    shim.connect(shimEnv); shimEnv.connect(filt);
+    shim.start(t0); shim.stop(end + 0.05);
+  }
   let lfo = null, lfoDepth = null;
   if (s > 0.3) {   // soft cells breathe: a slow vibrato at the note's own rate
     const V = A.vibrato;
@@ -2081,7 +2123,7 @@ function playNote(n) {
   audio.active++;
   audio.played++;
   osc.onended = () => {
-    for (const node of [osc, twin, twinEnv, filt, env, pan, dry, wet, lfo, lfoDepth]) if (node) node.disconnect();
+    for (const node of [osc, twin, twinEnv, filt, env, pan, dry, wet, lfo, lfoDepth, shim, shimEnv]) if (node) node.disconnect();
     audio.active--;
   };
 }
@@ -2114,6 +2156,8 @@ function audioWeather(w, now) {
   const t = audio.ctx.currentTime, glide = (param, v) => { param.setValueAtTime(param.value, t); param.linearRampToValueAtTime(v, t + Wt.update); };
   glide(audio.lp.frequency, (Wt.dark + (Wt.bright - Wt.dark) * w.surfaceLight) * (1 - shadow));
   glide(audio.fb.gain, Wt.echoCalm + (Wt.echoStorm - Wt.echoCalm) * w.wind);
+  const Fl = PARAMS.audio.flutter;
+  glide(audio.delay.delayTime, PARAMS.audio.delayTime * (1 + Fl.depth * (0.6 * Math.sin(waterT * Fl.rate) + 0.4 * Math.sin(waterT * Fl.rate2 + 1.3))));
   glide(audio.delayIn.gain, Wt.sendCalm + (Wt.sendStorm - Wt.sendCalm) * w.wind);
   glide(audio.verbIn.gain, Wt.roomClear + (Wt.roomBloom - Wt.roomClear) * clamp(bio / Wt.bloomFull, 0, 1));
 }
@@ -2165,9 +2209,30 @@ function bubbleSound(x, size, seep) {
   osc.onended = () => { for (const node of [osc, g, pan]) if (node) node.disconnect(); };
 }
 
+// Krill crackle: a train of tiny bandpassed noise clicks
+function krillClicks(x) {
+  const K = PARAMS.audio.krill, ctx = audio.ctx, n = K.trainMin + Math.floor(ambRng.next() * (K.trainMax - K.trainMin + 1));
+  const f = K.freqMin + (K.freqMax - K.freqMin) * ambRng.next();
+  for (let i = 0; i < n; i++) {
+    const t0 = ctx.currentTime + 0.02 + i * K.gap * (0.7 + 0.6 * ambRng.next());
+    const src = ctx.createBufferSource(), bp = ctx.createBiquadFilter(), g = ctx.createGain();
+    const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+    src.buffer = audio.noise;
+    bp.type = 'bandpass'; bp.frequency.value = f * (0.9 + 0.2 * ambRng.next()); bp.Q.value = K.q;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.linearRampToValueAtTime(K.gain * (0.6 + 0.4 * ambRng.next()), t0 + 0.001);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + K.dur);
+    src.connect(bp); bp.connect(g);
+    if (pan) { pan.pan.value = clamp((x / W * 2 - 1) * 0.8 + (ambRng.next() - 0.5) * 0.3, -1, 1); g.connect(pan); pan.connect(audio.amb); } else g.connect(audio.amb);
+    src.start(t0, ambRng.next() * (audio.noise.duration - 0.1));
+    src.stop(t0 + K.dur + 0.02);
+    src.onended = () => { for (const node of [src, bp, g, pan]) if (node) node.disconnect(); };
+  }
+}
+
 // Each layer schedules its next overlapping event from the state of the world
 const ambRng = makeRng(0xa3b1e);
-const ambNext = { swell: 0, hum: 0, plume: 0, school: 0 };
+const ambNext = { swell: 0, hum: 0, plume: 0, school: 0, krill: 0 };
 function audioAmbience(w) {
   if (!audio.started || audio.muted) return;
   const Am = PARAMS.audio.ambience, t = audio.ctx.currentTime, wind = w.wind, r = () => ambRng.next();
@@ -2188,6 +2253,11 @@ function audioAmbience(w) {
     noiseEvent(S.dur, S.gain, 'lowpass', S.freq, S.q, pl.x / W * 2 - 1, S.freqEnd);
     ambNext.plume = t + S.every;
   }
+  if (krillSeen.n > 0 && t >= ambNext.krill) {   // the swarm's crackle, saturating with its size
+    const K = PARAMS.audio.krill, rate = K.rate * (1 - Math.exp(-krillSeen.n / K.half));
+    krillClicks(krillSeen.x / krillSeen.n);
+    ambNext.krill = t + (-Math.log(1 - r() * 0.999)) / rate;
+  } else if (!krillSeen.n) ambNext.krill = t;
   const school = w.visitors.find((v) => v.kind === 'sardines' && v.x > -30 && v.x < W + 30);
   if (school && t >= ambNext.school) {           // a school's whoosh as it sweeps by
     const S = Am.school, up = r() < 0.5;
@@ -2203,6 +2273,14 @@ function setBend(b, secs) {
   const to = (param, v) => { param.setValueAtTime(param.value, t); param.linearRampToValueAtTime(v, t + secs); };
   to(audio.bendLP.frequency, Bd.open * Math.pow(2, Math.min(0, b) * Bd.closeOctaves));
   to(audio.bendShelf.gain, Math.max(0, b) * Bd.openDb);
+}
+
+// The hand stirs the water: k 0..1 of swirl, reached in secs
+function setStir(k, secs) {
+  if (!audio.started) return;
+  const g = audio.stirIn.gain, t = audio.ctx.currentTime;
+  g.setValueAtTime(g.value, t);
+  g.linearRampToValueAtTime(Math.max(0.0001, k * PARAMS.audio.bend.stir), t + secs);
 }
 
 // A cell plucked by the finger sounds its own note at once, outside the budget (the caller caps the rate)
@@ -3522,18 +3600,31 @@ function krillAt(L, h, ta) {
 }
 
 let krillFacing = new Map();   // id -> last facing, so a krill doesn't flip on every tiny reversal
+// Krill gather where they are eating: hungry swarms thin out, so the water clears after a die-off
+// even while the grazing pressure lingers. Smoothed per node so they come and go over seconds.
+const krillFed = new Float64Array(PARAMS.grid.cols * PARAMS.grid.rows).fill(1);
+const krillSeen = { n: 0, x: 0 };
+let krillTick = -1;
 function drawKrill(w, ta) {
   const L = PARAMS.look.krill, { cols, rows } = PARAMS.grid, Z = w.fields.graz, z = cam.zoom;
+  const dS = krillTick < 0 ? 1 : clamp((w.tick - krillTick) * TICK_DT / L.fedTau, 0, 1);
+  krillTick = w.tick;
+  for (let n = 0; n < krillFed.length; n++) {
+    const fed = L.hungry + (1 - L.hungry) * smoothstep(0, L.foodFull, w.fields.bio[n]);
+    krillFed[n] += (fed - krillFed[n]) * dS;
+  }
+  krillSeen.n = 0; krillSeen.x = 0;
   const rose = rampBase(ROSE), green = rampBase(GREEN), ice = rampBase(LIGHTBLUE);
   const dark = 1 - smoothstep(PARAMS.drift.darkLo, PARAMS.drift.darkHi, w.surfaceLight);
   const x0 = cam.x - 20, y0 = cam.y - 20, x1 = cam.x + W / z + 20, y1 = cam.y + H / z + 20;
   for (let j = 0; j < rows; j++) {
     for (let i = 0; i < cols; i++) {
-      const node = j * cols + i, pres = clamp((Z[node] - L.zFrom) / L.zSpan, 0, 1) * L.coverage;
+      const node = j * cols + i, pres = clamp((Z[node] - L.zFrom) / L.zSpan, 0, 1) * L.coverage * krillFed[node];
       if (hash01(node * 91 + 7) >= pres) continue;
       const h = node * 17, p = krillAt(L, h, ta), q = krillAt(L, h, ta - 0.15);
       const cx = (i + 0.5) * GRID_W + p.x, cy = (j + 0.5) * GRID_H + p.y;
       if (cx < x0 || cx > x1 || cy < y0 || cy > y1) continue;
+      krillSeen.n++; krillSeen.x += cx;
       const vx = p.x - q.x, vy = p.y - q.y;
       let dir = krillFacing.get(node) || (hash01(h) < 0.5 ? -1 : 1);
       if (Math.abs(vx) > 0.15) dir = vx > 0 ? 1 : -1;
@@ -3927,9 +4018,10 @@ function render(w, now) {
 
 // ===== Input =====
 // One finger or mouse drag pans, two fingers pinch-zoom, the mouse wheel zooms at the cursor.
-// The hand in the water: a tap scatters cells (any zoom); at zoom 1 a drag strums the cells it passes through,
-// drags the water along, and its sideways travel bends the master filter until the finger lifts.
-const input = { lastActivity: 0, pointers: new Map(), pinch: null, down: null, bend: 0, plucks: 0, plucksAt: 0 };
+// The hand in the water: a tap scatters cells (any zoom); at zoom 1 a drag strums the cells it passes through and
+// drags the water along; moving toward the surface opens the master filter, toward the deep closes it, and sideways
+// speed stirs the sound into the echoes, until the finger lifts.
+const input = { lastActivity: 0, pointers: new Map(), pinch: null, down: null, bend: 0, stir: 0, plucks: 0, plucksAt: 0 };
 const trail = [];
 
 const toWorld = (p) => ({ x: cam.x + p.x / cam.zoom, y: cam.y + p.y / cam.zoom });
@@ -4003,8 +4095,10 @@ function setupInput() {
         world.inputs.push({ kind: 'wake', x: b.x, y: b.y, vx: (b.x - a.x) / dt, vy: (b.y - a.y) / dt });
         const T = PARAMS.touch, steps = Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / T.trailSpacing);
         for (let i = 1; i <= steps; i++) trail.push({ x: a.x + (b.x - a.x) * i / steps, y: a.y + (b.y - a.y) * i / steps, t: now });
-        input.bend = clamp(input.bend + (b.x - a.x) / (W * T.bendSpan), -1, 1);
+        input.bend = clamp(input.bend - (b.y - a.y) / (H * T.bendSpan), -1, 1);   // toward the light opens, the deep closes
         setBend(input.bend, PARAMS.audio.bend.glide);
+        input.stir += (clamp(Math.abs(b.x - a.x) / dt / T.stirFull, 0, 1) - input.stir) * T.stirEase;   // sideways speed stirs
+        setStir(input.stir, PARAMS.audio.bend.glide);
       } else panBy(p.x - prev.x, p.y - prev.y);
     }
   });
@@ -4016,7 +4110,10 @@ function setupInput() {
         world.inputs.push({ kind: 'tap', x: q.x, y: q.y });
       }
       input.down = null;
-      if (input.bend !== 0) { input.bend = 0; setBend(0, PARAMS.audio.bend.back); }   // the water forgets the hand
+      if (input.bend !== 0 || input.stir !== 0) {   // the water forgets the hand
+        input.bend = 0; input.stir = 0;
+        setBend(0, PARAMS.audio.bend.back); setStir(0, PARAMS.audio.bend.back);
+      }
     }
     input.pointers.delete(e.pointerId);
     if (input.pointers.size < 2) input.pinch = null;

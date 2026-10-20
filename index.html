@@ -5401,9 +5401,12 @@ async function init() {
   if (opts.kept && window.indexedDB) {
     try {
       keeper.db = await openStore();
-      found = await loadWorld(keeper.db);
       if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
-    } catch (e) { keeper.db = null; found = null; }   // no storage (private window, blocked): a world for this visit only
+    } catch (e) { keeper.db = null; }   // no storage (private window, blocked): a world for this visit only
+    if (keeper.db) {
+      try { found = await loadWorld(keeper.db); }
+      catch (e) { found = null; await storeClear(keeper.db).catch(() => {}); }   // a save that cannot be read: new water, still kept
+    }
   }
   if (found) {
     world = found.world;

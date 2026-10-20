@@ -179,12 +179,13 @@ const PARAMS = {
     max: 16, rate: 6, burst: 14, lockedFull: 3, lockCos: 0.9, lonerRoom: 1,
     start: 0.04, join: 0.85, joinWindow: 0.5,          // start chance per flash when thriving; join chance; s
     minEnergy: 0.25, thriveFull: 0.12, restFloor: 0.15,
-    // Envelope by form (s, small..big): soft flagellates swell and breathe, dinoflagellates are plucked wood,
-    // diatoms are struck glass that rings. Inner notes of a phrase are shorter; a last note lingers.
+    // Envelope by form (s, small..big): soft flagellates from a felt piano's strike (small) to a pad's slow swell (big),
+    // dinoflagellates struck wood or a plucked string (strings ring longer: release x string), diatom glass from a
+    // glockenspiel to a vibraphone. Inner notes of a phrase are shorter; a last note lingers.
     shape: {
-      soft: { attack: [0.2, 0.6], release: [2.5, 4] },
-      dino: { attack: [0.006, 0.02], release: [0.9, 2.2] },
-      glass: { attack: [0.004, 0.012], release: [3, 6] },
+      soft: { attack: [0.008, 0.6], release: [2.5, 5] },
+      dino: { attack: [0.003, 0.008], release: [0.9, 2] }, string: 1.6,
+      glass: { attack: [0.002, 0.006], release: [2.5, 6] },
       inner: 0.55, lastRelease: 7,
     },
     // Startle: cells brushed by a passing school (or a salp chain or the sunfish) flash and blurt a short, high,
@@ -203,12 +204,22 @@ const PARAMS = {
   // The ecosystem voice follows the form, as the sprite does; deeper notes are quieter and wetter.
   audio: {
     master: 0.7, voiceGain: 0.085, lastGain: 0.6, depthQuiet: 0.5, wetMin: 0.2, wetMax: 0.7,
-    level: { soft: 0.8, dino: 1.15, glass: 0.9 },     // plucks are short, so they sit a little louder
-    cutoff: { soft: 1500, dino: 2400, glass: 3000 }, busCutoff: 3400,
+    busCutoff: 3400,
+    // Instruments, blended by form as the sprites are: soft flagellates a felt piano (small) melting into a breathing
+    // pad (big, or steadied by an elder); dinoflagellates wood (marimba) or a plucked string, by lineage form; diatom
+    // glass a glockenspiel (small) or a vibraphone with its slow tremolo (big). Each is a few partials
+    // [frequency ratio, gain, share of the release it lasts]: higher partials fade first, as in struck and plucked things.
+    // level: loudness; cut: lowpass at the strike, at the top of the swell, at the end.
+    instruments: {
+      piano: { level: 0.9, cut: [3200, 3200, 700], partials: [[1, 1, 1], [2.002, 0.45, 0.65], [3.006, 0.22, 0.45], [4.012, 0.12, 0.3]] },
+      pad: { level: 0.75, cut: [520, 1500, 750] },
+      wood: { level: 1.2, cut: [2800, 2800, 1300], partials: [[1, 1, 1], [3.93, 0.32, 0.18], [9.2, 0.07, 0.06]] },
+      string: { level: 0.95, cut: [4800, 4800, 650], partials: [[1, 1, 1], [2, 0.5, 0.7], [3, 0.3, 0.5], [4, 0.18, 0.35], [5, 0.1, 0.25]] },
+      glock: { level: 0.55, cut: [5200, 5200, 2600], partials: [[1, 1, 1], [2.76, 0.42, 0.42], [5.4, 0.2, 0.22], [8.93, 0.09, 0.12]] },
+      vibe: { level: 0.9, cut: [4200, 4200, 1800], partials: [[1, 1, 1], [4, 0.26, 0.3], [10, 0.05, 0.08]], tremolo: 4.6, tremDepth: 0.35 },
+    },
+    padTwin: 1.006, padTwinGain: 0.6, partialMaxHz: 12000, steadyPad: 0.8,   // steadied soft notes lean this far toward the pad
     waves: 12, harmonics: 16, softEven: 0.15, glassBright: 0.25,   // wave table along the timbre gene, built once
-    // Partner oscillator per family: [frequency ratio, gain, how much of the release it lasts]
-    partner: { soft: { ratio: 1.006, gain: 0.6, decay: 1 }, dino: { ratio: 3.98, gain: 0.35, decay: 0.25 }, glass: { ratio: 2.756, gain: 0.4, decay: 0.45 } },
-    partnerMaxHz: 9000,
     startleGain: 0.7, startleDry: 0.5, startleBright: 1.3,
     // Elder drones: a sine sub with two soft pad partials (octave and twelfth, detuned apart) under a filter that
     // opens through the swell and closes through the long fade
@@ -236,10 +247,9 @@ const PARAMS = {
     droneBeat: 0.22, droneBloom: 0.035, droneBloomAt: 0.6,
     drone: { gain: 0.2, pad: 0.06, cutLow: 160, cutHigh: 950, detune: 7, wet: 0.55, pan: 0.35, maxNodes: 4 },   // startle blurts: a little quieter, drier and brighter
     vibrato: { rateMin: 0.15, rateMax: 0.45, cents: 7 },
-    // Richer voices: soft notes' filter breathes (from breathLow of its cutoff, open at the top of the swell, back to
-    // breathEnd); steadied pads add a shimmer an octave up that swells in late; every note varies a little in
+    // Richer voices: steadied pads add a shimmer an octave up that swells in late; every note varies a little in
     // loudness and brightness (louder is brighter) and timing, so nothing sounds stamped.
-    breathLow: 0.35, breathEnd: 0.5, shimmer: 0.22, shimmerDetune: 5, shimmerLate: 2,
+    shimmer: 0.22, shimmerDetune: 5, shimmerLate: 2,
     humanGain: 0.15, humanBright: 0.25, humanTime: 0.015,   // soft cells' slow breathing, each note at its own rate
     // The world as macros, eased every update s: brightness follows daylight, echoes follow the sea state (long in
     // glassy calm, broken up by wind), the room follows bloom density, and visitors in the water cast an audible shadow.
@@ -280,7 +290,8 @@ const PARAMS = {
   dino: {
     from: 0.22, full: 0.34, fade: 0.48, gone: 0.58,
     forms: ['alexandrium', 'dinophysis', 'tripos', 'prorocentrum'],
-    chainForms: ['alexandrium', 'tripos'],   // these build short chains; Dinophysis and Prorocentrum live single
+    chainForms: ['alexandrium', 'tripos'],
+    stringForms: ['dinophysis', 'tripos'],   // these sound as plucked strings; Alexandrium and Prorocentrum as wood   // these build short chains; Dinophysis and Prorocentrum live single
     scale: 1.6,                         // drawn this much larger than the size gene's radius (dinoflagellates are big cells)
     detailR: 3, groove: 0.09, grooveMin: 0.5, spiral: 0.18, sulcus: 0.55,
     alexandrium: { a: 1.0, b: 0.95, cingulum: 0, plates: 0.05, platesFromR: 6 },
@@ -1608,13 +1619,14 @@ function notePitch(m, c, step) {
 // Envelope by form, blended continuously: soft cells swell slowly and breathe, dinoflagellates are plucked wood,
 // diatoms are struck glass that rings. Bigger cells are slower. Inner notes of a phrase are shorter.
 function voiceShape(c, last, final) {
-  const S = PARAMS.voices.shape, f = formWeights(c.g.timbre), b = looksBig(c);
-  const mix = (k) => f.soft * (S.soft[k][0] + (S.soft[k][1] - S.soft[k][0]) * b)
-                   + f.dino * (S.dino[k][0] + (S.dino[k][1] - S.dino[k][0]) * b)
-                   + f.glass * (S.glass[k][0] + (S.glass[k][1] - S.glass[k][0]) * b);
-  const attack = mix('attack');
-  const release = last ? S.lastRelease : mix('release') * (final ? 1 : S.inner);
-  return { attack, release, soft: f.soft, dino: f.dino, glass: f.glass };
+  // Within its family the size gene picks the instrument: felt piano .. pad, glockenspiel .. vibraphone
+  const S = PARAMS.voices.shape, f = formWeights(c.g.timbre), [lo, hi] = GENES.size, b = (c.g.size - lo) / (hi - lo);
+  const string = f.dino > 0 && PARAMS.dino.stringForms.includes(lineageDinoForm(c.spriteSeed)) ? 1 : 0;
+  const lerp = (r) => r[0] + (r[1] - r[0]) * b;
+  const attack = f.soft * lerp(S.soft.attack) + f.dino * lerp(S.dino.attack) + f.glass * lerp(S.glass.attack);
+  const rel = f.soft * lerp(S.soft.release) + f.dino * lerp(S.dino.release) * (1 + (S.string - 1) * string) + f.glass * lerp(S.glass.release);
+  const release = last ? S.lastRelease : rel * (final ? 1 : S.inner);
+  return { attack, release, soft: f.soft, dino: f.dino, glass: f.glass, big: b, string };
 }
 
 // Rule 7: the degree one step down, the same, or one step up, whichever sounds best against what the neighbours
@@ -1918,7 +1930,8 @@ function emitNote(w, c, step, last, final, phrase, startled, stretch) {
   m.onsets++;
   m.notes.push({
     id: m.nextNote++, phrase, tick: w.tick, cell: c.id, c, midi, pc: midi % 12, x: c.x, y: c.y, timbre: c.g.timbre,
-    attack: sh.attack, release: sh.release, soft: sh.soft, dino: sh.dino, glass: sh.glass, last, startled: !!startled, muffle, steady: !!sh.steady,
+    attack: sh.attack, release: sh.release, soft: sh.soft, dino: sh.dino, glass: sh.glass, big: sh.big, string: sh.string,
+    last, startled: !!startled, muffle, steady: !!sh.steady,
   });
 }
 
@@ -2053,39 +2066,27 @@ function playDrone(n) {
 }
 
 function playNote(n) {
-  const A = PARAMS.audio, ctx = audio.ctx, Pt = A.partner;
+  const A = PARAMS.audio, I = A.instruments, ctx = audio.ctx;
   if (audio.active >= A.maxNodes) return;
-  const s = n.soft, d = n.dino, g = n.glass, mix = (k) => s * Pt.soft[k] + d * Pt.dino[k] + g * Pt.glass[k];
+  const bs = 1 - (1 - n.big) * (1 - n.big);   // the mellow instrument (pad, vibraphone) takes over early as size grows
+  const b = n.steady ? Math.max(bs, A.steadyPad) : bs;
+  const mixW = { piano: n.soft * (1 - b), pad: n.soft * b, wood: n.dino * (1 - n.string), string: n.dino * n.string, glock: n.glass * (1 - b), vibe: n.glass * b };
   const depth = clamp(n.y / (H - PARAMS.world.floor), 0, 1), wetK = (A.wetMin + (A.wetMax - A.wetMin) * depth) * (n.startled ? A.startleDry : 1);
   const hv = hash01(n.id * 7 + 3) * 2 - 1, ht = hash01(n.id * 7 + 4);   // this note's own small variations
   const t0 = ctx.currentTime + A.lookahead + ht * A.humanTime, end = t0 + n.attack + n.release;
-  const level = s * A.level.soft + d * A.level.dino + g * A.level.glass;
+  let level = 0, c0 = 0, c1 = 0, c2 = 0;
+  for (const k in mixW) { const q = mixW[k], P = I[k]; level += q * P.level; c0 += q * P.cut[0]; c1 += q * P.cut[1]; c2 += q * P.cut[2]; }
+  const bright = (n.last ? 0.6 : 1) * (1 - PARAMS.voices.muffle.cutoff * n.muffle) * (n.startled ? A.startleBright : 1) * (1 + A.humanBright * hv);
   const peak = A.voiceGain * (1 + A.humanGain * hv) * level * (1 - A.depthQuiet * depth) * (n.last ? A.lastGain : 1) * (n.startled ? A.startleGain : 1);
   const freq = 440 * Math.pow(2, (n.midi - 69) / 12);
-  const wave = audio.waves[Math.round(n.timbre * (audio.waves.length - 1))];
 
-  const osc = ctx.createOscillator();
-  osc.setPeriodicWave(wave);
-  osc.frequency.value = freq;
-  const twin = ctx.createOscillator();
-  if (s > 0.5) twin.setPeriodicWave(wave); else twin.type = 'sine';
-  twin.frequency.value = Math.min(freq * mix('ratio'), A.partnerMaxHz);
-  const twinEnv = ctx.createGain(), twinEnd = t0 + n.attack + n.release * mix('decay');
-  twinEnv.gain.setValueAtTime(0.0001, t0);
-  twinEnv.gain.linearRampToValueAtTime(Math.max(0.0002, mix('gain')), t0 + n.attack);
-  twinEnv.gain.exponentialRampToValueAtTime(0.0001, twinEnd);
-
-  const filt = ctx.createBiquadFilter();
-  filt.type = 'lowpass';
-  const cut = (s * A.cutoff.soft + d * A.cutoff.dino + g * A.cutoff.glass) * (n.last ? 0.6 : 1)
-    * (1 - PARAMS.voices.muffle.cutoff * n.muffle) * (n.startled ? A.startleBright : 1) * (1 + A.humanBright * hv);
-  if (s > 0.5) {   // soft pads breathe: the filter opens through the swell and closes through the fade
-    filt.frequency.setValueAtTime(cut * A.breathLow, t0);
-    filt.frequency.linearRampToValueAtTime(cut, t0 + n.attack);
-    filt.frequency.exponentialRampToValueAtTime(cut * A.breathEnd, end);
-  } else filt.frequency.value = cut;
-  filt.Q.value = 0.3;
-  const env = ctx.createGain();
+  // Shared chain: lowpass (strike -> swell -> fade), tremolo stage, envelope, pan, dry and wet sends
+  const filt = ctx.createBiquadFilter(), trem = ctx.createGain(), env = ctx.createGain();
+  filt.type = 'lowpass'; filt.Q.value = 0.3;
+  filt.frequency.setValueAtTime(c0 * bright, t0);
+  filt.frequency.linearRampToValueAtTime(c1 * bright, t0 + n.attack);
+  filt.frequency.exponentialRampToValueAtTime(Math.max(60, c2 * bright), end);
+  trem.gain.value = 1;
   env.gain.setValueAtTime(0.0001, t0);
   env.gain.linearRampToValueAtTime(peak, t0 + n.attack);
   env.gain.exponentialRampToValueAtTime(0.0001, end);
@@ -2093,47 +2094,66 @@ function playNote(n) {
   const dry = ctx.createGain(), wet = ctx.createGain();
   dry.gain.value = 1 - wetK;
   wet.gain.value = wetK;
-  osc.connect(filt); twin.connect(twinEnv); twinEnv.connect(filt); filt.connect(env);
+  filt.connect(trem); trem.connect(env);
   let out = env;
   if (pan) { pan.pan.value = (n.x / W * 2 - 1) * A.pan; env.connect(pan); out = pan; }
   out.connect(dry); out.connect(wet);
   dry.connect(audio.bus); wet.connect(audio.wet);
-  let oct = null, octEnv = null;
-  if (n.octave && Math.abs(n.octave) > 0.05) {   // a plucked note gains an octave above or below, like a piano
-    oct = ctx.createOscillator(); octEnv = ctx.createGain();
-    oct.setPeriodicWave(wave); oct.frequency.value = freq * (n.octave > 0 ? 2 : 0.5);
-    octEnv.gain.value = Math.abs(n.octave) * A.bend.octave;
-    oct.connect(octEnv); octEnv.connect(filt);
-    oct.start(t0); oct.stop(end + 0.05);
+  const nodes = [filt, trem, env, pan, dry, wet], voices = [];
+
+  // One partial: its own swell and its own fade (a share of the release), into the shared filter
+  const voice = (ratio, gain, decay, wave, detune, late) => {
+    const f = freq * ratio;
+    if (f > A.partialMaxHz || gain < 0.01) return null;
+    const o = ctx.createOscillator(), e = ctx.createGain(), stop = t0 + n.attack + n.release * decay;
+    if (wave) o.setPeriodicWave(wave);
+    o.frequency.value = f;
+    if (detune) o.detune.value = detune;
+    e.gain.setValueAtTime(0.0001, t0);
+    e.gain.linearRampToValueAtTime(gain, t0 + n.attack * (late || 1));
+    e.gain.exponentialRampToValueAtTime(0.0001, stop);
+    o.connect(e); e.connect(filt);
+    o.start(t0); o.stop(stop + 0.05);
+    voices.push(o); nodes.push(e);
+    return o;
+  };
+  for (const k of ['piano', 'wood', 'string', 'glock', 'vibe']) {
+    const q = mixW[k];
+    if (q >= 0.04) for (const [r, g, d] of I[k].partials) voice(r, g * q, d);
   }
-  let shim = null, shimEnv = null;
-  if (n.steady) {   // a steadied pad shimmers an octave up, swelling in late
-    shim = ctx.createOscillator(); shimEnv = ctx.createGain();
-    shim.setPeriodicWave(wave); shim.frequency.value = freq * 2; shim.detune.value = A.shimmerDetune;
-    shimEnv.gain.setValueAtTime(0.0001, t0);
-    shimEnv.gain.linearRampToValueAtTime(A.shimmer, t0 + n.attack * A.shimmerLate);
-    shimEnv.gain.exponentialRampToValueAtTime(0.0001, end);
-    shim.connect(shimEnv); shimEnv.connect(filt);
-    shim.start(t0); shim.stop(end + 0.05);
-  }
-  let lfo = null, lfoDepth = null;
-  if (s > 0.3) {   // soft cells breathe: a slow vibrato at the note's own rate
-    const V = A.vibrato;
-    lfo = ctx.createOscillator();
+  const padWave = audio.waves[0];
+  if (mixW.pad >= 0.04) {   // the pad breathes: a detuned twin and a slow vibrato at the note's own rate
+    const a = voice(1, mixW.pad, 1, padWave), tw = voice(A.padTwin, mixW.pad * A.padTwinGain, 1, padWave), V = A.vibrato;
+    const lfo = ctx.createOscillator(), depthG = ctx.createGain();
     lfo.frequency.value = V.rateMin + (V.rateMax - V.rateMin) * hash01(n.id * 31 + 7);
-    lfoDepth = ctx.createGain();
-    lfoDepth.gain.value = V.cents * s;
-    lfo.connect(lfoDepth); lfoDepth.connect(osc.detune); lfoDepth.connect(twin.detune);
+    depthG.gain.value = V.cents;
+    lfo.connect(depthG);
+    if (a) depthG.connect(a.detune);
+    if (tw) depthG.connect(tw.detune);
     lfo.start(t0); lfo.stop(end + 0.05);
+    nodes.push(lfo, depthG);
   }
-  osc.start(t0); twin.start(t0);
-  osc.stop(end + 0.05); twin.stop(Math.min(end, twinEnd) + 0.05);
+  if (mixW.vibe >= 0.1) {   // the vibraphone's slow tremolo
+    const P = I.vibe, k = P.tremDepth * mixW.vibe / 2, lfo = ctx.createOscillator(), depthG = ctx.createGain();
+    lfo.frequency.value = P.tremolo * (0.9 + 0.2 * hash01(n.id * 13 + 5));
+    depthG.gain.value = k;
+    trem.gain.value = 1 - k;
+    lfo.connect(depthG); depthG.connect(trem.gain);
+    lfo.start(t0); lfo.stop(end + 0.05);
+    nodes.push(lfo, depthG);
+  }
+  if (n.octave && Math.abs(n.octave) > 0.05) voice(n.octave > 0 ? 2 : 0.5, Math.abs(n.octave) * A.bend.octave, 0.8);   // the hand's piano octave
+  if (n.steady) voice(2, A.shimmer, 1, padWave, A.shimmerDetune, A.shimmerLate);   // a steadied pad shimmers an octave up, late
+  if (!voices.length) { for (const node of nodes) if (node) node.disconnect(); return; }
   audio.active++;
   audio.played++;
-  osc.onended = () => {
-    for (const node of [osc, twin, twinEnv, filt, env, pan, dry, wet, lfo, lfoDepth, shim, shimEnv, oct, octEnv]) if (node) node.disconnect();
+  let left = voices.length;
+  const done = () => {
+    if (--left > 0) return;
+    for (const node of [...voices, ...nodes]) if (node) node.disconnect();
     audio.active--;
   };
+  for (const o of voices) o.onended = done;
 }
 
 // Drains the tick's note events. In time-lapse only a share of the phrases plays (about the real-time density),
@@ -2288,8 +2308,8 @@ let pluckId = 1;
 function pluck(w, c) {
   const m = w.music, sh = voiceShape(c, false, true), midi = notePitch(m, c, 0);
   const n = { id: 0x40000000 + pluckId++, phrase: 0, c, midi, pc: midi % 12, x: c.x, y: c.y, timbre: c.g.timbre,
-              attack: sh.attack, release: sh.release, soft: sh.soft, dino: sh.dino, glass: sh.glass, last: false, startled: false, muffle: 0,
-              octave: input.octave };   // the hand's sideways travel: an octave above (right) or below (left)
+              attack: sh.attack, release: sh.release, soft: sh.soft, dino: sh.dino, glass: sh.glass, big: sh.big, string: sh.string,
+              last: false, startled: false, muffle: 0, octave: input.octave };   // the hand's sideways travel: an octave above (right) or below (left)
   c.songAt = performance.now() + PARAMS.audio.lookahead * 1000; c.songAtk = n.attack; c.songRel = n.release; c.songLast = false; c.songDrone = false;
   c.glowTick = w.tick;
   if (audio.started && !audio.muted && audio.ctx.state === 'running') playNote(n);

@@ -325,7 +325,8 @@ const PARAMS = {
   // wake fading over trail s. Moving toward the surface opens the master filter, toward the deep closes it (bendSpan
   // of the column = full bend). Sideways works like a piano: travel right adds an octave above every plucked note,
   // travel left an octave below (octaveSpan of the column's width = full), only on the hand's own plucks.
-  touch: { tapMs: 300, tapMove: 4, touch: 2.5, pluckRest: 0.4, plucksPerSecond: 16, trail: 1.5, trailSpacing: 2, bendSpan: 0.6, octaveSpan: 0.5 },
+  touch: { tapMs: 300, tapMove: 4, touch: 2.5, pluckRest: 0.4, plucksPerSecond: 16, trail: 1.5, trailSpacing: 2, bendSpan: 0.6, octaveSpan: 0.5,
+           ripple: 1.6, rippleRings: 3, rippleGap: 0.28 },   // a tap's ripple: s for a ring to reach the scatter radius; rings, s apart
   elderLook: { darken: 0.55, ringSlow: 3.5, ringBig: 2.5, haloBig: 2 },   // elders: darker pigment; slow, wide rings and halo while droning
   song: { ringPx: 9, ringZoom: 0.6, ringTime: 1.6, ringStart: 1.5, swell: 0.35, lift: 0.9,
           haloRadius: 2.5, haloMinPx: 3, haloMaxPx: 16, haloStrength: 0.45 },
@@ -2765,6 +2766,34 @@ function drawTrail(now) {
   trail.length = k;
 }
 
+// ---- A tap's ripple: rings of light spreading out to the reach of the scatter, thinning as they go (render only) ----
+const ripples = [];
+function drawRipples(now) {
+  const T = PARAMS.touch, R = PARAMS.hand.radius, life = T.ripple + T.rippleGap * (T.rippleRings - 1);
+  let k = 0;
+  for (const q of ripples) {
+    const age = (now - q.t) / 1000;
+    if (age >= life) continue;
+    ripples[k++] = q;
+    const cx = toSX(q.x), cy = toSY(q.y);
+    for (let i = 0; i < T.rippleRings; i++) {
+      const a = (age - i * T.rippleGap) / T.ripple;
+      if (a <= 0 || a >= 1) continue;
+      const r = R * (1 - (1 - a) * (1 - a)) * (1 - 0.15 * i) * cam.zoom, fade = (1 - a) * (1 - 0.25 * i);
+      const steps = Math.max(12, Math.ceil(TAU * r * 1.5));
+      let px = -1e9, py = -1e9;
+      for (let n = 0; n < steps; n++) {
+        const th = n / steps * TAU, x = Math.round(cx + r * Math.cos(th)), y = Math.round(cy + r * Math.sin(th));
+        if ((x === px && y === py) || wb(x, y) >= fade) continue;
+        px = x; py = y;
+        lift(x, y);
+        if (i === 0 && a < 0.5) lift(x, y);   // the leading ring starts bright
+      }
+    }
+  }
+  ripples.length = k;
+}
+
 // ---- Bubbles ----
 const bubbles = [], bubbleRng = makeRng(0xb0bb1e);
 let bubbleT = -1;
@@ -4033,6 +4062,7 @@ function composeFrame(w, now) {
   updateBubbles(w, ta);
   drawBubbles();
   drawTrail(now);
+  drawRipples(now);
   drawParticles(P.near, 3000, ta, true);
   drawHud(w, now);
   drawListenHint();
@@ -4721,6 +4751,7 @@ function setupInput() {
       else if (tap) {   // a tap scatters the cells
         const q = toWorld(input.pointers.get(e.pointerId) || d);
         world.inputs.push({ kind: 'tap', x: q.x, y: q.y });
+        ripples.push({ x: q.x, y: q.y, t: performance.now() });
       }
       input.down = null;
       input.octave = 0;

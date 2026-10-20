@@ -171,6 +171,12 @@ const PARAMS = {
       glass: { attack: [0.004, 0.012], release: [3, 6] },
       inner: 0.55, lastRelease: 7,
     },
+    // Startle: cells brushed by a passing school (or a salp chain or the sunfish) flash and blurt a short, high,
+    // staccato note an octave up. Chance per second inside the visitor's reach (+reach units), one per refractory s.
+    startle: { reach: 8, rate: { sardines: 2.5, salps: 0.8, sunfish: 1.2 }, refractory: 3, attack: 0.004, release: 0.22, octaves: 1 },
+    // Grazers muffle: where the grazer field is dense, notes are duller and shorter, so heavy grazing sounds
+    // smothered before the die-off (field from..full; at full the cutoff and release shrink by these shares).
+    muffle: { from: 0.3, full: 1.5, cutoff: 0.6, release: 0.5 },
   },
 
   // ---- Everything below is visual or audible only; none of it feeds back into the simulation. ----
@@ -183,6 +189,7 @@ const PARAMS = {
     // Partner oscillator per family: [frequency ratio, gain, how much of the release it lasts]
     partner: { soft: { ratio: 1.006, gain: 0.6, decay: 1 }, dino: { ratio: 3.98, gain: 0.35, decay: 0.25 }, glass: { ratio: 2.756, gain: 0.4, decay: 0.45 } },
     partnerMaxHz: 9000,
+    startleGain: 0.7, startleDry: 0.5, startleBright: 1.3,   // startle blurts: a little quieter, drier and brighter
     vibrato: { rateMin: 0.15, rateMax: 0.45, cents: 7 },   // soft cells' slow breathing, each note at its own rate
     // The world as macros, eased every update s: brightness follows daylight, echoes follow the sea state (long in
     // glassy calm, broken up by wind), the room follows bloom density, and visitors in the water cast an audible shadow.
@@ -750,7 +757,7 @@ function createCell(w, x, y, g, energy, parentId, spriteSeed) {
     energy, held: 0, age: 0, lifespan: 0, vigor: 0,   // vigor: smoothed growth conditions, observed only
     theta: w.rng.next() * TAU, flashTick: -1000, dying: 0, grazed: false, eaten: null,
     pull: 0, nbrs: 0, locked: 0,                       // Kuramoto: sum of sin(theta_j - theta_i), neighbours, those in phase
-    deg: 0, noteTick: -1000, motif: null, bout: 0,     // scale degree (rule 7); last phrase began; lineage tune; flashes left to sing
+    deg: 0, noteTick: -1000, startleTick: -1000, motif: null, bout: 0,     // scale degree (rule 7); last phrase began; lineage tune; flashes left to sing
     lum: false,                                        // bioluminescent (Alexandrium only; inherited)
     la: null, lb: null, chainLen: 1, chainId: 0,       // chain links toward the head (la) and the tail (lb)
     head: null, kickScale: 1, kx: 0, ky: 0,            // the colony's head and its shared Brownian kick
@@ -1559,7 +1566,42 @@ function singAndListen(w) {
       if (sing) startPhrase(w, c);
     }
   }
+  if (w.visitors.length) startle(w);
   playPending(w);
+}
+
+// Startle: cells brushed by a visitor blurt a staccato note, if the budget allows
+function startle(w) {
+  const m = w.music, V = PARAMS.voices, St = V.startle, wait = St.refractory * PARAMS.time.tickRate;
+  for (const c of w.cells) {
+    if (c.dying || w.tick - c.startleTick < wait) continue;
+    let rate = 0;
+    for (const v of w.visitors) if (brushedBy(v, c)) rate = Math.max(rate, St.rate[v.kind]);
+    if (rate > 0 && m.rng.chance(rate * TICK_DT) && m.tokens >= 1 && m.ends.length < V.max) {
+      c.startleTick = w.tick;
+      m.tokens -= 1;
+      emitNote(w, c, 0, false, true, m.nextPhrase++, true);
+    }
+  }
+}
+
+function brushedBy(v, c) {
+  const Vs = PARAMS.visitors, r = PARAMS.voices.startle.reach;
+  if (v.kind === 'sardines') {
+    const dx = (c.x - v.x - v.dir * 4) / (Vs.sardines.rx + r), dy = (c.y - v.y) / (Vs.sardines.ry + r);
+    return dx * dx + dy * dy < 1;
+  }
+  if (v.kind === 'salps') {
+    const reach = Vs.salps.reach + r;
+    for (let b = 0; b < v.alive.length; b++) {
+      if (!v.alive[b]) continue;
+      const q = salpBarrel(v, b), dx = c.x - q.x, dy = c.y - q.y;
+      if (dx * dx + dy * dy < reach * reach) return true;
+    }
+    return false;
+  }
+  const reach = Vs.sunfish.r + r, dx = c.x - v.x, dy = c.y - v.y;
+  return dx * dx + dy * dy < reach * reach;
 }
 
 // The motif's notes fall on its rhythm grid across one period of the cell's own pulse: fast pulses, quick tunes
@@ -1631,15 +1673,23 @@ function bendStep(m, c, step) {
   return up < base ? step + 1 : step;
 }
 
-function emitNote(w, c, step, last, final, phrase) {
-  const m = w.music, sh = voiceShape(c, last, final), midi = notePitch(m, c, last ? step : bendStep(m, c, step));
+function emitNote(w, c, step, last, final, phrase, startled) {
+  const m = w.music, V = PARAMS.voices, Mu = V.muffle, sh = voiceShape(c, last, final);
+  let midi = notePitch(m, c, last || startled ? step : bendStep(m, c, step));
+  if (startled) {
+    midi += 12 * V.startle.octaves;
+    sh.attack = V.startle.attack;
+    sh.release = V.startle.release;
+  }
+  const muffle = smoothstep(Mu.from, Mu.full, sampleField(w.fields.graz, c.x, c.y));
+  sh.release *= 1 - Mu.release * muffle;
   m.ends.push(w.tick + Math.ceil((sh.attack + sh.release) * PARAMS.time.tickRate));
   m.sounding.push(midi % 12);
   m.recent.push(w.tick);
   m.onsets++;
   m.notes.push({
     id: m.nextNote++, phrase, tick: w.tick, cell: c.id, c, midi, pc: midi % 12, x: c.x, y: c.y, timbre: c.g.timbre,
-    attack: sh.attack, release: sh.release, soft: sh.soft, dino: sh.dino, glass: sh.glass, last,
+    attack: sh.attack, release: sh.release, soft: sh.soft, dino: sh.dino, glass: sh.glass, last, startled: !!startled, muffle,
   });
 }
 
@@ -1725,10 +1775,10 @@ function playNote(n) {
   const A = PARAMS.audio, ctx = audio.ctx, Pt = A.partner;
   if (audio.active >= A.maxNodes) return;
   const s = n.soft, d = n.dino, g = n.glass, mix = (k) => s * Pt.soft[k] + d * Pt.dino[k] + g * Pt.glass[k];
-  const depth = clamp(n.y / (H - PARAMS.world.floor), 0, 1), wetK = A.wetMin + (A.wetMax - A.wetMin) * depth;
+  const depth = clamp(n.y / (H - PARAMS.world.floor), 0, 1), wetK = (A.wetMin + (A.wetMax - A.wetMin) * depth) * (n.startled ? A.startleDry : 1);
   const t0 = ctx.currentTime + A.lookahead, end = t0 + n.attack + n.release;
   const level = s * A.level.soft + d * A.level.dino + g * A.level.glass;
-  const peak = A.voiceGain * level * (1 - A.depthQuiet * depth) * (n.last ? A.lastGain : 1);
+  const peak = A.voiceGain * level * (1 - A.depthQuiet * depth) * (n.last ? A.lastGain : 1) * (n.startled ? A.startleGain : 1);
   const freq = 440 * Math.pow(2, (n.midi - 69) / 12);
   const wave = audio.waves[Math.round(n.timbre * (audio.waves.length - 1))];
 
@@ -1745,7 +1795,8 @@ function playNote(n) {
 
   const filt = ctx.createBiquadFilter();
   filt.type = 'lowpass';
-  filt.frequency.value = (s * A.cutoff.soft + d * A.cutoff.dino + g * A.cutoff.glass) * (n.last ? 0.6 : 1);
+  filt.frequency.value = (s * A.cutoff.soft + d * A.cutoff.dino + g * A.cutoff.glass) * (n.last ? 0.6 : 1)
+    * (1 - PARAMS.voices.muffle.cutoff * n.muffle) * (n.startled ? A.startleBright : 1);
   filt.Q.value = 0.3;
   const env = ctx.createGain();
   env.gain.setValueAtTime(0.0001, t0);
@@ -1790,6 +1841,7 @@ function hearNotes(w) {
     if (keep < 1 && hash01(Math.imul(n.phrase, 0x9e3779b1)) >= keep) continue;
     const c = n.c;
     c.songAt = at; c.songAtk = n.attack; c.songRel = n.release; c.songLast = n.last;
+    if (n.startled) c.glowTick = w.tick;   // a startled cell flashes
     if (sound) playNote(n);
   }
   notes.length = 0;

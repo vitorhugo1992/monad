@@ -203,7 +203,7 @@ const PARAMS = {
   // ---- Everything below is visual or audible only; none of it feeds back into the simulation. ----
   // The ecosystem voice follows the form, as the sprite does; deeper notes are quieter and wetter.
   audio: {
-    master: 1.1, voiceGain: 0.085, lastGain: 0.6, depthQuiet: 0.5, wetMin: 0.2, wetMax: 0.7,
+    master: 1.5, voiceGain: 0.085, lastGain: 0.6, depthQuiet: 0.5, wetMin: 0.2, wetMax: 0.7,
     busCutoff: 3400,
     // Instruments, blended by form as the sprites are: soft flagellates a felt piano (small) melting into a breathing
     // pad (big, or steadied by an elder); dinoflagellates wood (marimba) or a plucked string, by lineage form; diatom
@@ -260,7 +260,9 @@ const PARAMS = {
     reverbSeconds: 4.5, reverbSend: 0.3, reverbDark: 0.6,
     delayTime: 0.43, delayFeedback: 0.3, delaySend: 0.1, delayCutoff: 1400,
     pan: 0.7, lookahead: 0.03, maxNodes: 20, muteRamp: 0.4,
-    comp: { threshold: -20, knee: 18, ratio: 2.5, attack: 0.05, release: 0.4 },
+    comp: { threshold: -24, knee: 18, ratio: 3.5, attack: 0.05, release: 0.4 },
+    out: 1.4,                                                              // after the compressor: louder on phone speakers
+    limit: { threshold: -2, knee: 0, ratio: 20, attack: 0.002, release: 0.2 },   // and a limiter so the peaks never clip
   },
   camera: { levels: [1, 1.5, 2, 3, 4, 6, 8], wheelStep: 1 },   // zoom 1 shows the whole column
   sprite: {
@@ -415,7 +417,7 @@ const PARAMS = {
              feelers: 0.95, legBeat: 3, swimBeat: 9, glide: 0.45, wander: 8, dartEvery: 4.5, dartDist: 7, dartTime: 0.6 },
   },
   murk: { from: 0.8, full: 3 },         // bloom biomass summed down the upper column: rays fade in murky water
-  hud: { x: 4, y: 290, line: 7, visibleMs: 6000, fadeMs: 2000, epitaphFade: 20, listenY: 200, listenVis: 1 },   // epitaph fades in over 20 simulated s; listen: the solid TAP TO LISTEN hint
+  hud: { x: 4, y: 290, line: 7, visibleMs: 6000, fadeMs: 2000, epitaphFade: 20, listenY: 200, listenVis: 1, music: { x: 155, y: 4 } },   // music: the music button, left of the notebook glyph   // epitaph fades in over 20 simulated s; listen: the solid TAP TO LISTEN hint
   debug: { syncEvery: 15, sampleEvery: 100, historyLength: 180, frameSamples: 120, graphY: 172, graphH: 48, mapX: 126, mapY: 6, mapCell: 2 },
   // Field notebook: the world's records behind one small glyph (top right, fades with the HUD). Observation only:
   // a row every sampleEvery simulated s for the whole life (when maxSamples fill up, every other row is dropped and
@@ -1996,8 +1998,11 @@ function startAudio() {
   const comp = ctx.createDynamicsCompressor();
   comp.threshold.value = A.comp.threshold; comp.knee.value = A.comp.knee; comp.ratio.value = A.comp.ratio;
   comp.attack.value = A.comp.attack; comp.release.value = A.comp.release;
-  comp.connect(ctx.destination);
-  const master = gain(audio.muted ? 0.0001 : A.master), bendLP = ctx.createBiquadFilter(), bendShelf = ctx.createBiquadFilter();
+  const out = gain(A.out), limit = ctx.createDynamicsCompressor();
+  limit.threshold.value = A.limit.threshold; limit.knee.value = A.limit.knee; limit.ratio.value = A.limit.ratio;
+  limit.attack.value = A.limit.attack; limit.release.value = A.limit.release;
+  comp.connect(out); out.connect(limit); limit.connect(ctx.destination);
+  const master = gain(A.master), bendLP = ctx.createBiquadFilter(), bendShelf = ctx.createBiquadFilter();
   bendLP.type = 'lowpass'; bendLP.frequency.value = A.bend.open; bendLP.Q.value = 0.7;
   bendShelf.type = 'highshelf'; bendShelf.frequency.value = A.bend.shelfHz; bendShelf.gain.value = 0;
   master.connect(bendLP); bendLP.connect(bendShelf); bendShelf.connect(comp);
@@ -2013,10 +2018,10 @@ function startAudio() {
   dark.type = 'lowpass'; dark.frequency.value = A.delayCutoff;
   delayIn.connect(delay); delay.connect(dark); dark.connect(fb); fb.connect(delay); dark.connect(master);
 
-  const bus = gain(1), lp = ctx.createBiquadFilter();
+  const bus = gain(audio.muted ? 0.0001 : 1), lp = ctx.createBiquadFilter();   // bus and wet carry the music only
   lp.type = 'lowpass'; lp.frequency.value = A.busCutoff; lp.Q.value = 0.5;
   bus.connect(lp); lp.connect(master); lp.connect(verbIn); lp.connect(delayIn);
-  const wet = gain(1);
+  const wet = gain(audio.muted ? 0.0001 : 1);
   wet.connect(verb);
 
   const Am = A.ambience, amb = gain(Am.gain), ambWet = gain(Am.wet);
@@ -2227,7 +2232,7 @@ function noiseEvent(dur, peak, type, freq, q, panX, freqEnd) {
 // A bubble's chirp: a small sine whose pitch rises as it rings down (smaller bubbles ring higher)
 let bubbleBudget = 0, bubbleBudgetAt = 0;
 function bubbleSound(x, size, seep) {
-  if (!audio.started || audio.muted) return;
+  if (!audio.started) return;
   const B = PARAMS.audio.ambience.bubble, ctx = audio.ctx, now = ctx.currentTime;
   bubbleBudget = Math.min(B.perSecond, bubbleBudget + (now - bubbleBudgetAt) * B.perSecond);
   bubbleBudgetAt = now;
@@ -2273,7 +2278,7 @@ function krillClicks(x) {
 const ambRng = makeRng(0xa3b1e);
 const ambNext = { swell: 0, hum: 0, plume: 0, school: 0, krill: 0 };
 function audioAmbience(w) {
-  if (!audio.started || audio.muted) return;
+  if (!audio.started) return;
   const Am = PARAMS.audio.ambience, t = audio.ctx.currentTime, wind = w.wind, r = () => ambRng.next();
   const lerp = (a, b, k) => a + (b - a) * k;
   if (t >= ambNext.swell) {   // the surface: soft and slow in calm water, loud, bright and quick in a storm
@@ -2326,12 +2331,16 @@ function pluck(w, c) {
   if (audio.started && !audio.muted && audio.ctx.state === 'running') playNote(n);
 }
 
+// The music button: the cells' notes, drones and plucks fade out or in; ambience and bubbles go on
 function setMuted(muted) {
   audio.muted = muted;
+  needsRender = true;
   if (!audio.ctx) return;
-  const g = audio.master.gain, t = audio.ctx.currentTime;
-  g.setValueAtTime(g.value, t);
-  g.linearRampToValueAtTime(muted ? 0.0001 : PARAMS.audio.master, t + PARAMS.audio.muteRamp);
+  const t = audio.ctx.currentTime;
+  for (const g of [audio.bus.gain, audio.wet.gain]) {
+    g.setValueAtTime(g.value, t);
+    g.linearRampToValueAtTime(muted ? 0.0001 : 1, t + PARAMS.audio.muteRamp);
+  }
 }
 
 // ===== Render =====
@@ -4018,8 +4027,26 @@ function drawHud(w, now) {
   drawText(Hd.x, Hd.y + Hd.line, 'T ' + clock(w.tick * TICK_DT), COL.FOAM, vis);
   drawText(Hd.x, Hd.y + Hd.line * 2, 'POP ' + pad(aliveCount(w), 3), rampBase(1) + HIGHLIGHT, vis);
   const speed = PARAMS.time.speeds[speedLevel];
-  drawText(Hd.x, Hd.y + Hd.line * 3, 'MAG ' + cam.zoom + 'X' + (speed > 1 ? '  TIME ' + speed + 'X' : '') + (audio.muted ? '  MUTE' : ''), COL.FOAM, vis);
+  drawText(Hd.x, Hd.y + Hd.line * 3, 'MAG ' + cam.zoom + 'X' + (speed > 1 ? '  TIME ' + speed + 'X' : '') + (audio.muted ? '  MUSIC OFF' : ''), COL.FOAM, vis);
 }
+
+// The music button, a beamed note beside the notebook glyph: shows with the HUD, crossed out while the music is off
+const NOTE_GLYPH = ['.######', '.#....#', '.#....#', '.#....#', '##...##', '##...##'];
+function drawMusicGlyph(now) {
+  const G = PARAMS.hud.music, vis = notebook.open ? 1 : hudVisibility(now);
+  if (vis <= 0) return;
+  for (const dx of [1, 0]) {
+    for (let j = 0; j < NOTE_GLYPH.length; j++) {
+      for (let i = 0; i < NOTE_GLYPH[j].length; i++) {
+        const x = G.x + i, y = G.y + j;
+        if (NOTE_GLYPH[j][i] !== '#' || (vis < 1 && bayer(x, y) >= vis)) continue;
+        put(x + dx, y + dx, dx ? COL.WATER : audio.muted ? COL.SLATE : COL.FOAM);
+      }
+    }
+  }
+  if (audio.muted) for (let k = 0; k < 8; k++) if (vis >= 1 || bayer(G.x + k, G.y + 6 - k) < vis) put(G.x - 1 + k, G.y + 6 - k, rampBase(ROSE) + HIGHLIGHT);
+}
+const onMusicGlyph = (p) => p.x >= PARAMS.hud.music.x - 3 && p.x < PARAMS.hud.music.x + 8 && p.y >= PARAMS.hud.music.y - 4 && p.y < PARAMS.hud.music.y + 11;
 
 // Browsers keep sound off until a gesture; until then a quiet invitation sits in the water
 function drawListenHint() {
@@ -4069,6 +4096,7 @@ function composeFrame(w, now) {
   let overlayMs = 0;
   if (debug.on) { const t0 = performance.now(); drawDebug(w); overlayMs = performance.now() - t0; }
   drawNotebookGlyph(now);
+  drawMusicGlyph(now);
   if (notebook.open) drawNotebook(w);
   blitTimeOfDay(w);
   if (notebook.open) inkNotebook();
@@ -4422,6 +4450,8 @@ function inkNotebook() {
   };
   copy(P.x, P.y, P.x + P.w, P.y + P.h);
   copy(G.x, G.y, Math.min(W, G.x + GLYPH[0].length + 1), G.y + GLYPH.length + 1);
+  const M = PARAMS.hud.music;
+  copy(M.x - 1, M.y, M.x + NOTE_GLYPH[0].length + 1, M.y + NOTE_GLYPH.length + 2);
 }
 
 // I. The day: a sun and moon dial over the sea, the hour, the weather and the water, the day in one strip
@@ -4744,7 +4774,9 @@ function setupInput() {
   const release = (e) => {
     const d = input.down;
     const p = input.pointers.get(e.pointerId) || d;
-    if (d && d.id === e.pointerId && notebook.open) { notebookRelease(d, p); input.down = null; }
+    const tapped = d && d.id === e.pointerId && d.moved <= PARAMS.touch.tapMove && performance.now() - d.t < PARAMS.touch.tapMs;
+    if (tapped && onMusicGlyph(p) && (d.hud > 0 || notebook.open)) { setMuted(!audio.muted); input.down = null; }   // the music button
+    else if (d && d.id === e.pointerId && notebook.open) { notebookRelease(d, p); input.down = null; }
     else if (d && d.id === e.pointerId) {
       const tap = d.moved <= PARAMS.touch.tapMove && performance.now() - d.t < PARAMS.touch.tapMs;
       if (tap && onGlyph(p) && d.hud > 0) openNotebook(true);   // the glyph answers only while it can be seen
@@ -4951,7 +4983,7 @@ function hashString(s) {
 
 // ?seed= (number or word), ?debug, ?stress (start at the cell cap), ?ff=seconds (fast-forward),
 // ?zoom=1..4 with ?at=x,y (world point to centre on), ?speed=1|2|4|8 (time-lapse), ?day=5|10|30 (minutes),
-// ?notebook=1..4 (open the field notebook on that page). M mutes, N opens the notebook.
+// ?notebook=1..4 (open the field notebook on that page). M turns the music off, N opens the notebook.
 function readOptions() {
   const q = new URLSearchParams(location.search);
   let label = (q.get('seed') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12), seed;

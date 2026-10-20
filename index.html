@@ -24,7 +24,7 @@ const PARAMS = {
   time: { tickRate: 30, maxTicksPerFrame: 8, speeds: [1, 2, 4, 8] },   // time-lapse: ?speed= or the [ and ] keys
   grid: { cols: 24, rows: 40 },
   hash: { cell: 12 },                   // must be >= the largest interaction distance
-  cell: { rMin: 1.25, rMax: 4 },        // body radius at size 0.6 .. 1.6
+  cell: { rMin: 1.25, rMax: 4, drawScale: 0.5 },   // body radius at size 0.6 .. 1.6; cells are drawn at half of it
 
   light: { surface: 1.0, atten: 4.0 },  // e-folding depth = a quarter of the column
   // Diel cycle. Phase 0 is sunrise; the sun is up for dayFrac of the cycle, light = sqrt(sin) (sharp twilights).
@@ -99,17 +99,17 @@ const PARAMS = {
   // What they eat is partly excreted in place, partly sinks as pellets, and partly leaves the column with them.
   visitors: {
     attractLo: 120, attractHi: 360,
-    sardines: { rate: 1 / 160, speedMin: 9, speedMax: 14, rx: 26, ry: 14, eat: 1.2, steer: 8, drag: 1.5, wave: 6,
-                fishMin: 18, fishMax: 28, excreted: 0.3, pellets: 0.2,     // the rest is carried away
+    sardines: { rate: 1 / 160, speedMin: 10, speedMax: 15, rx: 38, ry: 20, eat: 0.8, steer: 8, drag: 1.5, wave: 6,
+                fishMin: 28, fishMax: 42, excreted: 0.3, pellets: 0.2,     // the rest is carried away
                 turnIfAte: 25, passes: 3 },                                 // a rich pass makes the school turn back for more
     salps: { rate: 1 / 220, speedMin: 1.5, speedMax: 2.6, barrelsMin: 4, barrelsMax: 8, spacing: 6.5, tilt: 0.3,
              reach: 4.5, eat: 0.25, sway: 2, excreted: 0.3, pellets: 0.5 },  // salp pellets sink fast
-    sunfish: { rate: 1 / 90, speed: 4.5, turn: 1.2, r: 18, bite: 7, stay: 150 },   // comes for salps, never eats cells
+    sunfish: { rate: 1 / 90, speed: 4.5, turn: 1.2, r: 18, bite: 7, stay: 150, baskY: 30, baskSpeed: 0.35 },   // comes for salps, never eats cells; basks at the surface after
   },
   mutation: { step: 0.08, jumpChance: 0.05, jump: 0.3 },
 
   // ---- Everything below is visual only; none of it feeds back into the simulation. ----
-  camera: { levels: [1, 1.5, 2, 3, 4], wheelStep: 1 },   // zoom 1 shows the whole column
+  camera: { levels: [1, 1.5, 2, 3, 4, 6, 8], wheelStep: 1 },   // zoom 1 shows the whole column
   sprite: {
     frames: 3, wobbleFps: 1,
     aspectMin: 0.75, aspectMax: 2.2,    // lineage trait: squat .. pennate-like
@@ -130,6 +130,7 @@ const PARAMS = {
     tumbleSteps: 32, maxSpin: 0.04, sway: 0.15, swaySpeed: 0.08,   // slow rotation, rad/s (a turn takes minutes)
     buildBudgetMs: 3,                   // sprite rebuilds per frame; stale sprites are drawn past this
     speckR: 2.4,                        // below this on-screen radius a living cell is a 2x2 lit speck
+    dotR: 1.1,                          // and below this, a single pixel
   },
   // Armoured dinoflagellates in the middle of the timbre range; the lineage picks the form.
   // Shapes in units of the body radius; u runs apex (negative) to antapex.
@@ -220,10 +221,11 @@ const PARAMS = {
   },
   // Visitors as drawn (sizes in world units). Copepods are the grazer field made visible: they gather where it is dense.
   look: {
-    sardine: { len: 7.5, height: 1.15, tailBeat: 11, spread: 0.95 },
+    sardine: { len: 17, height: 2.4, tailBeat: 8, spread: 0.92, drift: 2.5, shine: 0.12, shineRate: 4, turnFlash: 1.2 },
     salp: { rx: 3.3, ry: 2.3, pellets: 5, pelletFall: 7, pelletSpan: 70 },
     sunfish: { rx: 15, ry: 17, fin: 15, finBase: 6, finBeat: 1.6, finSwing: 5, clavus: 0.3 },
-    copepod: { zFrom: 0.3, zStep: 0.45, perNode: 2, len: 1.5, width: 0.5, antenna: 2.4, tail: 1.6, hopEvery: 1.6, hopDist: 3, hopTime: 0.12 },
+    copepod: { zFrom: 0.3, zStep: 0.45, perNode: 2, len: 1.5, width: 0.5, antenna: 2.4, tail: 1.6,
+               glide: 0.9, wander: 3.5, dartEvery: 3.5, dartDist: 4, dartTime: 0.45 },
   },
   murk: { from: 0.8, full: 3 },         // bloom biomass summed down the upper column: rays fade in murky water
   hud: { x: 4, y: 290, line: 7, visibleMs: 6000, fadeMs: 2000 },
@@ -557,7 +559,7 @@ function deriveTraits(c) {
   c.halfSat = M.halfSat * c.g.size;          // big cells need richer water
   c.maintK = M.maintenance / rs;             // per-biomass upkeep ~ size^-1/2: big cells endure the dark
   c.targetLight = PARAMS.light.surface * dexp(-PARAMS.light.atten * c.g.depthPref);
-  c.rv = c.r * (1 + (PARAMS.dino.scale - 1) * dinoWeight(c.g.timbre));   // drawn radius only
+  c.rv = c.r * PARAMS.cell.drawScale * (1 + (PARAMS.dino.scale - 1) * dinoWeight(c.g.timbre));   // drawn radius only
 }
 
 // How much of a dinoflagellate a cell is (the middle of the timbre range): 0..1
@@ -891,7 +893,7 @@ function moveSchool(w, v, dt) {
   }
   const out = v.dir > 0 ? v.x > W + S.rx + 20 : v.x < -S.rx - 20;
   if (out && v.ate >= S.turnIfAte && v.pass < S.passes) {   // worth another pass: wheel round
-    v.dir = -v.dir; v.vx = -v.vx; v.pass++; v.ate = 0;
+    v.dir = -v.dir; v.vx = -v.vx; v.pass++; v.ate = 0; v.turnedAt = v.age;
     return false;
   }
   return out;
@@ -926,7 +928,8 @@ function moveSalps(w, v, dt) {
 // The sunfish sculls toward the nearest salp barrel and bites it off; then it drifts away
 function moveSunfish(w, v, salp, dt) {
   const F = PARAMS.visitors.sunfish;
-  let tx = v.dir > 0 ? W + F.r + 40 : -F.r - 40, ty = v.y;
+  // Leaving: rise to bask just under the surface, drifting slowly toward the edge
+  let tx = v.dir > 0 ? W + F.r + 40 : -F.r - 40, ty = F.baskY;
   if (!v.leaving && salp && v.age < F.stay) {
     let best = 1e9;
     for (let b = 0; b < salp.alive.length; b++) {
@@ -936,12 +939,12 @@ function moveSunfish(w, v, salp, dt) {
     }
     if (best === 1e9) v.leaving = true;
   } else v.leaving = true;
-  const dx = tx - v.x, dy = ty - v.y, d = Math.sqrt(dx * dx + dy * dy) + 1e-6;
-  v.vx += (dx / d * F.speed - v.vx) * F.turn * dt;
+  const dx = tx - v.x, dy = ty - v.y, d = Math.sqrt(dx * dx + dy * dy) + 1e-6, sp = v.leaving ? F.speed * F.baskSpeed : F.speed;
+  v.vx += (dx / d * sp - v.vx) * F.turn * dt;
   v.vy += (dy / d * F.speed - v.vy) * F.turn * dt;
   if (v.vx > 0.4) v.dir = 1; else if (v.vx < -0.4) v.dir = -1;
   v.x += v.vx * dt;
-  v.y = clamp(v.y + v.vy * dt, 30, H - PARAMS.world.floor - 30);
+  v.y = clamp(v.y + v.vy * dt, F.baskY, H - PARAMS.world.floor - 30);
   if (!v.leaving && salp) {
     const mx = v.x + v.dir * F.r * 0.9;
     for (let b = 0; b < salp.alive.length; b++) {
@@ -1797,6 +1800,7 @@ function drawFlagella(c, cx, cy, angle, rpx, spr, base) {
 
 // Fixed templates for cells too small on screen to show a form
 const SPECK = { key: -1, half: 0, size: 2, a: 1, frames: [0, 0, 0].map(() => Int8Array.of(HIGHLIGHT, BASE, BASE, SHADOW)) };
+const DOT = { key: -1, half: 0, size: 1, a: 1, frames: [0, 0, 0].map(() => Int8Array.of(HIGHLIGHT)) };
 // Iridescent pixels cycle through the bright ends of every pigment ramp
 const IRID_SET = HUE_WHEEL.map((r) => rampBase(r) + BRIGHT).concat([COL.FOAM]);
 
@@ -1807,7 +1811,7 @@ function drawCell(c, tick, t) {
   if (cx < -reach || cy < -reach || cx > W + reach || cy > H + reach) return;
   const steps = S.tumbleSteps, angle = tumbleAngle(c, c.vt);   // tumbles on its own clock
   const step = mod(Math.round(angle / TAU * steps), steps);
-  const spr = rpx < S.speckR ? SPECK : spriteFor(c, rpx, step);
+  const spr = rpx < S.dotR ? DOT : rpx < S.speckR ? SPECK : spriteFor(c, rpx, step);
   const irPhase = step + c.id + Math.floor(t * S.iridSpeed);
   const base = rampBase(hueRamp(c.g)), base2 = rampBase(hueNeighbour(c.g));
   if (!c.dying && spr.key >= 0) drawFlagella(c, cx, cy, step * TAU / steps, rpx, spr, base);
@@ -1949,12 +1953,12 @@ function drawCysts(w) {
 // ---- Visitors ----
 // Filled ellipse in world units, each pixel coloured by a callback (u, v in -1..1 across the ellipse), rotated by angle.
 function fillShape(cx, cy, rx, ry, angle, colour) {
-  const z = cam.zoom, sx = toSX(cx), sy = toSY(cy), R = Math.max(rx, ry) * z + 1;
-  const ca = Math.cos(angle), sa = Math.sin(angle);
-  for (let y = Math.floor(sy - R); y <= sy + R; y++) {
-    if (y < 0 || y >= H) continue;
-    for (let x = Math.floor(sx - R); x <= sx + R; x++) {
-      if (x < 0 || x >= W) continue;
+  const z = cam.zoom, sx = toSX(cx), sy = toSY(cy), ca = Math.cos(angle), sa = Math.sin(angle);
+  // Tight box around the rotated ellipse
+  const ex = Math.sqrt(rx * rx * ca * ca + ry * ry * sa * sa) * z + 1, ey = Math.sqrt(rx * rx * sa * sa + ry * ry * ca * ca) * z + 1;
+  if (sx + ex < 0 || sx - ex >= W || sy + ey < 0 || sy - ey >= H) return;
+  for (let y = Math.max(0, Math.floor(sy - ey)); y <= Math.min(H - 1, sy + ey); y++) {
+    for (let x = Math.max(0, Math.floor(sx - ex)); x <= Math.min(W - 1, sx + ex); x++) {
       const dx = (x - sx) / z, dy = (y - sy) / z;
       const u = (dx * ca + dy * sa) / rx, v = (-dx * sa + dy * ca) / ry;
       const idx = colour(u, v, x, y);
@@ -1973,29 +1977,68 @@ function drawVisitors(w, ta) {
   }
 }
 
-// A school of silver sardines: dark blue backs, a bright flank stripe, white bellies, beating tails
+// A school of sardines. Each fish: blue-green back with a small dorsal fin, a row of dark spots, a silver flank
+// whose scales catch the light and twinkle, a white belly, gill cover, eye, pectoral fin and a forked tail that
+// beats (foreshortened, as seen from the side). Fish hold loose slots in a polarised school and drift, surge and pitch.
+// When the school wheels round for another pass, the whole school flashes silver.
+const SARDINE_BACK = [rampBase(EMERALD) + OUTLINE, rampBase(BLUE) + SHADOW, rampBase(BLUE) + BASE];
 function drawSardines(v, ta) {
-  const L = PARAMS.look.sardine, S = PARAMS.visitors.sardines, blue = rampBase(BLUE), ice = rampBase(LIGHTBLUE);
-  const tilt = clamp(v.vy / Math.abs(v.vx), -0.5, 0.5) * v.dir;
-  for (let i = 0; i < v.fish; i++) {
+  const L = PARAMS.look.sardine, S = PARAMS.visitors.sardines, ice = rampBase(LIGHTBLUE), blue = rampBase(BLUE);
+  const flash = v.turnedAt !== undefined ? clamp(1 - (v.age - v.turnedAt) / L.turnFlash, 0, 1) : 0;
+  const order = [];
+  for (let i = 0; i < v.fish; i++) order.push(i);
+  order.sort((p, q) => hash01(v.id * 131 + p * 7 + 5) - hash01(v.id * 131 + q * 7 + 5));   // fixed depth order
+  for (const i of order) {
     const h = v.id * 131 + i * 7;
-    const fx = v.x + (hash01(h + 1) * 2 - 1) * S.rx * L.spread + Math.sin(ta * 0.9 + i) * 1.5;
-    const fy = v.y + (hash01(h + 2) * 2 - 1) * S.ry * L.spread + Math.sin(ta * 1.3 + i * 2.1) * 1.2;
-    const beat = Math.sin(ta * L.tailBeat + i * 1.7);
-    const len = L.len * (0.85 + 0.3 * hash01(h + 3)), hh = L.height * (0.85 + 0.3 * hash01(h + 3));
-    fillShape(fx, fy, len / 2, hh, tilt, (u, q, x, y) => {
-      u *= v.dir;                                           // u = 1 at the head
-      const tail = u < -0.62;
-      if (tail) {                                           // forked tail fin, swinging with the beat
-        const tq = q - beat * 0.5 * (-0.62 - u);
-        return Math.abs(tq) > (-u - 0.62) * 2.4 || Math.abs(tq) < (-u - 0.62) * 0.9 - 0.05 ? -1 : blue + SHADOW;
+    // Slot spread evenly over the school's ellipse
+    const ang = hash01(h + 1) * TAU, rad = Math.sqrt(hash01(h + 2)) * L.spread;
+    const ph = hash01(h + 4) * TAU, f1 = 0.5 + 0.4 * hash01(h + 6);
+    const fx = v.x + Math.cos(ang) * rad * S.rx + Math.sin(ta * f1 + ph) * L.drift * 1.4;   // surging along the line of travel
+    const fy = v.y + Math.sin(ang) * rad * S.ry + Math.sin(ta * f1 * 0.8 + ph * 1.3) * L.drift;
+    const pitch = Math.cos(ta * f1 * 0.8 + ph * 1.3) * 0.12 + clamp(v.vy / Math.abs(v.vx || 1), -0.4, 0.4);
+    const size = 0.85 + 0.3 * hash01(h + 3), len = L.len * size, ht = L.height * size;
+    const beat = Math.sin(ta * L.tailBeat * (0.85 + 0.3 * hash01(h + 8)) + ph), dir = v.dir;
+    fillShape(fx, fy, len / 2 + 1, ht + 2.2, pitch * dir, (u, q, x, y) => {
+      // u: -1 tail .. +1 snout (fish-relative); q: -1 top .. +1 bottom, in units of the body half-height
+      u = u * dir * (len / 2 + 1) / (len / 2);
+      q = q * (ht + 2.2) / ht;
+      const b = wb(x, y);
+      const bend = u < -0.2 ? beat * 0.12 * (u + 0.2) * (u + 0.2) * 4 : 0;   // the tail end sways
+      const qq = q - bend;
+      if (u < -0.74) {                                     // forked tail, foreshortened by the beat
+        const t = (-0.74 - u) / 0.26, open = 0.55 + 0.45 * Math.abs(Math.cos(ta * L.tailBeat + ph));
+        if (t > 1) return -1;
+        const outer = (0.3 + t * 1.7) * open, notch = t > 0.45 ? (t - 0.45) * 1.6 * open : -1;
+        if (Math.abs(qq) > outer || Math.abs(qq) < notch) return -1;
+        return t > 0.7 && b < 0.5 ? -1 : qq < 0 ? SARDINE_BACK[1] : blue + BASE;
       }
-      const half = Math.sqrt(Math.max(0, 1 - u * u)) * (u > 0 ? 1 : 0.55 + 0.45 * (1 + u / 0.62));
-      if (Math.abs(q) > half) return -1;
-      if (u > 0.72 && q < -0.05 && q > -0.45) return COL.WATER;   // eye
-      if (q < -0.25) return blue + (q < -0.6 ? SHADOW : BASE);    // dark back
-      if (q < 0.15) return wb(x, y) < 0.5 ? ice + BRIGHT : COL.GLOW;   // silver flank stripe
-      return COL.FOAM;                                       // white belly
+      const hb = u >= 0 ? Math.sqrt(Math.max(0, 1 - u * u)) : 0.28 + 0.72 * Math.sqrt(Math.max(0, 1 - (u / 0.74) * (u / 0.74)));
+      // dorsal fin: a small triangle on the back just behind mid-body
+      if (qq < -hb && u > -0.25 && u < 0.08) {
+        const fin = (u + 0.25) / 0.33;
+        return qq > -hb - 0.55 * (1 - fin) - 0.05 ? SARDINE_BACK[0] : -1;
+      }
+      if (Math.abs(qq) > hb) return -1;
+      const rq = qq / hb;                                 // -1 back .. 1 belly at this station
+      // head details
+      if (u > 0.66 && u < 0.84 && rq > -0.55 && rq < 0.05) {
+        const eu = (u - 0.75) / 0.09, eq = (rq + 0.25) / 0.3, e = eu * eu + eq * eq;
+        if (e < 1) return e < 0.35 ? (eu < -0.1 && eq < -0.1 ? COL.GLOW : COL.WATER) : COL.FOAM;
+      }
+      if (u > 0.93 && rq > -0.1 && rq < 0.15) return SARDINE_BACK[0];          // mouth line
+      if (Math.abs(u - 0.56 + rq * rq * 0.08) < 0.03 && rq > -0.6) return ice + HIGHLIGHT;   // gill cover edge
+      if (u > 0.28 && u < 0.5 && rq > 0.15 && rq < 0.5 && rq - 0.15 < (0.5 - u) * 1.6) return ice + BRIGHT;   // pectoral fin
+      // body colour by height on the flank
+      if (rq < -0.5) return SARDINE_BACK[rq < -0.78 ? 0 : 1];                  // dark blue-green back
+      if (rq < -0.28) return b < 0.5 ? SARDINE_BACK[2] : blue + HIGHLIGHT;     // steel-blue shoulder
+      if (rq > -0.24 && rq < -0.06 && u < 0.5 && u > -0.6 && mod(Math.round(u * len * 0.6), 4) === 0) return SARDINE_BACK[1];   // spot row
+      if (rq < 0.55) {                                     // silver flank: scales catch the light and twinkle
+        const sc = Math.floor((u + 1) * len * 0.6) * 31 + Math.floor((rq + 1) * 3) + h * 7;
+        if (flash > 0 && b < flash) return COL.GLOW;
+        if (hash01(sc * 13 + Math.floor(ta * L.shineRate + hash01(sc) * 4)) < L.shine * (0.4 + 0.6 * dayLight)) return COL.GLOW;
+        return rq < 0.05 ? (b < 0.35 ? ice + BRIGHT : ice + HIGHLIGHT) : rq < 0.3 ? ice + BRIGHT : (b < 0.5 ? COL.FOAM : ice + BRIGHT);
+      }
+      return rq > 0.85 && b < 0.4 ? ice + HIGHLIGHT : COL.FOAM;   // white belly
     });
   }
 }
@@ -2084,8 +2127,20 @@ function drawSunfish(v, ta) {
   });
 }
 
-// Copepods: the grazer field made visible. Teardrop bodies with a red eye and long swept antennae,
-// hovering, then hopping away in quick jumps.
+// Copepods: the grazer field made visible. Glassy bodies with a red eye, long antennules held out like a T,
+// gliding on smooth wandering paths with an eased dart now and then (antennae swept back while darting).
+function copepodAt(L, h, ta) {
+  const p = ta * L.glide * (0.7 + 0.6 * hash01(h + 1));
+  let x = L.wander * (0.6 * Math.sin(p * (0.8 + 0.4 * hash01(h + 5)) + hash01(h + 6) * TAU) + 0.4 * Math.sin(p * 1.9 + hash01(h + 7) * TAU));
+  let y = L.wander * (0.6 * Math.sin(p * (0.7 + 0.4 * hash01(h + 8)) + hash01(h + 9) * TAU) + 0.4 * Math.sin(p * 1.6 + hash01(h + 10) * TAU)) * 0.8;
+  const every = L.dartEvery * (0.7 + 0.6 * hash01(h + 11)), ph = ta / every + hash01(h + 2), n = Math.floor(ph);
+  const e = smoothstep(0, 1, (ph - n) * every / L.dartTime);   // eased dart from waypoint n to n+1
+  const ax = hash01(h * 3 + n) - 0.5, ay = hash01(h * 3 + n + 7) - 0.5, bx = hash01(h * 3 + n + 1) - 0.5, by = hash01(h * 3 + n + 8) - 0.5;
+  x += (ax + (bx - ax) * e) * 2 * L.dartDist;
+  y += (ay + (by - ay) * e) * 2 * L.dartDist;
+  return { x, y, darting: e > 0 && e < 1 };
+}
+
 function drawCopepods(w, ta) {
   const L = PARAMS.look.copepod, { cols, rows } = PARAMS.grid, Z = w.fields.graz, gold = rampBase(GOLD), rose = rampBase(ROSE);
   const z = cam.zoom, x0 = cam.x, y0 = cam.y, x1 = cam.x + W / z, y1 = cam.y + H / z;
@@ -2096,34 +2151,27 @@ function drawCopepods(w, ta) {
       const n = Math.min(L.perNode, Math.floor((zv - L.zFrom) / L.zStep) + 1);
       for (let k = 0; k < n; k++) {
         const h = (j * cols + i) * 17 + k * 5;
-        const every = L.hopEvery * (0.7 + 0.6 * hash01(h + 1)), ph = ta / every + hash01(h + 2), hop = Math.floor(ph), f = ph - hop;
-        const jump = Math.min(1, f * every / L.hopTime);
-        const ax = (hash01(h * 3 + hop) - 0.5) * 2, ay = (hash01(h * 3 + hop + 7) - 0.5) * 2;
-        const bx = (hash01(h * 3 + hop + 1) - 0.5) * 2, by = (hash01(h * 3 + hop + 8) - 0.5) * 2;
-        const ox = ax + (bx - ax) * jump, oy = ay + (by - ay) * jump;
-        const cx = (i + 0.5 + hash01(h + 3) - 0.5) * GRID_W + ox * L.hopDist, cy = (j + 0.5 + hash01(h + 4) - 0.5) * GRID_H + oy * L.hopDist;
-        if (cx < x0 - 4 || cx > x1 + 4 || cy < y0 - 4 || cy > y1 + 4) continue;
-        const hx = bx - ax, hy = by - ay, hl = Math.sqrt(hx * hx + hy * hy) || 1, dx = hx / hl, dy = hy / hl;   // heading
+        const p = copepodAt(L, h, ta), q = copepodAt(L, h, ta - 0.08);
+        const cx = (i + 0.5 + hash01(h + 3) - 0.5) * GRID_W + p.x, cy = (j + 0.5 + hash01(h + 4) - 0.5) * GRID_H + p.y;
+        if (cx < x0 - 6 || cx > x1 + 6 || cy < y0 - 6 || cy > y1 + 6) continue;
+        const hx = p.x - q.x, hy = p.y - q.y, hl = Math.sqrt(hx * hx + hy * hy) || 1, dx = hx / hl, dy = hy / hl;   // heading = motion
         const sx = toSX(cx), sy = toSY(cy);
         if (z < 2) {                                         // a speck with an eye at low zoom
           put(sx, sy, gold + BASE); put(sx + Math.round(dx), sy + Math.round(dy), rose + HIGHLIGHT);
           continue;
         }
-        // Glassy cephalothorax tapering to the tail, a gold gut, a red eye
-        fillShape(cx, cy, L.len, L.len * L.width, Math.atan2(dy, dx), (u, q, x, y) => {
+        fillShape(cx, cy, L.len, L.len * L.width, Math.atan2(dy, dx), (u, qv, x, y) => {
           const half = u > 0 ? Math.sqrt(1 - u * u) : 1 + u * 0.5;
-          if (u < -1 || u > 1 || Math.abs(q) > half) return -1;
-          if (u > 0.55 && Math.abs(q) < 0.35) return rose + HIGHLIGHT;          // naupliar eye
-          if (Math.abs(q) < 0.3 && u > -0.5 && u < 0.4) return gold + BASE;     // gut
+          if (u < -1 || u > 1 || Math.abs(qv) > half) return -1;
+          if (u > 0.55 && Math.abs(qv) < 0.35) return rose + HIGHLIGHT;          // naupliar eye
+          if (Math.abs(qv) < 0.3 && u > -0.5 && u < 0.4) return gold + BASE;     // gut
           const under = view.ibuf[y * W + x];
-          return Math.abs(q) > half - 0.35 ? LIGHT_UP[LIGHT_UP[under]] : LIGHT_UP[under];   // see-through shell
+          return Math.abs(qv) > half - 0.35 ? LIGHT_UP[LIGHT_UP[under]] : LIGHT_UP[under];   // see-through shell
         });
-        // Long antennules held out sideways like a T, swept back a little; flicked back during a hop
-        const sweep = 0.25 + (jump < 1 ? 0.6 : 0), hx0 = cx + dx * L.len * 0.7, hy0 = cy + dy * L.len * 0.7;
+        const sweep = p.darting ? 0.85 : 0.25, hx0 = cx + dx * L.len * 0.7, hy0 = cy + dy * L.len * 0.7;
         for (const sd of [-1, 1]) {
           worldLine(hx0, hy0, hx0 - dx * L.antenna * sweep + sd * -dy * L.antenna, hy0 - dy * L.antenna * sweep + sd * dx * L.antenna, COL.SHAFT);
         }
-        // Thin tail with two caudal bristles
         const tx = cx - dx * (L.len + L.tail), ty = cy - dy * (L.len + L.tail);
         worldLine(cx - dx * L.len, cy - dy * L.len, tx, ty, COL.SHAFT);
         for (const sd of [-1, 1]) worldLine(tx, ty, tx - dx * 0.9 + sd * -dy * 0.6, ty - dy * 0.9 + sd * dx * 0.6, COL.SHAFT - 1);

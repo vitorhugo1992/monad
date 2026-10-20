@@ -223,9 +223,10 @@ const PARAMS = {
   look: {
     sardine: { len: 17, height: 2.4, tailBeat: 8, spread: 0.92, drift: 2.5, shine: 0.12, shineRate: 4, turnFlash: 1.2 },
     salp: { rx: 3.3, ry: 2.3, pellets: 5, pelletFall: 7, pelletSpan: 70 },
-    sunfish: { rx: 15, ry: 17, fin: 15, finBase: 6, finBeat: 1.6, finSwing: 5, clavus: 0.3 },
-    copepod: { zFrom: 0.3, zStep: 0.45, perNode: 2, len: 1.5, width: 0.5, antenna: 2.4, tail: 1.6,
-               glide: 0.9, wander: 3.5, dartEvery: 3.5, dartDist: 4, dartTime: 0.45 },
+    sunfish: { rx: 16, ry: 18, fin: 17, finBase: 5.5, sweep: 6, finBeat: 1.4, finTurn: 0.7, bob: 0.8, pectoral: 2.6 },
+    // Copepods are millimetre giants next to the cells: few drawn (a sparse share of the swarm), but big and detailed
+    copepod: { zFrom: 0.3, zSpan: 0.6, coverage: 0.3, prosome: 3, width: 1.15, urosome: 1.8, antenna: 8, eggChance: 0.35,
+               glide: 0.7, wander: 6, dartEvery: 3.5, dartDist: 6, dartTime: 0.45 },
   },
   murk: { from: 0.8, full: 3 },         // bloom biomass summed down the upper column: rays fade in murky water
   hud: { x: 4, y: 290, line: 7, visibleMs: 6000, fadeMs: 2000 },
@@ -2092,43 +2093,78 @@ function fillTri(bx0, by0, bx1, by1, tx, ty, colour) {
   }
 }
 
-// Silver-grey skin of the sunfish, dark to light
-const MOLA = [COL.WATER + 2, COL.SLATE, COL.WATER + 6, COL.SHAFT, COL.FOAM];
+// Ocean sunfish skin, dark brown-grey back to white belly (a continuous tone dithered across these steps)
+const MOLA = [rampBase(GOLD) + OUTLINE, rampBase(GOLD) + SHADOW, COL.WATER + 2, COL.SLATE, COL.WATER + 6, COL.SHAFT, COL.FOAM];
+const molaTone = (v, x, y) => { const k = clamp(v, 0, MOLA.length - 1.001), i = k | 0; return MOLA[wb(x, y) < k - i ? i + 1 : i]; };
 
-// Ocean sunfish (Mola): a tall disc with long blade-like dorsal and anal fins sculling in turn,
-// and a frilly clavus where a tail would be
-function drawSunfish(v, ta) {
-  const L = PARAMS.look.sunfish, dir = v.dir, beat = Math.sin(ta * L.finBeat) * L.finSwing;
-  // Fins first, behind the body: bases on the rear half of the back and belly, tips swinging fore and aft
-  for (const side of [-1, 1]) {
-    const sw = side * beat;
-    const b0x = v.x - dir * L.rx * 0.05, b1x = v.x - dir * L.rx * 0.55;
-    const b0y = v.y + side * L.ry * 0.82, b1y = v.y + side * L.ry * 0.62;
-    const tx = v.x - dir * (L.rx * 0.45 + sw), ty = v.y + side * (L.ry + L.fin);
-    fillTri(b0x, b0y, b1x, b1y, tx, ty, (t, x, y) => MOLA[t > 0.85 ? 1 : wb(x, y) < 0.5 - t * 0.3 ? 3 : 2]);
-  }
-  // Body
-  fillShape(v.x, v.y, L.rx, L.ry, 0, (u, q, x, y) => {
-    const fu = u * dir, d = u * u + q * q;
-    if (d > 1) {
-      // clavus: a scalloped frill along the rear edge
-      if (fu < 0 && Math.abs(q) < 0.8) {
-        const scallop = L.clavus * (0.6 + 0.4 * Math.abs(Math.sin(q * 7 + ta * 1.5)));
-        return d < 1 + scallop ? MOLA[d < 1 + scallop * 0.5 ? 2 : 1] : -1;
-      }
-      return -1;
+// One of the two tall fins (side -1 dorsal, +1 anal): a curved blade swept back, foreshortened as it swings
+function drawMolaFin(cx, cy, dir, side, stroke, L) {
+  const z = cam.zoom, app = L.fin * (0.72 + 0.28 * Math.abs(Math.cos(stroke * L.finTurn)));
+  const baseX = cx - dir * L.rx * 0.27, baseY = cy + side * L.ry * 0.88, sweep = L.sweep * (1 + 0.35 * Math.sin(stroke));
+  const rows = Math.ceil(app * z) + 1;
+  for (let k = 0; k <= rows; k++) {
+    const t = k / rows, wy = baseY + side * app * t;
+    const mid = baseX - dir * sweep * Math.pow(t, 1.6) + dir * 0.15 * L.finBase * Math.sin(Math.PI * t);
+    const hw = L.finBase * Math.pow(1 - t, 0.7) * (1 - 0.2 * t) + 0.35;
+    const sy = toSY(wy);
+    if (sy < 0 || sy >= H) continue;
+    const xa = toSX(mid - hw), xb = toSX(mid + hw);
+    for (let x = Math.max(0, xa); x <= Math.min(W - 1, xb); x++) {
+      const f = xb > xa ? (x - xa) / (xb - xa) : 0.5, lead = dir > 0 ? f : 1 - f;   // 1 at the leading edge
+      let v = 2.4 + lead * 2.2 - t * 1.6;                   // light leading edge, darker trailing edge and tip
+      if (t > 0.82) v -= 1.2;
+      put(x, sy, molaTone(v, x, sy));
     }
-    if (fu > 0.6 && fu < 0.78 && q > -0.4 && q < -0.2) return fu > 0.68 && q > -0.32 ? COL.WATER : COL.FOAM;   // eye
-    if (fu > 0.92 && Math.abs(q + 0.02) < 0.08) return COL.WATER;                                          // small round mouth
-    if (Math.abs(fu - 0.3) < 0.05 && Math.abs(q + 0.05) < 0.22) return MOLA[1];                            // gill slit
-    if (fu < -0.1 && fu > -0.85 && Math.abs(q) < 0.9 && Math.abs(fu + 0.7) < 0.04) return MOLA[1];         // clavus seam
-    const lit = -u * 0.3 - q * 0.7 + (hash01((x + view.bx0) * 73 + (y + view.by0) * 131) - 0.5) * 0.3;    // mottled skin
-    return MOLA[d > 0.88 && lit < 0.2 ? 1 : lit > 0.5 ? 4 : lit > 0.1 ? 3 : lit > -0.4 ? 2 : 1];
-  });
+  }
 }
 
-// Copepods: the grazer field made visible. Glassy bodies with a red eye, long antennules held out like a T,
-// gliding on smooth wandering paths with an eased dart now and then (antennae swept back while darting).
+// Ocean sunfish (Mola): a tall disc with brown-grey back, mottled silver flanks and a white belly; tall curved
+// dorsal and anal fins flapping together; a scalloped clavus for a tail; beak mouth, gill opening, small pectoral fin.
+function drawSunfish(v, ta) {
+  const L = PARAMS.look.sunfish, dir = v.dir, beat = ta * L.finBeat * (v.leaving ? 0.6 : 1) + v.id, stroke = Math.sin(beat);
+  const cx = v.x, cy = v.y + Math.cos(beat) * L.bob;
+  drawMolaFin(cx, cy, dir, -1, stroke, L);
+  drawMolaFin(cx, cy, dir, 1, stroke, L);
+  const X = 1.25;   // shape box wider than the body, for clavus and beak
+  fillShape(cx, cy, L.rx * X, L.ry, 0, (u0, q, x, y) => {
+    const u = u0 * X * dir;                                // body units, +1 at the snout
+    // beak-like mouth
+    if (u > 0.9 && u < 1.1 && Math.abs(q + 0.04) < 0.03 + (1.1 - u) * 0.35) {
+      return Math.abs(q + 0.04) < 0.022 ? COL.WATER : molaTone(3.4, x, y);
+    }
+    let d = u * u + q * q;
+    if (u < -0.78) {                                       // clavus: a row of rounded lobes
+      if (Math.abs(q) > 0.62) return -1;
+      const lobe = (q + 0.62) / 0.124, li = Math.floor(lobe), lf = lobe - li - 0.5;
+      const reach = -0.78 - 0.2 * Math.sqrt(Math.max(0, 1 - 4 * lf * lf));
+      if (u < reach) return -1;
+      return molaTone(Math.abs(lf) > 0.4 ? 2.2 : 3.6 - (u + 0.78) * -6, x, y);
+    }
+    if (d > 1) return -1;
+    // eye: ring, iris, highlight
+    const eu = (u - 0.6) / 0.085, eq = (q + 0.28) / 0.075, e = eu * eu + eq * eq;
+    if (e < 1) return e < 0.45 ? (eu < -0.2 && eq < -0.2 ? COL.GLOW : COL.WATER) : COL.FOAM;
+    // gill opening
+    const gu = (u - 0.36) / 0.035, gq = (q - 0.02) / 0.1;
+    if (gu * gu + gq * gq < 1) return MOLA[0];
+    // skin: tone by height and light from the upper left, blotchy mottling, rough speckles, darker rim
+    const blot = Math.sin(u * 7 + 1.3) * Math.sin(q * 6 - 0.7) + 0.5 * Math.sin(u * 13 + q * 9 + 2);
+    const speck = hash01((x + view.bx0) * 73 + (y + view.by0) * 131) < 0.07 ? 0.6 : 0;
+    let tone = 3.5 + q * 1.9 - u * 0.4 + (blot > 0.8 ? 0.8 : blot < -0.9 ? -0.5 : 0) - speck;
+    if (d > 0.9) tone -= (q > 0 ? 0.5 : 0.9);
+    return molaTone(tone, x, y);
+  });
+  // small pectoral fin behind the gill, flapping
+  const app = 0.6 + 0.4 * Math.abs(Math.sin(beat * 1.3));
+  fillShape(cx + dir * (L.rx * 0.3 - L.pectoral * app), cy + L.ry * 0.05, L.pectoral * app, L.pectoral * 0.55, dir * 0.25, (u, q, x, y) =>
+    u * u + q * q > 1 ? -1 : molaTone(4.2 + u * dir * 0.8 - q * 0.6, x, y));
+}
+
+// Copepods: the grazer field made visible. Big next to the cells (millimetres against micrometres), so only a
+// sparse share of the swarm is drawn, gathering where grazing is dense. A glassy segmented body with an orange
+// lipid sac and a red eye, a thin tail with bristled forks, long bristled antennules held out like a T,
+// swimming legs that kick during darts, and on some, a pair of egg sacs. They glide on wandering paths with
+// an eased dart now and then.
 function copepodAt(L, h, ta) {
   const p = ta * L.glide * (0.7 + 0.6 * hash01(h + 1));
   let x = L.wander * (0.6 * Math.sin(p * (0.8 + 0.4 * hash01(h + 5)) + hash01(h + 6) * TAU) + 0.4 * Math.sin(p * 1.9 + hash01(h + 7) * TAU));
@@ -2138,43 +2174,70 @@ function copepodAt(L, h, ta) {
   const ax = hash01(h * 3 + n) - 0.5, ay = hash01(h * 3 + n + 7) - 0.5, bx = hash01(h * 3 + n + 1) - 0.5, by = hash01(h * 3 + n + 8) - 0.5;
   x += (ax + (bx - ax) * e) * 2 * L.dartDist;
   y += (ay + (by - ay) * e) * 2 * L.dartDist;
-  return { x, y, darting: e > 0 && e < 1 };
+  return { x, y, dart: e > 0 && e < 1 ? Math.sin(Math.PI * e) : 0 };
 }
 
 function drawCopepods(w, ta) {
-  const L = PARAMS.look.copepod, { cols, rows } = PARAMS.grid, Z = w.fields.graz, gold = rampBase(GOLD), rose = rampBase(ROSE);
-  const z = cam.zoom, x0 = cam.x, y0 = cam.y, x1 = cam.x + W / z, y1 = cam.y + H / z;
+  const L = PARAMS.look.copepod, { cols, rows } = PARAMS.grid, Z = w.fields.graz;
+  const gold = rampBase(GOLD), rose = rampBase(ROSE), z = cam.zoom;
+  const x0 = cam.x - 12, y0 = cam.y - 12, x1 = cam.x + W / z + 12, y1 = cam.y + H / z + 12;
+  const glass = (x, y, n) => { const k = y * W + x; let c = view.ibuf[k]; while (n-- > 0) c = LIGHT_UP[c]; return c; };
   for (let j = 0; j < rows; j++) {
     for (let i = 0; i < cols; i++) {
-      const zv = Z[j * cols + i];
-      if (zv < L.zFrom) continue;
-      const n = Math.min(L.perNode, Math.floor((zv - L.zFrom) / L.zStep) + 1);
-      for (let k = 0; k < n; k++) {
-        const h = (j * cols + i) * 17 + k * 5;
-        const p = copepodAt(L, h, ta), q = copepodAt(L, h, ta - 0.08);
-        const cx = (i + 0.5 + hash01(h + 3) - 0.5) * GRID_W + p.x, cy = (j + 0.5 + hash01(h + 4) - 0.5) * GRID_H + p.y;
-        if (cx < x0 - 6 || cx > x1 + 6 || cy < y0 - 6 || cy > y1 + 6) continue;
-        const hx = p.x - q.x, hy = p.y - q.y, hl = Math.sqrt(hx * hx + hy * hy) || 1, dx = hx / hl, dy = hy / hl;   // heading = motion
-        const sx = toSX(cx), sy = toSY(cy);
-        if (z < 2) {                                         // a speck with an eye at low zoom
-          put(sx, sy, gold + BASE); put(sx + Math.round(dx), sy + Math.round(dy), rose + HIGHLIGHT);
-          continue;
-        }
-        fillShape(cx, cy, L.len, L.len * L.width, Math.atan2(dy, dx), (u, qv, x, y) => {
-          const half = u > 0 ? Math.sqrt(1 - u * u) : 1 + u * 0.5;
-          if (u < -1 || u > 1 || Math.abs(qv) > half) return -1;
-          if (u > 0.55 && Math.abs(qv) < 0.35) return rose + HIGHLIGHT;          // naupliar eye
-          if (Math.abs(qv) < 0.3 && u > -0.5 && u < 0.4) return gold + BASE;     // gut
-          const under = view.ibuf[y * W + x];
-          return Math.abs(qv) > half - 0.35 ? LIGHT_UP[LIGHT_UP[under]] : LIGHT_UP[under];   // see-through shell
-        });
-        const sweep = p.darting ? 0.85 : 0.25, hx0 = cx + dx * L.len * 0.7, hy0 = cy + dy * L.len * 0.7;
+      const node = j * cols + i, pres = clamp((Z[node] - L.zFrom) / L.zSpan, 0, 1) * L.coverage;
+      if (hash01(node * 91 + 7) >= pres) continue;
+      const h = node * 17;
+      const p = copepodAt(L, h, ta), q = copepodAt(L, h, ta - 0.1);
+      const cx = (i + 0.5) * GRID_W + p.x, cy = (j + 0.5) * GRID_H + p.y;
+      if (cx < x0 || cx > x1 || cy < y0 || cy > y1) continue;
+      const hx = p.x - q.x, hy = p.y - q.y, hl = Math.sqrt(hx * hx + hy * hy) || 1, dx = hx / hl, dy = hy / hl;
+      const at = (a, b) => [cx + dx * a - dy * b, cy + dy * a + dx * b];   // body frame: a forward, b sideways
+      const ang = Math.atan2(dy, dx), P = L.prosome, U = L.urosome;
+      // egg sacs beside the tail
+      if (hash01(h + 99) < L.eggChance) {
         for (const sd of [-1, 1]) {
-          worldLine(hx0, hy0, hx0 - dx * L.antenna * sweep + sd * -dy * L.antenna, hy0 - dy * L.antenna * sweep + sd * dx * L.antenna, COL.SHAFT);
+          const [ex, ey] = at(-P - U * 0.9, sd * 1.25);
+          fillShape(ex, ey, U * 0.8, 0.65, ang - sd * 0.2, (u, v, x, y) => u * u + v * v > 1 ? -1 : wb(x, y) < 0.45 ? gold + BRIGHT : gold + HIGHLIGHT);
         }
-        const tx = cx - dx * (L.len + L.tail), ty = cy - dy * (L.len + L.tail);
-        worldLine(cx - dx * L.len, cy - dy * L.len, tx, ty, COL.SHAFT);
-        for (const sd of [-1, 1]) worldLine(tx, ty, tx - dx * 0.9 + sd * -dy * 0.6, ty - dy * 0.9 + sd * dx * 0.6, COL.SHAFT - 1);
+      }
+      // tail (urosome) and bristled forks
+      const [ux, uy] = at(-P - U * 0.9, 0);
+      fillShape(ux, uy, U, 0.42, ang, (u, v, x, y) => u * u + v * v > 1 ? -1 : glass(x, y, 2));
+      const [fx, fy] = at(-P - U * 1.9, 0);
+      for (const sd of [-1, 1]) {
+        const [rx, ry] = at(-P - U * 2.4, sd * 0.5), [sx2, sy2] = at(-P - U * 3.6, sd * 1.4);
+        worldLine(fx, fy, rx, ry, COL.SHAFT);
+        worldLine(rx, ry, sx2, sy2, COL.SHAFT - 1);
+      }
+      // swimming legs, kicking back during a dart
+      for (let k = 0; k < 4; k++) {
+        const a = 0.9 - k * 0.75, kick = 0.6 + p.dart * 1.6 * (k % 2 ? 1 : 0.7);
+        for (const sd of [-1, 1]) {
+          const [lx, ly] = at(a, sd * L.width * 0.8), [tx, ty] = at(a - kick, sd * (L.width + 1));
+          worldLine(lx, ly, tx, ty, COL.SHAFT - 1);
+        }
+      }
+      // body (prosome): glassy, segmented, orange lipid sac, red eye
+      const [bx, by] = at(0, 0);
+      fillShape(bx, by, P, L.width, ang, (u, v, x, y) => {
+        const d = u * u + v * v;
+        if (d > 1) return -1;
+        if (u > 0.78 && Math.abs(v) < 0.3) return rose + BASE;                          // naupliar eye
+        const lu = (u + 0.15) / 0.42, lv = v / 0.42;
+        if (lu * lu + lv * lv < 1) return wb(x, y) < 0.35 + 0.3 * (lv - lu) ? rose + HIGHLIGHT : gold + HIGHLIGHT;   // lipid sac
+        if (d > 0.72) return glass(x, y, 2);                                               // rim
+        if (Math.abs(u + 0.55) < 0.05 || Math.abs(u - 0.3) < 0.05 || Math.abs(u - 0.6) < 0.05) return glass(x, y, 2);   // segments
+        return glass(x, y, 1);
+      });
+      // long antennules held out like a T, swept back during a dart, with fine bristles
+      const sweep = 0.12 + p.dart * 0.7;
+      for (const sd of [-1, 1]) {
+        const [ax, ay] = at(P * 0.85, sd * 0.6), [tx, ty] = at(P * 0.85 - L.antenna * sweep, sd * L.antenna);
+        worldLine(ax, ay, tx, ty, COL.SHAFT);
+        if (z >= 3) for (let k = 2; k < 8; k += 2) {
+          const f = k / 8, [sx3, sy3] = at(P * 0.85 - L.antenna * sweep * f - 0.5, sd * L.antenna * f);
+          put(toSX(sx3), toSY(sy3), COL.SHAFT - 1);
+        }
       }
     }
   }

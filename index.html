@@ -192,8 +192,12 @@ const PARAMS = {
   // diatoms have no flagella and only rock. Visual only: the simulation never sees it.
   // Activity shows how a cell is doing: day species (flagellates) swim lively when they are growing well and
   // sleep at night; dinoflagellates are the night swimmers, livelier in the dark while they have reserves.
-  swim: { amp: 1.1, flatten: 0.6, periodMin: 2.5, periodMax: 5, rock: 0.3, rockPeriod: 7,
-          sleepy: 0.25, lively: 1.3, sleepPeriod: 2.2, livePeriod: 0.7, vigorFull: 0.45 },
+  // Each cell moves on its own clock at its own tempo (1x .. 8x real time): the species sets how fast it can go
+  // (small, quick-pulsing cells up to 8x; large slow ones ~3-4x; diatoms don't swim), activity sets how much of that it uses.
+  // At high tempo a cell darts around its true position on a wandering leash, spirals and tumbles faster.
+  swim: { tempoMax: 9, temperMin: 0.4, tempoEase: 2, leash: 3.5, sleepLeash: 0.15, wanderRate: 0.35,
+          amp: 0.8, flatten: 0.6, periodMin: 2.5, periodMax: 5, rock: 0.3, rockPeriod: 7,
+          vigorFull: 0.12, awake: 0.25 },   // vigor (light x nutrient saturation) that counts as thriving; day species' daylight baseline
   // Sea state from the wind: wave height, how fast the water moves, refraction, marine snow sway,
   // and when rays form (a glassy surface focuses nothing; choppy water breaks rays into flickers).
   sea: {
@@ -547,7 +551,7 @@ function createCell(w, x, y, g, energy, parentId, spriteSeed) {
     theta: w.rng.next() * TAU, flashTick: -1000, dying: 0, grazed: false,
     g, spriteSeed, gen: 0,
     r: 0, biomass: 0, gainK: 0, halfSat: 0, maintK: 0, targetLight: 0,
-    spr: null, ox: 0, oy: 0, swimPh: 0,   // sprite cache and swimming: render only
+    spr: null, ox: 0, oy: 0, swimPh: 0, vt: 0, tempo: 1,   // sprite cache and swimming (own clock, tempo): render only
   };
   deriveTraits(c);
   c.lifespan = lifespanFor(c, w.rng);
@@ -1567,26 +1571,39 @@ function spriteFor(c, rpx, step) {
 }
 
 // Slow tumbling: each cell turns at its own pace with a gentle sway
-// Helical swimming of motile cells; diatoms only rock. How lively a cell swims shows how it is doing:
-// day species follow their recorded growth conditions (vigor) and sleep at night,
-// dinoflagellates swim at night while they have energy and rest by day.
-function updateSwim(w, dA, ta) {
+// Swimming, visual only. Every cell runs its own clock at its own tempo, so cells at 1x, 3x, 6x and 8x share the water.
+// Activity shows how a cell is doing: flagellates follow their recorded growth conditions (vigor) and sleep at night;
+// dinoflagellates swim at night while they have energy and rest by day. Diatoms have no flagella and only rock.
+let swimTick = -1;
+function updateSwim(w, ta) {
   const Sw = PARAMS.swim, Dn = PARAMS.dino, dark = 1 - smoothstep(PARAMS.drift.darkLo, PARAMS.drift.darkHi, w.surfaceLight);
+  const dS = swimTick < 0 ? 0 : clamp((w.tick - swimTick) * TICK_DT, 0, 1);   // simulated seconds since the last frame
+  swimTick = w.tick;
+  const [sLo, sHi] = GENES.size, [oLo, oHi] = GENES.omega;
   for (const c of w.cells) {
     if (c.dying) continue;
-    const h1 = hash01(c.id * 17 + 1), h2 = hash01(c.id * 17 + 2), tb = c.g.timbre;
+    const h1 = hash01(c.id * 17 + 1), h2 = hash01(c.id * 17 + 2), h3 = hash01(c.id * 17 + 3), h4 = hash01(c.id * 17 + 4), tb = c.g.timbre;
     const motile = 1 - smoothstep(Dn.fade, Dn.gone, tb);
-    const nocturnal = smoothstep(Dn.from, Dn.full, tb);           // dinoflagellate forms (and the diatoms beyond, which don't swim)
-    const dayAct = clamp(c.vigor / Sw.vigorFull, 0, 1);
-    const nightAct = dark * clamp(c.energy * 2, 0, 1) + (1 - dark) * 0.15;
+    const nocturnal = smoothstep(Dn.from, Dn.full, tb);
+    const dayAct = (1 - dark) * (Sw.awake + (1 - Sw.awake) * clamp(c.vigor / Sw.vigorFull, 0, 1));
+    const nightAct = dark * clamp(c.energy * 2, 0, 1) + (1 - dark) * 0.1;
     const act = dayAct + (nightAct - dayAct) * nocturnal;
-    const period = (Sw.periodMin + h2 * (Sw.periodMax - Sw.periodMin)) * (Sw.sleepPeriod + (Sw.livePeriod - Sw.sleepPeriod) * act);
-    c.swimPh += dA * TAU / period;
-    const amp = Sw.amp * motile * (0.6 + 0.4 * h2) * (Sw.sleepy + (Sw.lively - Sw.sleepy) * act);
+    // Species temper: small, quick-pulsing cells are the fastest swimmers
+    const temper = Sw.temperMin + (1 - Sw.temperMin) * (0.5 * (sHi - c.g.size) / (sHi - sLo) + 0.5 * (c.g.omega - oLo) / (oHi - oLo));
+    const target = 1 + (Sw.tempoMax - 1) * act * temper * motile;
+    c.tempo += (target - c.tempo) * Math.min(1, dS / Sw.tempoEase);
+    c.vt += dS * c.tempo;
+    // Wandering leash: smooth, Brownian-looking darting around the true position
+    const L = Sw.leash * motile * (Sw.sleepLeash + (1 - Sw.sleepLeash) * act), p = c.vt * Sw.wanderRate;
+    const wx = L * (0.6 * Math.sin(p * (0.7 + 0.6 * h1) + h2 * TAU) + 0.4 * Math.sin(p * (1.6 + 0.8 * h3) + h4 * TAU));
+    const wy = L * (0.6 * Math.sin(p * (0.7 + 0.6 * h3) + h1 * TAU) + 0.4 * Math.sin(p * (1.6 + 0.8 * h2) + h3 * TAU)) * 0.8;
+    // Helix on top: the flagellar corkscrew
+    const period = Sw.periodMin + h2 * (Sw.periodMax - Sw.periodMin);
+    c.swimPh += dS * c.tempo * TAU / period;
+    const amp = Sw.amp * motile * (0.3 + 0.7 * act), a = c.swimPh + h1 * TAU;
     const rock = Sw.rock * (1 - motile) * Math.sin(ta * TAU / Sw.rockPeriod + h1 * TAU);
-    const a = c.swimPh + h1 * TAU;
-    c.ox = amp * Math.cos(a) + rock;
-    c.oy = amp * Sw.flatten * Math.sin(a) + rock * 0.5;
+    c.ox = wx + amp * Math.cos(a) + rock;
+    c.oy = wy + amp * Sw.flatten * Math.sin(a) + rock * 0.5;
   }
 }
 
@@ -1622,7 +1639,7 @@ function drawCell(c, tick, t) {
   const S = PARAMS.sprite, z = cam.zoom, rpx = c.r * z;
   const cx = toSX(c.x + c.ox), cy = toSY(c.y + c.oy), reach = rpx * (2 + S.setaeLen) + 4;
   if (cx < -reach || cy < -reach || cx > W + reach || cy > H + reach) return;
-  const steps = S.tumbleSteps, angle = tumbleAngle(c, t);
+  const steps = S.tumbleSteps, angle = tumbleAngle(c, c.vt);   // tumbles on its own clock
   const step = mod(Math.round(angle / TAU * steps), steps);
   const spr = rpx < S.speckR ? SPECK : spriteFor(c, rpx, step);
   const irPhase = step + c.id + Math.floor(t * S.iridSpeed);
@@ -1927,7 +1944,6 @@ function drawHud(w, now) {
 // All pixel work for one frame. Returns the time spent on the debug overlay, so frame timing can leave it out.
 function composeFrame(w, now) {
   const t = w.tick * TICK_DT, ta = ambientT >= 0 ? ambientT : t, P = PARAMS.particles;
-  let dA = 0;
   view.bx0 = clamp(Math.round(cam.x * cam.zoom), 0, Math.round(W * cam.zoom) - W);
   view.by0 = clamp(Math.round(cam.y * cam.zoom), 0, Math.round(H * cam.zoom) - H);
   buildDeadline = performance.now() + PARAMS.sprite.buildBudgetMs;
@@ -1935,11 +1951,11 @@ function composeFrame(w, now) {
   dayLight = moon + (1 - moon) * w.surfaceLight;
   updateSun(dayPhase(w));
   updateBloom(w);
-  dA = updateSea(w, ta);
+  updateSea(w, ta);
   updateRays(waterT);
   updateShimmer(waterT);
   updateCaustics(waterT, w.tick);
-  updateSwim(w, dA, ta);
+  updateSwim(w, ta);
   drawBackground(waterT);
   drawParticles(P.far, 1000, ta, false);
   drawParticles(P.mid, 2000, ta, false);

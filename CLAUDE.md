@@ -69,6 +69,7 @@ Mutation on division: small random walk (±8% of range) per gene, with a 5% chan
    - **Night descent**: in darkness cells follow the nutrient gradient down instead of seeking light; phototaxis pulls them back up at dawn (diel vertical migration).
    - **Night rest** (circadian clock): as the sun goes down, upkeep and ageing slow to 12%, so cells survive the night without dividing.
 2. **Metabolism**: `energy += light × nutrients × efficiency − maintenance`, per unit biomass, with size allometry: the nutrient term saturates as `N / (N + halfSat × size)` (small cells win in bright, nutrient-poor water) and maintenance scales as `size^-1/2` (large cells endure dim water). Uptake removes nutrients from the local field and stays bound in the cell until it dies.
+   - **Turbulence (Margalef's mandala)** (approved local rule): small-scale turbulence inhibits dinoflagellate growth, diatoms don't mind it. Gain × `max(0, 1 − 1.5 · dinoWeight · wind · e^(−depth / 0.5 column))`: wind mixing is strongest at the surface and fades over the mixed layer. Dinoflagellates (including *Alexandrium* and *Dinophysis*) stay a minor share and bloom in long calm spells, sheltering below the mixed layer when it blows.
 3. **Division**: when energy passes a threshold, split into two daughters with mutated genomes and half the energy (and bound nutrients) each. The mother continues as one daughter (keeps her id, age resets); the other daughter's parent is her. A hard cell cap only blocks division, as a backstop.
 4. **Death**: energy below zero or age past lifespan → the cell fades out, sounds one soft last note, and returns its nutrients: part recycled where it died, the rest exported to the bottom as sinking detritus (the biological pump).
    - **Resting cysts**: a dying cell (more often a starving one) may leave a dormant cyst that sinks to the sediment and, after dormancy, germinates where nutrients are rich. A seed bank against extinction.
@@ -169,6 +170,7 @@ The order was changed with the author (visuals first): the world's cycles and co
    *Done when*: root changes are rare and feel like events.
 6. **The player** — mother voice, QWERTY + MIDI, tap to feed, harmonic pull, phase nudging.
    *Done when*: playing and watching both feel complete, and stopping lets the water drift back on its own.
+7. **Field notebook** (planned last, author's request; a deliberate exception to "no UI panels") — infographics behind one subtle button: vertical migration lines per form, how many of each form live in the column, the phase of the day, and similar records. Pixel-art, palette-only, hidden by default.
 
 ---
 

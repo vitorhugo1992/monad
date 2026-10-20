@@ -134,7 +134,44 @@ const PARAMS = {
   // Seen only at night; it changes nothing else.
   luminous: { gain: 0.03, loss: 0.15 },
 
-  // ---- Everything below is visual only; none of it feeds back into the simulation. ----
+  // Harmonic field: one root and one pentatonic-family scale for the whole water, chosen by the seed.
+  // Rule 7: each cell holds a scale degree (inherited; a daughter may start one step away). When it flashes it
+  // moves at most one step toward the degree most consonant with what its neighbours sang recently.
+  // Register = depth: the surface sings high, the floor low; larger cells sing up to an octave lower.
+  harmony: {
+    scales: { major: [0, 2, 4, 7, 9], dorian: [0, 2, 3, 7, 9], minor: [0, 3, 5, 7, 10], hirajoshi: [0, 2, 3, 7, 8] },
+    top: 84, bottom: 36,                // MIDI: C6 at the surface .. C2 at the floor
+    sizeDrop: 12,                       // semitones lower at the largest size
+    listen: 12, recent: 4,              // neighbours within this distance (<= hash.cell) whose last flash is this recent (s)
+    consonance: [0.7, 0, 0.3, 0.85, 0.9, 1, 0.1],   // by interval class 0..6: unison/octave, m2, M2, m3, M3, 4th/5th, tritone
+    stay: 0.1,                          // per neighbour heard: a cell keeps its degree unless a step sounds clearly better
+    drift: 0.25,                        // chance a daughter starts one degree from her mother
+  },
+  // Singing and the voice budget, decided in the simulation (deterministic, so the headless check can measure it).
+  // A flash rarely starts a note on its own: more often when the cell is growing well (its recorded light x
+  // nutrient conditions, vigor), hardly when it rests at night or starves; glowing dinoflagellates sing in the dark.
+  // A cell that flashes just after a neighbour began a note joins in, so synchronised colonies sound as chords
+  // and loners sing alone. The budget then lets a note sound only if a voice is free and the onset bucket holds
+  // enough tokens: one to join, startNeed to start from a colony (room for its chord), a full bucket for a loner.
+  // Silence comes from thin, hungry or sleeping water.
+  voices: {
+    max: 10, rate: 2.5, burst: 5, startNeed: 3, lockedFull: 3, lockCos: 0.9,
+    start: 0.04, join: 0.85, joinWindow: 0.5,          // start chance per flash when thriving; join chance; s
+    minEnergy: 0.25, thriveFull: 0.12, restFloor: 0.15,
+    attackMin: 0.04, attackMax: 0.4, releaseMin: 2, releaseMax: 6, lastRelease: 7,   // s, by size; a last note lingers
+  },
+
+  // ---- Everything below is visual or audible only; none of it feeds back into the simulation. ----
+  // The ecosystem voice: soft triangle..square by timbre, lowpassed; deeper notes quieter and wetter.
+  audio: {
+    master: 0.7, voiceGain: 0.11, lastGain: 0.6, depthQuiet: 0.55, squareQuiet: 0.3, wetMin: 0.2, wetMax: 0.7,
+    cutoffMin: 1500, cutoffMax: 3000, busCutoff: 3200,
+    waves: 8, harmonics: 15, squareSoft: 0.12,         // PeriodicWaves from triangle to a soft square, built once
+    reverbSeconds: 4.5, reverbSend: 0.3, reverbDark: 0.6,
+    delayTime: 0.43, delayFeedback: 0.3, delaySend: 0.1, delayCutoff: 1400,
+    pan: 0.7, lookahead: 0.03, maxNodes: 12, muteRamp: 0.4,
+    comp: { threshold: -20, knee: 18, ratio: 2.5, attack: 0.05, release: 0.4 },
+  },
   camera: { levels: [1, 1.5, 2, 3, 4, 6, 8], wheelStep: 1 },   // zoom 1 shows the whole column
   sprite: {
     frames: 3, wobbleFps: 1,
@@ -268,7 +305,7 @@ const PARAMS = {
              feelers: 0.95, legBeat: 3, swimBeat: 9, glide: 0.45, wander: 8, dartEvery: 4.5, dartDist: 7, dartTime: 0.6 },
   },
   murk: { from: 0.8, full: 3 },         // bloom biomass summed down the upper column: rays fade in murky water
-  hud: { x: 4, y: 290, line: 7, visibleMs: 6000, fadeMs: 2000, epitaphFade: 20 },   // epitaph fades in over 20 simulated s
+  hud: { x: 4, y: 290, line: 7, visibleMs: 6000, fadeMs: 2000, epitaphFade: 20, listenY: 200, listenVis: 0.7 },   // listen: the TAP TO LISTEN hint   // epitaph fades in over 20 simulated s
   debug: { syncEvery: 15, sampleEvery: 100, historyLength: 180, frameSamples: 120, graphY: 172, graphH: 48, mapX: 126, mapY: 6, mapCell: 2 },
 };
 
@@ -684,7 +721,8 @@ function createCell(w, x, y, g, energy, parentId, spriteSeed) {
     id: w.nextId++, parentId, x, y, vx: 0, vy: 0,
     energy, held: 0, age: 0, lifespan: 0, vigor: 0,   // vigor: smoothed growth conditions, observed only
     theta: w.rng.next() * TAU, flashTick: -1000, dying: 0, grazed: false, eaten: null,
-    pull: 0, nbrs: 0,                                  // Kuramoto: sum of sin(theta_j - theta_i) and neighbour count
+    pull: 0, nbrs: 0, locked: 0,                       // Kuramoto: sum of sin(theta_j - theta_i), neighbours, those in phase
+    deg: 0, noteTick: -1000,                           // scale degree it sings (rule 7); when its last note began
     lum: false,                                        // bioluminescent (Alexandrium only; inherited)
     la: null, lb: null, chainLen: 1, chainId: 0,       // chain links toward the head (la) and the tail (lb)
     head: null, kickScale: 1, kx: 0, ky: 0,            // the colony's head and its shared Brownian kick
@@ -727,6 +765,7 @@ function createWorld(seed, founderCount, dayLength) {
     deaths: { starved: 0, old: 0, grazed: 0, sardines: 0, salps: 0 },   // observed only
     visitors: [], nextVisitorId: 1, carried: 0,     // carried: nutrients that left the column inside visitors
     extinctTick: -1,                                // observed only: when the last cell and the last cyst were gone
+    music: createMusic(seed),                       // harmonic field and voice budget; never feeds back into the biology
   };
   w.nextWind = Math.floor(rng.range(PARAMS.wind.gapMin, PARAMS.wind.gapMax) * PARAMS.time.tickRate);
   updateLight(w);
@@ -735,12 +774,14 @@ function createWorld(seed, founderCount, dayLength) {
     const base = randomGenome(rng), spriteSeed = rng.int(0x7fffffff), cx = rng.range(F.spread, W - F.spread);
     base.depthPref *= F.depthMax;
     const n = Math.floor(count / F.lineages) + (l < count % F.lineages ? 1 : 0);
+    const deg = w.music.rng.int(w.music.scale.length);
     for (let k = 0; k < n; k++) {
       const g = mutateGenome(base, rng);
       const x = clamp(cx + gauss(rng) * F.spread, 8, W - 8);
       const y = clamp(g.depthPref * H + gauss(rng) * F.spread, 8, H - 8);
       const c = createCell(w, x, y, g, rng.range(F.energyMin, F.energyMax), null, spriteSeed);
       c.age = rng.range(0, F.maxAge);
+      c.deg = driftDegree(w, deg);
       w.cells.push(c);
     }
   }
@@ -805,6 +846,7 @@ function stepWorld(w) {
     advancePhase(w, c, dt);
     c.age += dt * pace;
   }
+  singAndListen(w);
   updateChains(w, dt);
   graze(w, dt);
   updateVisitors(w, dt);
@@ -820,10 +862,12 @@ function stepWorld(w) {
 // The same neighbour pass gathers the Kuramoto pull (rule 6) from the phases before any of them move this tick,
 // and linked cells (chain adhesion) are held by springs instead of pushed apart.
 const PHASE_R2 = PARAMS.phase.radius * PARAMS.phase.radius;
+const HALF_PI = Math.PI / 2;
 function steer(w, c, dt) {
-  const D = PARAMS.drift, hs = w.hash;
+  const D = PARAMS.drift, hs = w.hash, lockCos = PARAMS.voices.lockCos;
   c.pull = 0;
   c.nbrs = 0;
+  c.locked = 0;
   // A colony diffuses as one body: its cells share the head's kick, smaller for a bigger colony
   const kick = c.chainId ? c.head : c, ks = c.chainId ? c.kickScale : 1;
   c.vx += kick.kx * ks;
@@ -850,7 +894,11 @@ function steer(w, c, dt) {
         const o = bucket[n];
         if (o === c) continue;
         const dx = c.x - o.x, dy = c.y - o.y, d2 = dx * dx + dy * dy;
-        if (d2 < PHASE_R2 && !o.dying) { c.pull += dsin(o.theta - c.theta); c.nbrs++; }
+        if (d2 < PHASE_R2 && !o.dying) {
+          const s = o.theta - c.theta;
+          c.pull += dsin(s); c.nbrs++;
+          if (dsin(s + HALF_PI) > lockCos) c.locked++;   // in phase: the voice budget hears colonies first
+        }
         if (o === c.la || o === c.lb || (c.habit === 2 && c.chainId && o.chainId === c.chainId)) continue;   // a star's cells meet at its hub
         const reach = (c.r + o.r) * D.separationRange;
         if (d2 >= reach * reach || d2 === 0) continue;
@@ -906,7 +954,7 @@ function metabolise(w, c, dt, pace) {
   const want = gain * PARAMS.metabolism.uptake * c.biomass;
   const got = want > 0 ? takeField(f.nut, c.x, c.y, want) : 0;
   c.energy += (want > 0 ? gain * got / want : 0) - c.maintK * pace * dt;
-  c.vigor += (L * N / (N + c.halfSat) - c.vigor) * dt / PARAMS.metabolism.vigorTau;   // recorded, never read by the rules
+  c.vigor += (L * N / (N + c.halfSat) - c.vigor) * dt / PARAMS.metabolism.vigorTau;   // recorded, never read by the rules (swimming, singing)
   c.held += got;
 }
 
@@ -1225,6 +1273,7 @@ function divide(w, c) {
   b.vx = c.vx; b.vy = c.vy;
   b.theta = c.theta;
   b.vigor = c.vigor;
+  b.deg = driftDegree(w, c.deg);
 
   c.x -= ox; c.y -= oy;
   c.g = gA;
@@ -1247,12 +1296,13 @@ function die(w, c, starved) {
   const Cy = PARAMS.cyst, nut = w.fields.nut;
   c.dying = 1;
   unlink(c);
+  lastNote(w, c);
   let give = c.held;
   if (w.cysts.length < Cy.max && w.rng.chance(starved ? Cy.chanceStarved : Cy.chanceOld)) {
     const reserve = give * Cy.reserve;
     give -= reserve;
     w.cysts.push({
-      x: c.x, y: c.y, floorY: H - PARAMS.world.floor + w.rng.range(0.5, 2), g: c.g, spriteSeed: c.spriteSeed, lum: c.lum,
+      x: c.x, y: c.y, floorY: H - PARAMS.world.floor + w.rng.range(0.5, 2), g: c.g, spriteSeed: c.spriteSeed, lum: c.lum, deg: c.deg,
       reserve, age: 0, dormancy: w.rng.range(Cy.dormancyMin, Cy.dormancyMax),
     });
   }
@@ -1278,6 +1328,7 @@ function updateCysts(w, dt) {
       const c = createCell(w, q.x, q.y, q.g, Cy.germEnergy, null, q.spriteSeed);
       c.held = q.reserve;
       c.lum = q.lum;
+      c.deg = q.deg;
       w.cells.push(c);
       alive++;
       continue;
@@ -1288,10 +1339,283 @@ function updateCysts(w, dt) {
 }
 
 // ===== Harmony =====
-// Phase 2.
+// The water chemistry: one root and one scale, every note quantised to it. Only one tonal centre at a time.
+// Everything here runs inside the fixed tick, on its own seeded stream (so the music never changes the biology),
+// and only produces note events; the Audio section turns them into sound.
+const SCALE_NAMES = Object.keys(PARAMS.harmony.scales);
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const LISTEN2 = PARAMS.harmony.listen * PARAMS.harmony.listen;
+const RECENT_TICKS = PARAMS.harmony.recent * PARAMS.time.tickRate;
+const SINGERS = [];
+const SCORE = new Float64Array(3);
+
+// The key is chosen by the seed; the root stays fixed until elders move it (phase 5)
+function createMusic(seed) {
+  const k = hash32(seed ^ 0x5bd1e995), name = SCALE_NAMES[(k >>> 8) % SCALE_NAMES.length];
+  return {
+    rng: makeRng(hash32(seed + 0x9e3779b9)), root: k % 12, scaleName: name, scale: PARAMS.harmony.scales[name],
+    tokens: PARAMS.voices.burst, ends: [], notes: [], recent: [], onsets: 0, nextNote: 1,
+  };
+}
+
+// A daughter (or a founder) may start one degree from where she came from
+function driftDegree(w, deg) {
+  const m = w.music, n = m.scale.length;
+  if (!m.rng.chance(PARAMS.harmony.drift)) return deg;
+  return (deg + (m.rng.chance(0.5) ? 1 : n - 1)) % n;
+}
+
+// Interval class (0..6 semitones) between two pitch classes
+function intervalClass(a, b) {
+  const d = ((a - b) % 12 + 12) % 12;
+  return d > 6 ? 12 - d : d;
+}
+
+// Register = depth: the scale degree in the octave nearest the cell's place in the column; big cells sing lower
+function notePitch(m, c) {
+  const Hm = PARAMS.harmony, [lo, hi] = GENES.size;
+  const depth = clamp(c.y / (H - PARAMS.world.floor), 0, 1);
+  const target = Hm.top - (Hm.top - Hm.bottom) * depth - Hm.sizeDrop * (c.g.size - lo) / (hi - lo);
+  const pc = m.root + m.scale[c.deg];
+  let midi = pc + 12 * Math.round((target - pc) / 12);
+  while (midi > Hm.top) midi -= 12;
+  while (midi < Hm.bottom) midi += 12;
+  return midi;
+}
+
+// Rule 7: the degree one step down, the same, or one step up, whichever sounds best against what the neighbours
+// sang recently (pitch classes only: octaves come from depth). Reads degrees only, so the caller can apply all
+// moves after every singer has listened, and the order of cells never matters.
+function attractDegree(w, c) {
+  const m = w.music, Hm = PARAMS.harmony, hs = w.hash, n = m.scale.length, cons = Hm.consonance;
+  SCORE[0] = SCORE[1] = SCORE[2] = 0;
+  let heard = 0;
+  const ci = clamp(Math.floor(c.x / hs.s), 0, hs.cols - 1), cj = clamp(Math.floor(c.y / hs.s), 0, hs.rows - 1);
+  for (let j = cj - 1; j <= cj + 1; j++) {
+    if (j < 0 || j >= hs.rows) continue;
+    for (let i = ci - 1; i <= ci + 1; i++) {
+      if (i < 0 || i >= hs.cols) continue;
+      const bucket = hs.buckets[j * hs.cols + i];
+      for (let k = 0; k < bucket.length; k++) {
+        const o = bucket[k];
+        if (o === c || o.dying || w.tick - o.flashTick > RECENT_TICKS) continue;
+        const dx = c.x - o.x, dy = c.y - o.y;
+        if (dx * dx + dy * dy >= LISTEN2) continue;
+        const po = m.scale[o.deg];
+        for (let s = 0; s < 3; s++) SCORE[s] += cons[intervalClass(m.scale[(c.deg + s + n - 1) % n], po)];
+        heard++;
+      }
+    }
+  }
+  if (!heard) return c.deg;
+  SCORE[1] += Hm.stay * heard;
+  let best = 1;
+  if (SCORE[0] > SCORE[best]) best = 0;
+  if (SCORE[2] > SCORE[best]) best = 2;
+  return (c.deg + best + n - 1) % n;
+}
+
+// Each tick: flashing cells listen and retune (rule 7), then the voice budget picks who is heard
+function singAndListen(w) {
+  const m = w.music, V = PARAMS.voices, cells = w.cells;
+  m.tokens = Math.min(V.burst, m.tokens + V.rate * TICK_DT);
+  let k = 0;
+  for (let i = 0; i < m.ends.length; i++) if (m.ends[i] > w.tick) m.ends[k++] = m.ends[i];
+  m.ends.length = k;
+  k = 0;
+  for (let i = 0; i < m.recent.length; i++) if (w.tick - m.recent[i] < 10 * PARAMS.time.tickRate) m.recent[k++] = m.recent[i];
+  m.recent.length = k;
+
+  SINGERS.length = 0;
+  for (let i = 0; i < cells.length; i++) if (!cells[i].dying && cells[i].flashTick === w.tick) SINGERS.push(cells[i]);
+  if (!SINGERS.length) return;
+  for (const c of SINGERS) c.nextDeg = attractDegree(w, c);
+  for (const c of SINGERS) c.deg = c.nextDeg;
+
+  // The most locked-in cells first: colonies are heard over loners
+  SINGERS.sort((a, b) => b.locked - a.locked || a.id - b.id);
+  const Dr = PARAMS.drift, dark = w.surfaceLight < Dr.darkHi;
+  for (const c of SINGERS) {
+    if (c.energy < V.minEnergy || m.ends.length >= V.max) continue;
+    if (heardNote(w, c)) {
+      if (m.tokens < 1 || !m.rng.chance(V.join)) continue;
+    } else {
+      const thrive = c.lum && dark ? 1 : Math.max(V.restFloor, smoothstep(0, V.thriveFull, c.vigor));
+      if (!m.rng.chance(V.start * thrive)) continue;
+      if (m.tokens < V.burst - (V.burst - V.startNeed) * smoothstep(0, V.lockedFull, c.locked)) continue;
+    }
+    emitNote(w, c, false);
+  }
+}
+
+// Did a neighbour begin a note a moment ago?
+function heardNote(w, c) {
+  const hs = w.hash, since = w.tick - PARAMS.voices.joinWindow * PARAMS.time.tickRate;
+  const ci = clamp(Math.floor(c.x / hs.s), 0, hs.cols - 1), cj = clamp(Math.floor(c.y / hs.s), 0, hs.rows - 1);
+  for (let j = cj - 1; j <= cj + 1; j++) {
+    if (j < 0 || j >= hs.rows) continue;
+    for (let i = ci - 1; i <= ci + 1; i++) {
+      if (i < 0 || i >= hs.cols) continue;
+      const bucket = hs.buckets[j * hs.cols + i];
+      for (let k = 0; k < bucket.length; k++) {
+        const o = bucket[k];
+        if (o === c || o.noteTick < since || o.dying) continue;
+        const dx = c.x - o.x, dy = c.y - o.y;
+        if (dx * dx + dy * dy < LISTEN2) return true;
+      }
+    }
+  }
+  return false;
+}
+
+// A cell that dies (not one that is eaten) sounds one soft last note, if the budget allows
+function lastNote(w, c) {
+  const m = w.music;
+  if (m.tokens >= 1 && m.ends.length < PARAMS.voices.max) emitNote(w, c, true);
+}
+
+function emitNote(w, c, last) {
+  const m = w.music, V = PARAMS.voices, [lo, hi] = GENES.size, s = (c.g.size - lo) / (hi - lo);
+  const attack = V.attackMin + (V.attackMax - V.attackMin) * s;
+  const release = last ? V.lastRelease : V.releaseMin + (V.releaseMax - V.releaseMin) * s;
+  m.tokens -= 1;
+  c.noteTick = w.tick;
+  m.ends.push(w.tick + Math.ceil((attack + release) * PARAMS.time.tickRate));
+  m.recent.push(w.tick);
+  m.onsets++;
+  m.notes.push({
+    id: m.nextNote++, tick: w.tick, cell: c.id, midi: notePitch(m, c), pc: (m.root + m.scale[c.deg]) % 12,
+    x: c.x, y: c.y, timbre: c.g.timbre, attack, release, last, locked: c.locked,
+  });
+}
+
+const keyName = (m) => NOTE_NAMES[m.root] + ' ' + m.scaleName.toUpperCase();
 
 // ===== Audio =====
-// Phase 2.
+// Discrete, enveloped notes only: every oscillator starts, swells, fades to 0.0001 and is disconnected.
+// voices -> ecosystem bus -> lowpass -> dry + reverb send + delay send -> master -> gentle compressor -> out.
+// Deeper voices also send straight into the reverb, so the depths sound quieter and wetter.
+const audio = { ctx: null, started: false, muted: false, master: null, bus: null, wet: null, waves: [], active: 0, played: 0 };
+
+// Triangle (odd harmonics 1/n^2) blending toward a soft square (1/n, rolled off), built once
+function buildWaves(ctx) {
+  const A = PARAMS.audio, waves = [];
+  for (let i = 0; i < A.waves; i++) {
+    const t = i / (A.waves - 1), real = new Float32Array(A.harmonics + 1), imag = new Float32Array(A.harmonics + 1);
+    for (let n = 1; n <= A.harmonics; n += 2) {
+      const tri = 8 / (Math.PI * Math.PI * n * n), sq = 4 / (Math.PI * n) * Math.exp(-A.squareSoft * (n - 1));
+      imag[n] = ((n >> 1) & 1 ? -1 : 1) * (tri + (sq - tri) * t);
+    }
+    waves.push(ctx.createPeriodicWave(real, imag));
+  }
+  return waves;
+}
+
+// A dark stereo tail: decaying noise whose highs die first. Its own seeded stream, built once.
+function buildImpulse(ctx) {
+  const A = PARAMS.audio, rate = ctx.sampleRate, len = Math.floor(A.reverbSeconds * rate);
+  const buf = ctx.createBuffer(2, len, rate), rng = makeRng(0x0ce4);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = buf.getChannelData(ch);
+    let lp = 0;
+    for (let i = 0; i < len; i++) {
+      const t = i / len, k = 1 - A.reverbDark * t;   // one-pole lowpass closing over the tail
+      lp += (rng.next() * 2 - 1 - lp) * k;
+      d[i] = lp * Math.pow(1 - t, 3) * Math.exp(-3 * t);
+    }
+  }
+  return buf;
+}
+
+// Called from a user gesture: browsers only allow sound after one
+function startAudio() {
+  if (audio.ctx) { if (audio.ctx.state !== 'running') audio.ctx.resume(); return; }
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  const A = PARAMS.audio, ctx = new AC(), gain = (v) => { const g = ctx.createGain(); g.gain.value = v; return g; };
+  const comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = A.comp.threshold; comp.knee.value = A.comp.knee; comp.ratio.value = A.comp.ratio;
+  comp.attack.value = A.comp.attack; comp.release.value = A.comp.release;
+  comp.connect(ctx.destination);
+  const master = gain(audio.muted ? 0.0001 : A.master);
+  master.connect(comp);
+
+  const verb = ctx.createConvolver();
+  verb.buffer = buildImpulse(ctx);
+  verb.connect(master);
+  const verbIn = gain(A.reverbSend);
+  verbIn.connect(verb);
+
+  const delay = ctx.createDelay(1), fb = gain(A.delayFeedback), dark = ctx.createBiquadFilter(), delayIn = gain(A.delaySend);
+  delay.delayTime.value = A.delayTime;
+  dark.type = 'lowpass'; dark.frequency.value = A.delayCutoff;
+  delayIn.connect(delay); delay.connect(dark); dark.connect(fb); fb.connect(delay); dark.connect(master);
+
+  const bus = gain(1), lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass'; lp.frequency.value = A.busCutoff; lp.Q.value = 0.5;
+  bus.connect(lp); lp.connect(master); lp.connect(verbIn); lp.connect(delayIn);
+  const wet = gain(1);
+  wet.connect(verb);
+
+  Object.assign(audio, { ctx, master, bus, wet, waves: buildWaves(ctx), started: true });
+  if (ctx.state !== 'running') ctx.resume();
+}
+
+function setMuted(muted) {
+  audio.muted = muted;
+  if (!audio.ctx) return;
+  const g = audio.master.gain, t = audio.ctx.currentTime;
+  g.setValueAtTime(g.value, t);
+  g.linearRampToValueAtTime(muted ? 0.0001 : PARAMS.audio.master, t + PARAMS.audio.muteRamp);
+}
+
+function playNote(n) {
+  const A = PARAMS.audio, ctx = audio.ctx;
+  if (audio.active >= A.maxNodes) return;
+  const depth = clamp(n.y / (H - PARAMS.world.floor), 0, 1), wetK = A.wetMin + (A.wetMax - A.wetMin) * depth;
+  const t0 = ctx.currentTime + A.lookahead, end = t0 + n.attack + n.release;
+  const peak = A.voiceGain * (1 - A.depthQuiet * depth) * (1 - A.squareQuiet * n.timbre) * (n.last ? A.lastGain : 1);
+
+  const osc = ctx.createOscillator();
+  osc.setPeriodicWave(audio.waves[Math.round(n.timbre * (audio.waves.length - 1))]);
+  osc.frequency.value = 440 * Math.pow(2, (n.midi - 69) / 12);
+  const filt = ctx.createBiquadFilter();
+  filt.type = 'lowpass';
+  filt.frequency.value = (A.cutoffMax - (A.cutoffMax - A.cutoffMin) * n.timbre) * (n.last ? 0.6 : 1);
+  filt.Q.value = 0.3;
+  const env = ctx.createGain();
+  env.gain.setValueAtTime(0.0001, t0);
+  env.gain.linearRampToValueAtTime(peak, t0 + n.attack);
+  env.gain.exponentialRampToValueAtTime(0.0001, end);
+  const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+  const dry = ctx.createGain(), wet = ctx.createGain();
+  dry.gain.value = 1 - wetK;
+  wet.gain.value = wetK;
+  osc.connect(filt); filt.connect(env);
+  let out = env;
+  if (pan) { pan.pan.value = (n.x / W * 2 - 1) * A.pan; env.connect(pan); out = pan; }
+  out.connect(dry); out.connect(wet);
+  dry.connect(audio.bus); wet.connect(audio.wet);
+  osc.start(t0);
+  osc.stop(end + 0.05);
+  audio.active++;
+  audio.played++;
+  osc.onended = () => {
+    for (const node of [osc, filt, env, pan, dry, wet]) if (node) node.disconnect();
+    audio.active--;
+  };
+}
+
+// Drains the tick's note events. In time-lapse only a share of them plays (about the real-time density);
+// the simulation is unchanged.
+function hearNotes(w) {
+  const notes = w.music.notes;
+  if (audio.started && !audio.muted && audio.ctx.state === 'running') {
+    const keep = 1 / PARAMS.time.speeds[speedLevel];
+    for (const n of notes) if (keep >= 1 || hash01(Math.imul(n.id, 0x9e3779b1)) < keep) playNote(n);
+  }
+  notes.length = 0;
+}
 
 // ===== Render =====
 // Every layer writes palette indices into one buffer; it is converted to colour once per frame.
@@ -2776,7 +3100,7 @@ const FONT = {
   K: [5, 5, 6, 5, 5], L: [4, 4, 4, 4, 7], M: [5, 7, 7, 5, 5], N: [6, 5, 5, 5, 5], O: [2, 5, 5, 5, 2],
   P: [6, 5, 6, 4, 4], Q: [2, 5, 5, 7, 3], R: [6, 5, 6, 5, 5], S: [3, 4, 2, 1, 6], T: [7, 2, 2, 2, 2],
   U: [5, 5, 5, 5, 7], V: [5, 5, 5, 5, 2], W: [5, 5, 7, 7, 5], X: [5, 5, 2, 5, 5], Y: [5, 5, 2, 2, 2],
-  Z: [7, 1, 2, 4, 7], ':': [0, 2, 0, 2, 0], '.': [0, 0, 0, 0, 2], '-': [0, 0, 7, 0, 0], '/': [1, 1, 2, 4, 4],
+  Z: [7, 1, 2, 4, 7], '#': [5, 7, 5, 7, 5], ':': [0, 2, 0, 2, 0], '.': [0, 0, 0, 0, 2], '-': [0, 0, 7, 0, 0], '/': [1, 1, 2, 4, 4],
   ' ': [0, 0, 0, 0, 0],
 };
 
@@ -2821,7 +3145,14 @@ function drawHud(w, now) {
   drawText(Hd.x, Hd.y + Hd.line, 'T ' + clock(w.tick * TICK_DT), COL.FOAM, vis);
   drawText(Hd.x, Hd.y + Hd.line * 2, 'POP ' + pad(aliveCount(w), 3), rampBase(1) + HIGHLIGHT, vis);
   const speed = PARAMS.time.speeds[speedLevel];
-  drawText(Hd.x, Hd.y + Hd.line * 3, 'MAG ' + cam.zoom + 'X' + (speed > 1 ? '  TIME ' + speed + 'X' : ''), COL.FOAM, vis);
+  drawText(Hd.x, Hd.y + Hd.line * 3, 'MAG ' + cam.zoom + 'X' + (speed > 1 ? '  TIME ' + speed + 'X' : '') + (audio.muted ? '  MUTE' : ''), COL.FOAM, vis);
+}
+
+// Browsers keep sound off until a gesture; until then a quiet invitation sits in the water
+function drawListenHint() {
+  if (audio.started) return;
+  const text = 'TAP TO LISTEN';
+  drawText(Math.floor((W - text.length * 4 + 1) / 2), PARAMS.hud.listenY, text, COL.FOAM, PARAMS.hud.listenVis);
 }
 
 // All pixel work for one frame. Returns the time spent on the debug overlay, so frame timing can leave it out.
@@ -2855,6 +3186,7 @@ function composeFrame(w, now) {
   drawVisitors(w, ta);
   drawParticles(P.near, 3000, ta, true);
   drawHud(w, now);
+  drawListenHint();
   let overlayMs = 0;
   if (debug.on) { const t0 = performance.now(); drawDebug(w); overlayMs = performance.now() - t0; }
   blitTimeOfDay(w);
@@ -2893,6 +3225,7 @@ function setupInput() {
 
   el.addEventListener('pointerdown', (e) => {
     wake();
+    startAudio();
     el.setPointerCapture(e.pointerId);
     input.pointers.set(e.pointerId, toInternal(e));
     if (input.pointers.size === 2) startPinch();
@@ -2920,7 +3253,7 @@ function setupInput() {
     input.pointers.delete(e.pointerId);
     if (input.pointers.size < 2) input.pinch = null;
   };
-  el.addEventListener('pointerup', release);
+  el.addEventListener('pointerup', (e) => { startAudio(); release(e); });
   el.addEventListener('pointercancel', release);
 
   el.addEventListener('wheel', (e) => {
@@ -2932,6 +3265,8 @@ function setupInput() {
 
   window.addEventListener('keydown', (e) => {
     wake();
+    if (e.key === 'm' || e.key === 'M') { if (audio.started) setMuted(!audio.muted); else startAudio(); return; }
+    startAudio();
     if (e.key === 'd' || e.key === 'D') debug.on = !debug.on;
     else if (e.key === '+' || e.key === '=') zoomAt(cam.level + 1, W / 2, H / 2);
     else if (e.key === '-' || e.key === '_') zoomAt(cam.level - 1, W / 2, H / 2);
@@ -3031,7 +3366,7 @@ function drawDebug(w) {
     'POP ' + pop + '  CYST ' + w.cysts.length + '  NUT ' + meanNutrient(w).toFixed(2),
     'SYNC ' + sy.local.toFixed(2) + ' LK ' + sy.locked.toFixed(2) + ' G ' + sy.global.toFixed(2),
     'CHAIN ' + sy.chains + ' MAX ' + sy.longest + ' IN ' + Math.round(sy.chained * 100) + '%',
-    'VOX -  ONS -',
+    'VOX ' + (audio.started ? audio.active : w.music.ends.length) + '  ONS ' + (w.music.recent.length / 10).toFixed(1) + '  KEY ' + keyName(w.music),
     'MS ' + avg.toFixed(1) + '  P95 ' + p95.toFixed(1),
     'DROP ' + debug.droppedTicks,
     'CK ' + ck,
@@ -3080,6 +3415,7 @@ function frame(now) {
   while (acc >= TICK_DT && ticks < PARAMS.time.maxTicksPerFrame * speed) {
     stepWorld(world);
     debugSample(world);
+    hearNotes(world);
     acc -= TICK_DT;
     ticks++;
   }
@@ -3100,7 +3436,7 @@ function hashString(s) {
 }
 
 // ?seed= (number or word), ?debug, ?stress (start at the cell cap), ?ff=seconds (fast-forward),
-// ?zoom=1..4 with ?at=x,y (world point to centre on), ?speed=1|2|4|8 (time-lapse), ?day=5|10|30 (minutes)
+// ?zoom=1..4 with ?at=x,y (world point to centre on), ?speed=1|2|4|8 (time-lapse), ?day=5|10|30 (minutes). M mutes.
 function readOptions() {
   const q = new URLSearchParams(location.search);
   let label = (q.get('seed') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12), seed;
@@ -3126,7 +3462,7 @@ function init() {
   world = createWorld(opts.seed, opts.stress ? PARAMS.division.maxCells : 0, opts.dayLength);
   debug.on = opts.debug;
   const ffTicks = Math.floor(opts.ff * PARAMS.time.tickRate);
-  for (let i = 0; i < ffTicks; i++) { stepWorld(world); debugSample(world); }
+  for (let i = 0; i < ffTicks; i++) { stepWorld(world); debugSample(world); world.music.notes.length = 0; }
   initRender(document.getElementById('screen'));
   cam.level = nearestLevel(opts.zoom);
   cam.zoom = ZOOMS[cam.level];

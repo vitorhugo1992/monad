@@ -4,17 +4,18 @@
 //   node tools/sim-check.mjs [seeds=30] [minutes=30] [firstSeed=1] [param.path=value ...]
 //
 // Reports per seed: population sparkline, min/max, cap pressure, extinctions, the bloom arc,
-// diel migration, nutrient pulses, deaths by cause, nutrient conservation, phase sync and chains.
+// diel migration, nutrient pulses, deaths by cause, nutrient conservation, phase sync and chains,
+// and the music the voice budget lets through: onsets/s, silences, chords and how consonant it is.
 // Run with phase.K=0 to see that the sync comes from rule 6.
 
 import { readFileSync } from 'node:fs';
 
 const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const start = html.indexOf('// ===== PARAMS =====');
-const end = html.indexOf('// ===== Harmony =====');
+const end = html.indexOf('// ===== Audio =====');
 if (start < 0 || end < 0) throw new Error('section markers not found');
 const sim = new Function(html.slice(start, end) +
-  '\nreturn { PARAMS, createWorld, stepWorld, aliveCount, nutrientInventory, worldChecksum, dayPhase, syncStats, dinoWeight, GENES, HUE_WHEEL };')();
+  '\nreturn { PARAMS, createWorld, stepWorld, aliveCount, nutrientInventory, worldChecksum, dayPhase, syncStats, dinoWeight, GENES, HUE_WHEEL, intervalClass, keyName };')();
 
 // Positional numbers, plus PARAMS overrides like metabolism.efficiency=0.2 or diel.dayLength=600
 const args = process.argv.slice(2);
@@ -47,11 +48,25 @@ function run(seed) {
   let lateMin = Infinity, lateCellMin = Infinity, extinctAt = null;
   let capTicks = 0, extinct = false, minPop = Infinity, maxPop = 0, pulses = 0, lastPhase = sim.dayPhase(w);
   const noon = [], night = [], syncs = [], dinos = [];
+  // Music: onset times, chords (2+ onsets within chordWin), clashes against the notes still sounding
+  const chordWin = 0.3 * rate, sounding = [], onsetTicks = [];
+  let chords2 = 0, chords3 = 0, group = 0, groupStart = -1e9, pairs = 0, harsh = 0, seconds = 0, lastNotes = 0, maxVox = 0;
   const total = minutes * 60 * rate;
   for (let t = 1; t <= total; t++) {
     const before = w.pulses.length;
     sim.stepWorld(w);
     if (w.pulses.length > before) pulses++;
+    for (let i = sounding.length - 1; i >= 0; i--) if (sounding[i].end <= t) sounding.splice(i, 1);
+    for (const n of w.music.notes) {
+      onsetTicks.push(t);
+      if (n.last) lastNotes++;
+      if (t - groupStart > chordWin) { if (group >= 2) chords2++; if (group >= 3) chords3++; group = 0; groupStart = t; }
+      group++;
+      for (const o of sounding) { const ic = sim.intervalClass(n.pc, o.pc); pairs++; if (ic === 1 || ic === 6) harsh++; if (ic === 2) seconds++; }
+      sounding.push({ pc: n.pc, end: t + Math.ceil((n.attack + n.release) * rate) });
+    }
+    w.music.notes.length = 0;
+    maxVox = Math.max(maxVox, w.music.ends.length);
     const pop = sim.aliveCount(w);
     if (pop >= cap) capTicks++;
     if (pop === 0 && w.cysts.length === 0 && !extinct) { extinct = true; extinctAt = t / rate / 60; }
@@ -75,13 +90,20 @@ function run(seed) {
     }
     lastPhase = ph;
   }
+  if (group >= 2) chords2++;
+  if (group >= 3) chords3++;
+  // Silences: gaps between onsets; near-silence = a gap of at least 6 s
+  let longest = 0, quiet = 0, prev = 0;
+  for (const o of [...onsetTicks, total]) { const g = (o - prev) / rate; longest = Math.max(longest, g); if (g >= 6) quiet += g; prev = o; }
+  const music = { ons: onsetTicks.length / (total / rate), longest, quiet: quiet / (total / rate), chords2: chords2 / minutes, chords3: chords3 / minutes,
+                  harsh: pairs ? harsh / pairs : 0, seconds: pairs ? seconds / pairs : 0, lastNotes, maxVox, key: sim.keyName(w.music) };
   const drift = sim.nutrientInventory(w) - (w.initialInventory + w.upwelled - w.carried);
   const mean = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : NaN);
   const alive = w.cells.filter((c) => !c.dying);
   const ramps = new Array(sim.HUE_WHEEL.length).fill(0);
   for (const c of alive) ramps[Math.floor(c.g.hue)]++;
   return {
-    seed, pops, minPop, maxPop, lateMin, lateCellMin, extinctAt, capFrac: capTicks / total, extinct, drift, arc: arcs(pops), pulses,
+    seed, music, pops, minPop, maxPop, lateMin, lateCellMin, extinctAt, capFrac: capTicks / total, extinct, drift, arc: arcs(pops), pulses,
     noon: mean(noon), night: mean(night), deaths: w.deaths, ramps,
     size: mean(alive.map((c) => c.g.size)), checksum: sim.worldChecksum(w),
     sync: Object.fromEntries(['local', 'locked', 'global', 'chained', 'chains', 'longest', 'coils', 'stars'].map((k) => [k, mean(syncs.map((q) => q[k]))])),
@@ -113,7 +135,9 @@ for (let s = firstSeed; s < firstSeed + seeds; s++) {
     ` | size ${f(r.size)} ramps ${r.ramps.join('/')} drift ${r.drift.toExponential(1)}` +
     ` | sync loc ${f(r.sync.local)} lock ${f(r.sync.locked)} glob ${f(r.sync.global)}` +
     ` | chains ${r.sync.chains.toFixed(1)} in ${Math.round(r.sync.chained * 100)}% max ${r.longest} rings ${r.sync.coils.toFixed(1)} stars ${r.sync.stars.toFixed(1)}` +
-    ` | dino ${Math.round(r.dino.share * 100)}% peak ${r.dino.peak} >=50 ${Math.round(r.dino.over50 * 100)}%\n`);
+    ` | dino ${Math.round(r.dino.share * 100)}% peak ${r.dino.peak} >=50 ${Math.round(r.dino.over50 * 100)}%` +
+    ` | music ${r.music.key} ons ${r.music.ons.toFixed(2)}/s vox<=${r.music.maxVox} quiet ${Math.round(r.music.quiet * 100)}% longest ${r.music.longest.toFixed(0)} s` +
+    ` chords/min ${r.music.chords2.toFixed(1)} (3+ ${r.music.chords3.toFixed(1)}) clash ${(r.music.harsh * 100).toFixed(1)}% 2nds ${(r.music.seconds * 100).toFixed(0)}% last ${r.music.lastNotes}\n`);
 }
 
 const again = run(firstSeed);
@@ -128,6 +152,7 @@ console.log('\n' + [
   `sync local / locked / global (median): ${['local', 'locked', 'global'].map((k) => median(results.map((r) => r.sync[k])).toFixed(2)).join(' / ')}`,
   `chains: median count ${median(results.map((r) => r.sync.chains)).toFixed(1)}, cells chained ${Math.round(100 * median(results.map((r) => r.sync.chained)))}%, longest ${Math.max(...results.map((r) => r.longest))}`,
   `dinoflagellates: median share ${Math.round(100 * median(results.map((r) => r.dino.share)))}%, seeds with a bloom of >=50: ${results.filter((r) => r.dino.peak >= 50).length}/${n}, median time spent >=50: ${Math.round(100 * median(results.map((r) => r.dino.over50)))}%`,
+  `music (median): onsets ${median(results.map((r) => r.music.ons)).toFixed(2)}/s, near-silence ${Math.round(100 * median(results.map((r) => r.music.quiet)))}% of the time, chords ${median(results.map((r) => r.music.chords2)).toFixed(1)}/min (3+ ${median(results.map((r) => r.music.chords3)).toFixed(1)}), m2/tritone clashes ${(100 * median(results.map((r) => r.music.harsh))).toFixed(1)}%, seconds ${Math.round(100 * median(results.map((r) => r.music.seconds)))}%`,
   `max |nutrient drift|: ${Math.max(...results.map((r) => Math.abs(r.drift))).toExponential(2)}`,
   `deterministic rerun: ${again.checksum === results[0].checksum ? 'yes' : 'NO'} (${results[0].checksum.toString(16)})`,
 ].join('\n'));

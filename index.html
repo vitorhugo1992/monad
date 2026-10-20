@@ -129,6 +129,11 @@ const PARAMS = {
     habit: { glass: 0.6, coilChance: 0.5, starChance: 0.7, coilCells: 8, starCells: 8, starRest: 0.45 },   // glass: how far into diatom glass the form must be
   },
   mutation: { step: 0.08, jumpChance: 0.05, jump: 0.3 },
+  // Elders (local rule, dark acclimation): a cell that spends its days in deep, dim water (light profile below
+  // light) slowly becomes an elder (0..1): its uptake, upkeep, ageing, pulse and swimming slow (it settles where it is), it stores energy before dividing
+  // and grows (an elder barely divides). Judged by day only (at night every cell is in the dark); fades slowly in brighter water. Dividing
+  // halves it. Elders sing long, low drones; the oldest full elder holds the harmonic root.
+  elder: { light: 0.12, grow: 1 / 300, fade: 1 / 300, slowUpkeep: 0.8, slowAge: 0.95, slowPulse: 0.75, settle: 0.9, store: 2, size: 0.5, singFrom: 0.6 },   // light 0.12: deeper than ~half the column
   // Bioluminescence: an inherited trait of Alexandrium-form dinoflagellates only. At division a daughter may
   // gain it or lose it, so glowing clades arise now and then, spread among kin and fade (about 1 in 6 at balance).
   // Seen only at night; it changes nothing else.
@@ -147,6 +152,7 @@ const PARAMS = {
     choirUnison: 0,                     // against a neighbour flashing in phase (or a chain mate) a unison only doubles: spread out
     stay: 0.05,                         // per neighbour heard: a cell keeps its degree unless a step sounds clearly better
     drift: 0.25,                        // chance a daughter starts one degree from her mother
+    rootRest: 180,                      // s a new key holds before another elder can move it
     // Lineage motifs (local rule): each lineage carries a short tune, scale steps from the cell's degree placed on
     // a Euclidean rhythm (notes spread as evenly as they fit, rotated) on a loop of 3..8 slots across one period of its own pulse. Inherited at division; now and then a note
     // moves a step (mutate) or a note is added or dropped (grow). A singer sings it over a bout of 1..boutMax flashes.
@@ -178,6 +184,10 @@ const PARAMS = {
     // Grazers muffle: where the grazer field is dense, notes are duller and shorter, so heavy grazing sounds
     // smothered before the die-off (field from..full; at full the cutoff and release shrink by these shares).
     muffle: { from: 0.3, full: 1.5, cutoff: 0.6, release: 0.5 },
+    // Elder drones: long low notes (MIDI low..high, C1..B1) on the elder's slow pulse, at most max at once; an elder
+    // sings again once `again` of its last drone's release has passed. Soft cells singing within steady units
+    // of a droning elder hold their notes longer (the pads), as if the elder steadies them.
+    drone: { max: 3, attack: [6, 10], release: [16, 28], low: 24, high: 35, again: 0.6, steady: 30, steadyHold: 2.5, steadyAttack: 1.5 },
   },
 
   // ---- Everything below is visual or audible only; none of it feeds back into the simulation. ----
@@ -190,7 +200,10 @@ const PARAMS = {
     // Partner oscillator per family: [frequency ratio, gain, how much of the release it lasts]
     partner: { soft: { ratio: 1.006, gain: 0.6, decay: 1 }, dino: { ratio: 3.98, gain: 0.35, decay: 0.25 }, glass: { ratio: 2.756, gain: 0.4, decay: 0.45 } },
     partnerMaxHz: 9000,
-    startleGain: 0.7, startleDry: 0.5, startleBright: 1.3,   // startle blurts: a little quieter, drier and brighter
+    startleGain: 0.7, startleDry: 0.5, startleBright: 1.3,
+    // Elder drones: a sine sub with two soft pad partials (octave and twelfth, detuned apart) under a filter that
+    // opens through the swell and closes through the long fade
+    drone: { gain: 0.2, pad: 0.06, cutLow: 160, cutHigh: 950, detune: 7, wet: 0.55, pan: 0.35, maxNodes: 4 },   // startle blurts: a little quieter, drier and brighter
     vibrato: { rateMin: 0.15, rateMax: 0.45, cents: 7 },   // soft cells' slow breathing, each note at its own rate
     // The world as macros, eased every update s: brightness follows daylight, echoes follow the sea state (long in
     // glassy calm, broken up by wind), the room follows bloom density, and visitors in the water cast an audible shadow.
@@ -254,6 +267,7 @@ const PARAMS = {
           chopFrom: 0.45, chopDepth: 40, chopRate: 0.25 },
   // Singing made visible: the cell swells and brightens with the note's own envelope (a dot grows to a speck),
   // and one ring of its pigment spreads from it, so every note can be traced to its singer at any zoom.
+  elderLook: { darken: 0.55, ringSlow: 3.5, ringBig: 2.5, haloBig: 2 },   // elders: darker pigment; slow, wide rings and halo while droning
   song: { ringPx: 9, ringZoom: 0.6, ringTime: 1.6, ringStart: 1.5, swell: 0.35, lift: 0.9,
           haloRadius: 2.5, haloMinPx: 3, haloMaxPx: 16, haloStrength: 0.45 },
   // Lineage threads: only while the sisters are still close (maxDist x their radii), fading with age and distance;
@@ -671,7 +685,8 @@ function deriveTraits(c) {
   c.maintK = M.maintenance / rs;             // per-biomass upkeep ~ size^-1/2: big cells endure the dark
   c.targetLight = PARAMS.light.surface * dexp(-PARAMS.light.atten * c.g.depthPref);
   c.dinoW = dinoWeight(c.g.timbre);
-  c.rv = c.r * PARAMS.cell.drawScale * (1 + (PARAMS.dino.scale - 1) * c.dinoW);   // drawn radius only
+  c.rvBase = c.r * PARAMS.cell.drawScale * (1 + (PARAMS.dino.scale - 1) * c.dinoW);   // drawn radius (and register)
+  c.rv = c.rvBase * (1 + PARAMS.elder.size * c.elder);                                  // elders grow
   if (!c.la && !c.lb) chainHabit(c);   // a colony keeps the habit it was founded with
 }
 
@@ -758,7 +773,8 @@ function createCell(w, x, y, g, energy, parentId, spriteSeed) {
     energy, held: 0, age: 0, lifespan: 0, vigor: 0,   // vigor: smoothed growth conditions, observed only
     theta: w.rng.next() * TAU, flashTick: -1000, dying: 0, grazed: false, eaten: null,
     pull: 0, nbrs: 0, locked: 0,                       // Kuramoto: sum of sin(theta_j - theta_i), neighbours, those in phase
-    deg: 0, noteTick: -1000, startleTick: -1000, motif: null, bout: 0,     // scale degree (rule 7); last phrase began; lineage tune; flashes left to sing
+    deg: 0, noteTick: -1000, startleTick: -1000, motif: null, bout: 0,
+    elder: 0, elderAge: 0, droneNext: 0, droneEnd: 0, rvBase: 0,   // elder (0..1), time as a full elder; drones     // scale degree (rule 7); last phrase began; lineage tune; flashes left to sing
     lum: false,                                        // bioluminescent (Alexandrium only; inherited)
     la: null, lb: null, chainLen: 1, chainId: 0,       // chain links toward the head (la) and the tail (lb)
     head: null, kickScale: 1, kx: 0, ky: 0,            // the colony's head and its shared Brownian kick
@@ -767,7 +783,7 @@ function createCell(w, x, y, g, energy, parentId, spriteSeed) {
     r: 0, rv: 0, dinoW: 0, biomass: 0, gainK: 0, halfSat: 0, maintK: 0, targetLight: 0,
     spr: null, ox: 0, oy: 0, swimPh: 0, vt: 0, tempo: 1,   // sprite cache and swimming (own clock, tempo): render only
     glowTick: -1000,                                       // render only: last disturbance flash
-    songAt: -1e9, songAtk: 0, songRel: 0, songLast: false,  // render only: the note it is sounding (real-time ms, s)
+    songAt: -1e9, songAtk: 0, songRel: 0, songLast: false, songDrone: false,  // render only: the note it is sounding (real-time ms, s)
   };
   deriveTraits(c);
   c.lifespan = lifespanFor(c, w.rng);
@@ -882,7 +898,8 @@ function stepWorld(w) {
     if (c.dying) continue;
     metabolise(w, c, dt, pace);
     advancePhase(w, c, dt);
-    c.age += dt * pace;
+    ageElder(w, c, dt);
+    c.age += dt * pace * (1 - PARAMS.elder.slowAge * c.elder);
   }
   singAndListen(w);
   updateChains(w, dt);
@@ -912,14 +929,14 @@ function steer(w, c, dt) {
   c.vy += kick.ky * ks;
 
   // Brighter than preferred -> swim down (+y); dimmer -> swim up. Bounded ratio, no log.
-  const night = 1 - smoothstep(D.darkLo, D.darkHi, w.surfaceLight);
+  const night = 1 - smoothstep(D.darkLo, D.darkHi, w.surfaceLight), settle = 1 - PARAMS.elder.settle * c.elder;   // elders barely swim
   if (night < 1) {
     const L = sampleField(w.fields.light, c.x, c.y), T = c.targetLight * w.surfaceLight;
-    c.vy += (1 - night) * D.phototaxis * (L - T) / (L + T + 1e-9) * dt;
+    c.vy += (1 - night) * D.phototaxis * (L - T) / (L + T + 1e-9) * settle * dt;
   }
   if (night > 0) {
     const nd = sampleField(w.fields.nut, c.x, c.y + GRID_H), nu = sampleField(w.fields.nut, c.x, c.y - GRID_H);
-    c.vy += night * D.nutritaxis * clamp(D.gradientGain * (nd - nu) / (nd + nu + 1e-6), -1, 1) * dt;
+    c.vy += night * D.nutritaxis * clamp(D.gradientGain * (nd - nu) / (nd + nu + 1e-6), -1, 1) * settle * dt;
   }
 
   const ci = clamp(Math.floor(c.x / hs.s), 0, hs.cols - 1), cj = clamp(Math.floor(c.y / hs.s), 0, hs.rows - 1);
@@ -982,16 +999,27 @@ function move(c, dt) {
   else if (c.y > bottom) { c.y = bottom; c.vy = -Math.abs(c.vy) * D.wallBounce; }
 }
 
+// Elders: dark acclimation. Days spent in deep, dim water slowly make a cell an elder; brighter water undoes it.
+function ageElder(w, c, dt) {
+  const E = PARAMS.elder;
+  if (w.surfaceLight >= PARAMS.drift.darkHi) {   // judged by day: at night every cell is in the dark
+    const was = c.elder;
+    c.elder = clamp(c.elder + (dexp(-PARAMS.light.atten * c.y / H) < E.light ? E.grow : -E.fade) * dt, 0, 1);
+    if (c.elder !== was) c.rv = c.rvBase * (1 + E.size * c.elder);
+  }
+  c.elderAge = c.elder >= 1 ? c.elderAge + dt : 0;
+}
+
 // Rule 2: energy += light x nutrients x efficiency - maintenance. Uptake removes nutrients locally.
 // Upkeep slows with the night rest (pace).
 function metabolise(w, c, dt, pace) {
   const f = w.fields;
   const L = sampleField(f.light, c.x, c.y), N = sampleField(f.nut, c.x, c.y), T = PARAMS.turbulence;
   const calm = c.dinoW > 0 ? Math.max(0, 1 - T.inhibit * c.dinoW * w.wind * dexp(-c.y / (H * T.mixDepth))) : 1;   // Margalef
-  const gain = c.gainK * L * N / (N + c.halfSat) * calm * dt;
+  const gain = c.gainK * L * N / (N + c.halfSat) * calm * (1 - PARAMS.elder.slowUpkeep * c.elder) * dt;   // elders: slow metabolism
   const want = gain * PARAMS.metabolism.uptake * c.biomass;
   const got = want > 0 ? takeField(f.nut, c.x, c.y, want) : 0;
-  c.energy += (want > 0 ? gain * got / want : 0) - c.maintK * pace * dt;
+  c.energy += (want > 0 ? gain * got / want : 0) - c.maintK * pace * (1 - PARAMS.elder.slowUpkeep * c.elder) * dt;
   c.vigor += (L * N / (N + c.halfSat) - c.vigor) * dt / PARAMS.metabolism.vigorTau;   // recorded, never read by the rules (swimming, singing)
   c.held += got;
 }
@@ -1000,7 +1028,7 @@ function metabolise(w, c, dt, pace) {
 // Wrapping past 2pi is a flash. Synchronised colonies come out of this; nothing else groups them.
 function advancePhase(w, c, dt) {
   const pull = c.nbrs ? c.g.coupling * PARAMS.phase.K * c.pull / c.nbrs : 0;
-  c.theta += (TAU * c.g.omega + pull) * dt;
+  c.theta += (TAU * c.g.omega * (1 - PARAMS.elder.slowPulse * c.elder) + pull) * dt;
   if (c.theta >= TAU) { c.theta -= TAU; c.flashTick = w.tick; }
   else if (c.theta < 0) c.theta += TAU;
 }
@@ -1274,7 +1302,7 @@ function lifeAndDeath(w) {
     if (c.dying) { if (++c.dying > fade) removed++; continue; }
     const starved = c.energy < 0;
     if (starved || c.age > c.lifespan) { die(w, c, starved); alive--; }
-    else if (c.energy >= Dv.threshold) {
+    else if (c.energy >= Dv.threshold * (1 + PARAMS.elder.store * c.elder)) {   // elders store before dividing
       if (alive < Dv.maxCells) { cells.push(divide(w, c)); alive++; }
       else c.energy = Dv.threshold;   // the water is full: the cell waits at the threshold
     }
@@ -1321,6 +1349,8 @@ function divide(w, c) {
   c.held *= 0.5;
   c.age = 0;
   c.parentId = null;
+  c.elder *= 0.5;
+  c.elderAge = 0;
   c.gen++;
   deriveTraits(c);
   if (link) copyHabit(b, c);
@@ -1397,6 +1427,7 @@ function createMusic(seed) {
   const k = hash32(seed ^ 0x5bd1e995), name = SCALE_NAMES[(k >>> 8) % SCALE_NAMES.length];
   return {
     rng: makeRng(hash32(seed + 0x9e3779b9)), root: k % 12, scaleName: name, scale: PARAMS.harmony.scales[name],
+    rootCell: 0, rootChanges: 0, rootTick: -1e9, elders: [], droneEnds: [],
     tokens: PARAMS.voices.burst, ends: [], sounding: [], notes: [], pending: [], recent: [], onsets: 0, nextNote: 1, nextPhrase: 1,
   };
 }
@@ -1547,16 +1578,18 @@ function singAndListen(w) {
   for (let i = 0; i < m.recent.length; i++) if (w.tick - m.recent[i] < 10 * PARAMS.time.tickRate) m.recent[k++] = m.recent[i];
   m.recent.length = k;
 
+  updateElders(w);
   SINGERS.length = 0;
   for (let i = 0; i < cells.length; i++) if (!cells[i].dying && cells[i].flashTick === w.tick) SINGERS.push(cells[i]);
   if (SINGERS.length) {
     for (const c of SINGERS) c.nextDeg = attractDegree(w, c);
-    for (const c of SINGERS) c.deg = c.nextDeg;
+    for (const c of SINGERS) if (c.id !== m.rootCell) c.deg = c.nextDeg;   // the root holder keeps singing the root
 
     // The most locked-in cells first: colonies are heard over loners
     SINGERS.sort((a, b) => b.locked - a.locked || a.id - b.id);
     const Dr = PARAMS.drift, dark = w.surfaceLight < Dr.darkHi;
     for (const c of SINGERS) {
+      if (c.elder >= PARAMS.elder.singFrom) { drone(w, c); continue; }   // elders drone instead of singing tunes
       if (c.energy < V.minEnergy) { c.bout = 0; continue; }
       const len = c.motif.slots.length;
       let sing;
@@ -1573,6 +1606,63 @@ function singAndListen(w) {
   }
   if (w.visitors.length) startle(w);
   playPending(w);
+}
+
+// Phase 5: the oldest full elder holds the root. When it dies (or stops being an elder) the next oldest takes the
+// root and its own note becomes the new tonal centre: the whole water modulates, announced by the new holder's drone.
+// With no elder left the root stays where it was. A new key holds for rootRest s: a holder appointed sooner adopts it.
+function updateElders(w) {
+  const m = w.music, E = PARAMS.elder;
+  let k = 0;
+  for (let i = 0; i < m.droneEnds.length; i++) if (m.droneEnds[i] > w.tick) m.droneEnds[k++] = m.droneEnds[i];
+  m.droneEnds.length = k;
+  m.elders.length = 0;
+  let holder = null, oldest = null;
+  for (const c of w.cells) {
+    if (c.dying || c.elder < E.singFrom) continue;
+    m.elders.push(c);
+    if (c.id === m.rootCell) holder = c;   // the holder keeps the root while it is still an elder
+    if (c.elder < 1) continue;
+    if (!oldest || c.elderAge > oldest.elderAge || (c.elderAge === oldest.elderAge && c.id < oldest.id)) oldest = c;
+  }
+  if (holder || !oldest) return;
+  const pc = (m.root + m.scale[oldest.deg]) % 12;
+  if (pc !== m.root && w.tick - m.rootTick >= PARAMS.harmony.rootRest * PARAMS.time.tickRate) {   // a fresh key holds a while
+    m.rootChanges++;
+    m.rootTick = w.tick;
+    m.root = pc;
+  }
+  m.rootCell = oldest.id;
+  oldest.deg = 0;
+  oldest.droneNext = 0;   // the new holder announces the key
+}
+
+// An elder drones on its slow pulse, if a drone voice is free and its last drone has mostly faded
+function drone(w, c) {
+  const m = w.music, D = PARAMS.voices.drone, b = looksBig(c);
+  if (w.tick < c.droneNext || m.droneEnds.length >= D.max) return;
+  const attack = D.attack[0] + (D.attack[1] - D.attack[0]) * b, release = D.release[0] + (D.release[1] - D.release[0]) * b;
+  const pc = (m.root + m.scale[c.deg]) % 12, midi = D.low + ((pc - D.low) % 12 + 12) % 12;
+  const end = w.tick + Math.ceil((attack + release) * PARAMS.time.tickRate);
+  m.droneEnds.push(end);
+  c.droneEnd = end;
+  c.droneNext = w.tick + Math.ceil((attack + release * D.again) * PARAMS.time.tickRate);
+  m.onsets++;
+  m.notes.push({
+    id: m.nextNote++, phrase: m.nextPhrase++, tick: w.tick, cell: c.id, c, midi, pc, x: c.x, y: c.y, timbre: c.g.timbre,
+    attack, release, soft: 1, dino: 0, glass: 0, last: false, startled: false, muffle: 0, drone: true, level: c.elder,
+  });
+}
+
+// Pads: a soft cell singing near a droning elder holds its notes longer, as if the elder steadies it
+function steadied(w, c) {
+  const D = PARAMS.voices.drone, r2 = D.steady * D.steady;
+  for (const e of w.music.elders) {
+    if (e === c || e.droneEnd <= w.tick) continue;
+    const dx = e.x - c.x, dy = e.y - c.y;
+    if (dx * dx + dy * dy < r2) return true;
+  }
+  return false;
 }
 
 // Startle: cells brushed by a visitor blurt a staccato note, if the budget allows
@@ -1686,6 +1776,10 @@ function emitNote(w, c, step, last, final, phrase, startled) {
     sh.attack = V.startle.attack;
     sh.release = V.startle.release;
   }
+  if (!last && !startled && sh.soft > 0 && w.music.elders.length && steadied(w, c)) {
+    sh.release *= 1 + V.drone.steadyHold * sh.soft;
+    sh.attack *= 1 + V.drone.steadyAttack * sh.soft;
+  }
   const muffle = smoothstep(Mu.from, Mu.full, sampleField(w.fields.graz, c.x, c.y));
   sh.release *= 1 - Mu.release * muffle;
   m.ends.push(w.tick + Math.ceil((sh.attack + sh.release) * PARAMS.time.tickRate));
@@ -1704,7 +1798,7 @@ const keyName = (m) => NOTE_NAMES[m.root] + ' ' + m.scaleName.toUpperCase();
 // Discrete, enveloped notes only: every oscillator starts, swells, fades to 0.0001 and is disconnected.
 // voices -> ecosystem bus -> lowpass -> dry + reverb send + delay send -> master -> gentle compressor -> out.
 // Deeper voices also send straight into the reverb, so the depths sound quieter and wetter.
-const audio = { ctx: null, started: false, muted: false, master: null, bus: null, wet: null, waves: [], active: 0, played: 0 };
+const audio = { ctx: null, started: false, muted: false, master: null, bus: null, wet: null, waves: [], active: 0, drones: 0, played: 0 };
 
 // Wave table along the timbre gene, built once. Soft cells: a warm triangle; dinoflagellates: wood, nearly a sine
 // with a little body; diatoms: glass, a bright sine. The partner oscillator in playNote adds each family's colour.
@@ -1776,6 +1870,44 @@ function startAudio() {
 // One note: the main wave and a partner oscillator through a lowpass and one envelope, panned by x.
 // The partner is the family's colour: a slightly detuned twin that breathes (soft), the wood's high partial that
 // dies fast (dinoflagellates), the glass's inharmonic ring (diatoms).
+// An elder's drone: a sine sub and two soft pad partials, one swell and one long fade under a filter that opens and closes
+function playDrone(n) {
+  const A = PARAMS.audio, Dr = A.drone, ctx = audio.ctx;
+  if (audio.drones >= Dr.maxNodes) return;
+  const t0 = ctx.currentTime + A.lookahead, end = t0 + n.attack + n.release, f = 440 * Math.pow(2, (n.midi - 69) / 12);
+  const sub = ctx.createOscillator(), padA = ctx.createOscillator(), padB = ctx.createOscillator();
+  sub.frequency.value = f;
+  padA.setPeriodicWave(audio.waves[0]); padA.frequency.value = f * 2; padA.detune.value = Dr.detune;
+  padB.setPeriodicWave(audio.waves[0]); padB.frequency.value = f * 3; padB.detune.value = -Dr.detune;
+  const subG = ctx.createGain(), padG = ctx.createGain(), filt = ctx.createBiquadFilter(), env = ctx.createGain();
+  subG.gain.value = 1;
+  padG.gain.value = Dr.pad / Dr.gain;
+  filt.type = 'lowpass'; filt.Q.value = 0.5;
+  filt.frequency.setValueAtTime(Dr.cutLow, t0);
+  filt.frequency.linearRampToValueAtTime(Dr.cutHigh, t0 + n.attack);
+  filt.frequency.exponentialRampToValueAtTime(Dr.cutLow, end);
+  env.gain.setValueAtTime(0.0001, t0);
+  env.gain.linearRampToValueAtTime(Dr.gain * n.level, t0 + n.attack);
+  env.gain.exponentialRampToValueAtTime(0.0001, end);
+  const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+  const dry = ctx.createGain(), wet = ctx.createGain();
+  dry.gain.value = 1 - Dr.wet;
+  wet.gain.value = Dr.wet;
+  sub.connect(subG); padA.connect(padG); padB.connect(padG);
+  subG.connect(env); padG.connect(filt); filt.connect(env);
+  let out = env;
+  if (pan) { pan.pan.value = (n.x / W * 2 - 1) * Dr.pan; env.connect(pan); out = pan; }
+  out.connect(dry); out.connect(wet);
+  dry.connect(audio.bus); wet.connect(audio.wet);
+  for (const o of [sub, padA, padB]) { o.start(t0); o.stop(end + 0.05); }
+  audio.drones++;
+  audio.played++;
+  sub.onended = () => {
+    for (const node of [sub, padA, padB, subG, padG, filt, env, pan, dry, wet]) if (node) node.disconnect();
+    audio.drones--;
+  };
+}
+
 function playNote(n) {
   const A = PARAMS.audio, ctx = audio.ctx, Pt = A.partner;
   if (audio.active >= A.maxNodes) return;
@@ -1845,9 +1977,9 @@ function hearNotes(w) {
   for (const n of notes) {
     if (keep < 1 && hash01(Math.imul(n.phrase, 0x9e3779b1)) >= keep) continue;
     const c = n.c;
-    c.songAt = at; c.songAtk = n.attack; c.songRel = n.release; c.songLast = n.last;
+    c.songAt = at; c.songAtk = n.attack; c.songRel = n.release; c.songLast = n.last; c.songDrone = !!n.drone;
     if (n.startled) c.glowTick = w.tick;   // a startled cell flashes
-    if (sound) playNote(n);
+    if (sound) { if (n.drone) playDrone(n); else playNote(n); }
   }
   notes.length = 0;
 }
@@ -2533,7 +2665,7 @@ function buildSprite(c, rpx, angle, z, key) {
 
 // Rebuilds are rationed per frame; past the budget a cell keeps its previous sprite for a moment.
 function spriteFor(c, rpx, step) {
-  const key = (c.gen * ZOOMS.length + cam.level) * PARAMS.sprite.tumbleSteps + step;
+  const key = ((c.gen * 9 + Math.round(c.elder * 8)) * ZOOMS.length + cam.level) * PARAMS.sprite.tumbleSteps + step;   // elders grow: rebuild
   const s = c.spr;
   if (s && (s.key === key || performance.now() > buildDeadline)) return s;
   return (c.spr = buildSprite(c, rpx, step * TAU / PARAMS.sprite.tumbleSteps, cam.zoom, key));
@@ -2640,7 +2772,7 @@ function drawCell(c, tick, t) {
   const frame = (Math.floor(tick * S.wobbleFps / PARAMS.time.tickRate) + c.id) % S.frames;
   const tones = spr.frames[frame], size = spr.size, x0 = cx - spr.half, y0 = cy - spr.half;
   const lum = glowing(c), pulse = Math.max(flashLevel(c, tick) * (lum ? glowNight : PARAMS.flash.cellLift), sung * PARAMS.song.lift);
-  const fade = c.dying ? c.dying / PARAMS.death.fadeTicks : 0;
+  const fade = c.dying ? c.dying / PARAMS.death.fadeTicks : 0, old = c.elder * PARAMS.elderLook.darken;
   const depth = c.y / H, dark = depth > R.deepFrom ? (depth - R.deepFrom) / (1 - R.deepFrom) * R.deepDarken : 0;
   const ib = view.ibuf, bx0 = view.bx0, by0 = view.by0, cw = 2 * R.causticWidth / z;
   for (let py = 0; py < size; py++) {
@@ -2664,6 +2796,7 @@ function drawCell(c, tick, t) {
         const alt = t0 >= ALT;
         let tt = alt ? t0 - ALT : t0;
         if (muted && tt > 0) tt--;
+        if (old > 0 && tt > 0 && BAYER[(((by + 1) & 3) << 2) | ((bx + 2) & 3)] < old) tt--;   // elders darken
         idx = (alt ? base2 : base) + tt;
       }
       if (pulse > 0) {
@@ -2755,7 +2888,8 @@ function drawSongs(w) {
     const level = songLevel(c);
     if (level <= 0.002) continue;
     const cx = toSX(c.x + c.ox), cy = toSY(c.y + c.oy), rpx = c.rv * z;
-    const rh = clamp(rpx * Sg.haloRadius, Sg.haloMinPx, Sg.haloMaxPx), strength = Sg.haloStrength * level;
+    const El = PARAMS.elderLook, big = c.songDrone ? El.haloBig : 1;
+    const rh = clamp(rpx * Sg.haloRadius * big, Sg.haloMinPx * big, Sg.haloMaxPx * big), strength = Sg.haloStrength * level;
     if (cx > -rh && cy > -rh && cx < W + rh && cy < H + rh) {
       const y0 = Math.max(0, Math.floor(cy - rh)), y1 = Math.min(H - 1, Math.ceil(cy + rh));
       const x0 = Math.max(0, Math.floor(cx - rh)), x1 = Math.min(W - 1, Math.ceil(cx + rh));
@@ -2769,9 +2903,9 @@ function drawSongs(w) {
         }
       }
     }
-    const a = (songNow - c.songAt) / 1000 / Sg.ringTime;
+    const a = (songNow - c.songAt) / 1000 / (Sg.ringTime * (c.songDrone ? El.ringSlow : 1));
     if (a < 0 || a >= 1) continue;
-    const k = 1 - (1 - a) * (1 - a), rad = rpx + Sg.ringStart + k * Sg.ringPx * (1 + Sg.ringZoom * (z - 1));
+    const k = 1 - (1 - a) * (1 - a), rad = rpx + Sg.ringStart + k * Sg.ringPx * (c.songDrone ? El.ringBig : 1) * (1 + Sg.ringZoom * (z - 1));
     if (cx < -rad || cy < -rad || cx > W + rad || cy > H + rad) continue;
     const idx = rampBase(hueRamp(c.g)) + (c.songLast ? BASE : a < 0.4 ? BRIGHT : HIGHLIGHT), vis = (1 - a) * (c.songLast ? 0.6 : 1);
     const steps = Math.ceil(TAU * rad * 1.5);
@@ -3677,6 +3811,7 @@ function drawDebug(w) {
     'CK ' + ck,
     'DAY ' + dayPhase(w).toFixed(2) + ' SUN ' + w.surfaceLight.toFixed(2) + ' WIND ' + w.wind.toFixed(2) + ' PL ' + w.pulses.length,
     'DIED S ' + w.deaths.starved + ' O ' + w.deaths.old + ' G ' + w.deaths.grazed + ' F ' + w.deaths.sardines + ' SP ' + w.deaths.salps,
+    'ELD ' + w.music.elders.length + ' FULL ' + w.cells.filter((c) => !c.dying && c.elder >= 1).length + '  DRONE ' + (audio.started ? audio.drones : w.music.droneEnds.length) + '  ROOT CHG ' + w.music.rootChanges,
     'VISIT ' + (w.visitors.map((v) => v.kind.slice(0, 3).toUpperCase()).join(' ') || '-'),
   ];
   for (let i = 0; i < lines.length; i++) drawText(3, 6 + i * 7, lines[i], COL.FOAM, 1);

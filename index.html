@@ -94,6 +94,18 @@ const PARAMS = {
     floor: 0.05, diffusion: 0.05, max: 6,
     recycled: 0.7,                      // excreted in place; the rest sinks as fecal pellets
   },
+  // Visitors (local rule): filter feeders find plankton-rich water. Their arrival chance rises with bloom
+  // density (living biomass between attractLo and attractHi), so blooms draw them in; never on a timer.
+  // What they eat is partly excreted in place, partly sinks as pellets, and partly leaves the column with them.
+  visitors: {
+    attractLo: 120, attractHi: 360,
+    sardines: { rate: 1 / 160, speedMin: 9, speedMax: 14, rx: 26, ry: 14, eat: 1.2, steer: 8, drag: 1.5, wave: 6,
+                fishMin: 18, fishMax: 28, excreted: 0.3, pellets: 0.2,     // the rest is carried away
+                turnIfAte: 25, passes: 3 },                                 // a rich pass makes the school turn back for more
+    salps: { rate: 1 / 220, speedMin: 1.5, speedMax: 2.6, barrelsMin: 4, barrelsMax: 8, spacing: 6.5, tilt: 0.3,
+             reach: 4.5, eat: 0.25, sway: 2, excreted: 0.3, pellets: 0.5 },  // salp pellets sink fast
+    sunfish: { rate: 1 / 90, speed: 4.5, turn: 1.2, r: 18, bite: 7, stay: 150 },   // comes for salps, never eats cells
+  },
   mutation: { step: 0.08, jumpChance: 0.05, jump: 0.3 },
 
   // ---- Everything below is visual only; none of it feeds back into the simulation. ----
@@ -205,6 +217,13 @@ const PARAMS = {
   sea: {
     waveCalm: 0.35, waveRough: 1.9, paceCalm: 0.5, paceRough: 1.8, shimmerCalm: 0.25, shimmerRough: 1.7, swayCalm: 0.4, swayRough: 2.5,
     focusFrom: 0.12, focusFull: 0.32, breakFrom: 0.55, breakFull: 0.9, broken: 0.8,
+  },
+  // Visitors as drawn (sizes in world units). Copepods are the grazer field made visible: they gather where it is dense.
+  look: {
+    sardine: { len: 7.5, height: 1.15, tailBeat: 11, spread: 0.95 },
+    salp: { rx: 3.3, ry: 2.3, pellets: 5, pelletFall: 7, pelletSpan: 70 },
+    sunfish: { rx: 15, ry: 17, fin: 15, finBase: 6, finBeat: 1.6, finSwing: 5, clavus: 0.3 },
+    copepod: { zFrom: 0.3, zStep: 0.45, perNode: 2, len: 1.5, width: 0.5, antenna: 2.4, tail: 1.6, hopEvery: 1.6, hopDist: 3, hopTime: 0.12 },
   },
   murk: { from: 0.8, full: 3 },         // bloom biomass summed down the upper column: rays fade in murky water
   hud: { x: 4, y: 290, line: 7, visibleMs: 6000, fadeMs: 2000 },
@@ -557,7 +576,7 @@ function createCell(w, x, y, g, energy, parentId, spriteSeed) {
   const c = {
     id: w.nextId++, parentId, x, y, vx: 0, vy: 0,
     energy, held: 0, age: 0, lifespan: 0, vigor: 0,   // vigor: smoothed growth conditions, observed only
-    theta: w.rng.next() * TAU, flashTick: -1000, dying: 0, grazed: false,
+    theta: w.rng.next() * TAU, flashTick: -1000, dying: 0, grazed: false, eaten: null,
     g, spriteSeed, gen: 0,
     r: 0, rv: 0, biomass: 0, gainK: 0, halfSat: 0, maintK: 0, targetLight: 0,
     spr: null, ox: 0, oy: 0, swimPh: 0, vt: 0, tempo: 1,   // sprite cache and swimming (own clock, tempo): render only
@@ -592,7 +611,8 @@ function createWorld(seed, founderCount, dayLength) {
     pulses: [], lastPulse: -1e9,
     wind: PARAMS.wind.start, windTarget: PARAMS.wind.start, nextWind: 0,
     fallen: new Float64Array(PARAMS.grid.cols),   // detritus exported per column, ever (observed only, never read by the rules)
-    deaths: { starved: 0, old: 0, grazed: 0 },     // observed only
+    deaths: { starved: 0, old: 0, grazed: 0, sardines: 0, salps: 0 },   // observed only
+    visitors: [], nextVisitorId: 1, carried: 0,     // carried: nutrients that left the column inside visitors
   };
   w.nextWind = Math.floor(rng.range(PARAMS.wind.gapMin, PARAMS.wind.gapMax) * PARAMS.time.tickRate);
   updateLight(w);
@@ -620,7 +640,7 @@ function aliveCount(w) {
   return n;
 }
 
-// Field + nutrients bound in cells + cyst reserves. Changes only by upwelling.
+// Field + nutrients bound in cells + cyst reserves. Changes only by upwelling (in) and visitors (carried out).
 function nutrientInventory(w) {
   let s = 0;
   const nut = w.fields.nut;
@@ -638,7 +658,7 @@ function worldChecksum(w) {
     h = Math.imul(h ^ CK_VIEW.getUint32(0), 16777619);
     h = Math.imul(h ^ CK_VIEW.getUint32(4), 16777619);
   };
-  mix(w.tick); mix(w.cells.length); mix(w.cysts.length); mix(w.wind);
+  mix(w.tick); mix(w.cells.length); mix(w.cysts.length); mix(w.wind); mix(w.visitors.length); mix(w.carried);
   for (const c of w.cells) { mix(c.id); mix(c.x); mix(c.y); mix(c.energy); mix(c.theta); }
   for (let i = 0; i < w.fields.nut.length; i += 7) { mix(w.fields.nut[i]); mix(w.fields.graz[i]); }
   return h >>> 0;
@@ -668,6 +688,7 @@ function stepWorld(w) {
     c.age += dt * pace;
   }
   graze(w, dt);
+  updateVisitors(w, dt);
   lifeAndDeath(w);
   updateCysts(w, dt);
 }
@@ -810,6 +831,137 @@ function eaten(w, c) {
   const recycled = c.held * PARAMS.grazing.recycled;
   addField(w.fields.nut, c.x, c.y, recycled);
   exportDetritus(w, c.x, c.held - recycled);
+  c.held = 0;
+}
+
+// ---- Visitors: sardine schools and salp chains come to blooms; an ocean sunfish comes for the salps ----
+function updateVisitors(w, dt) {
+  const V = PARAMS.visitors, rng = w.rng, cells = w.cells;
+  let biomass = 0, my = 0;
+  for (let i = 0; i < cells.length; i++) if (!cells[i].dying) { biomass += cells[i].biomass; my += cells[i].y * cells[i].biomass; }
+  const attract = smoothstep(V.attractLo, V.attractHi, biomass);
+  let school = null, salp = null, fish = null;
+  for (const v of w.visitors) { if (v.kind === 'sardines') school = v; else if (v.kind === 'salps') salp = v; else fish = v; }
+
+  if (!school && attract > 0 && rng.chance(V.sardines.rate * attract * dt)) {
+    const S = V.sardines, dir = rng.chance(0.5) ? 1 : -1;
+    w.visitors.push({
+      kind: 'sardines', id: w.nextVisitorId++, dir, x: dir > 0 ? -S.rx - 10 : W + S.rx + 10,
+      y: clamp(my / biomass + gauss(rng) * 15, 30, H - 60), vx: dir * rng.range(S.speedMin, S.speedMax), vy: 0, age: 0,
+      fish: S.fishMin + rng.int(S.fishMax - S.fishMin + 1), pass: 1, ate: 0,
+    });
+  }
+  if (!salp && attract > 0 && rng.chance(V.salps.rate * attract * dt)) {
+    const S = V.salps, dir = rng.chance(0.5) ? 1 : -1, n = S.barrelsMin + rng.int(S.barrelsMax - S.barrelsMin + 1);
+    w.visitors.push({
+      kind: 'salps', id: w.nextVisitorId++, dir, x: dir > 0 ? -8 : W + 8, y: rng.range(40, H * 0.5),
+      vx: dir * rng.range(S.speedMin, S.speedMax), vy: rng.range(-0.3, 0.3), age: 0, alive: new Array(n).fill(true),
+    });
+  }
+  if (salp && !fish && rng.chance(V.sunfish.rate * dt)) {
+    const side = salp.x < W / 2 ? 1 : -1;   // comes in from the far side, toward the salps
+    w.visitors.push({ kind: 'sunfish', id: w.nextVisitorId++, dir: -side, x: side > 0 ? W + V.sunfish.r + 12 : -V.sunfish.r - 12,
+                      y: clamp(salp.y + 25, 40, H - 70), vx: 0, vy: 0, age: 0, leaving: false });
+  }
+
+  let k = 0;
+  for (const v of w.visitors) {
+    v.age += dt;
+    let gone;
+    if (v.kind === 'sardines') gone = moveSchool(w, v, dt);
+    else if (v.kind === 'salps') gone = moveSalps(w, v, dt);
+    else gone = moveSunfish(w, v, salp, dt);
+    if (!gone) w.visitors[k++] = v;
+  }
+  w.visitors.length = k;
+}
+
+// The school sweeps across, leaning toward richer water ahead, swallowing cells in its path
+function moveSchool(w, v, dt) {
+  const S = PARAMS.visitors.sardines, f = w.fields;
+  const ax = v.x + v.dir * S.rx, up = sampleField(f.bio, ax, v.y - S.ry), down = sampleField(f.bio, ax, v.y + S.ry);
+  v.vy += (S.steer * (down - up) / (down + up + 1e-6) + S.wave * 0.3 * dsin(v.age * 0.9 + v.id) - S.drag * v.vy) * dt;
+  v.x += v.vx * dt;
+  v.y = clamp(v.y + v.vy * dt, 20, H - PARAMS.world.floor - 20);
+  const cx = v.x + v.dir * 4;
+  for (const c of w.cells) {
+    if (c.dying) continue;
+    const dx = (c.x - cx) / S.rx, dy = (c.y - v.y) / S.ry;
+    if (dx * dx + dy * dy < 1 && w.rng.chance(S.eat * dt)) { swallow(w, c, 'sardines', S); v.ate++; }
+  }
+  const out = v.dir > 0 ? v.x > W + S.rx + 20 : v.x < -S.rx - 20;
+  if (out && v.ate >= S.turnIfAte && v.pass < S.passes) {   // worth another pass: wheel round
+    v.dir = -v.dir; v.vx = -v.vx; v.pass++; v.ate = 0;
+    return false;
+  }
+  return out;
+}
+
+// Barrel k of a salp chain: trailing behind the head on a gentle diagonal, undulating
+function salpBarrel(v, k) {
+  const S = PARAMS.visitors.salps, ct = 1 - S.tilt * S.tilt / 2;
+  return {
+    x: v.x - v.dir * k * S.spacing * ct,
+    y: v.y + k * S.spacing * S.tilt + S.sway * dsin(v.age * 0.5 + k * 0.8),
+  };
+}
+
+function moveSalps(w, v, dt) {
+  const S = PARAMS.visitors.salps, r2 = S.reach * S.reach;
+  v.x += v.vx * dt;
+  v.y = clamp(v.y + v.vy * dt, 20, H * 0.7);
+  for (let b = 0; b < v.alive.length; b++) {
+    if (!v.alive[b]) continue;
+    const p = salpBarrel(v, b);
+    for (const c of w.cells) {
+      if (c.dying) continue;
+      const dx = c.x - p.x, dy = c.y - p.y;
+      if (dx * dx + dy * dy < r2 && w.rng.chance(S.eat * dt)) swallow(w, c, 'salps', S);
+    }
+  }
+  const tail = v.x - v.dir * v.alive.length * S.spacing;
+  return !v.alive.some((a) => a) || (v.dir > 0 ? tail > W + 10 : tail < -10);
+}
+
+// The sunfish sculls toward the nearest salp barrel and bites it off; then it drifts away
+function moveSunfish(w, v, salp, dt) {
+  const F = PARAMS.visitors.sunfish;
+  let tx = v.dir > 0 ? W + F.r + 40 : -F.r - 40, ty = v.y;
+  if (!v.leaving && salp && v.age < F.stay) {
+    let best = 1e9;
+    for (let b = 0; b < salp.alive.length; b++) {
+      if (!salp.alive[b]) continue;
+      const p = salpBarrel(salp, b), d = Math.abs(p.x - v.x) + Math.abs(p.y - v.y);
+      if (d < best) { best = d; tx = p.x - v.dir * F.r * 0.9; ty = p.y; }
+    }
+    if (best === 1e9) v.leaving = true;
+  } else v.leaving = true;
+  const dx = tx - v.x, dy = ty - v.y, d = Math.sqrt(dx * dx + dy * dy) + 1e-6;
+  v.vx += (dx / d * F.speed - v.vx) * F.turn * dt;
+  v.vy += (dy / d * F.speed - v.vy) * F.turn * dt;
+  if (v.vx > 0.4) v.dir = 1; else if (v.vx < -0.4) v.dir = -1;
+  v.x += v.vx * dt;
+  v.y = clamp(v.y + v.vy * dt, 30, H - PARAMS.world.floor - 30);
+  if (!v.leaving && salp) {
+    const mx = v.x + v.dir * F.r * 0.9;
+    for (let b = 0; b < salp.alive.length; b++) {
+      if (!salp.alive[b]) continue;
+      const p = salpBarrel(salp, b);
+      if (Math.abs(p.x - mx) < F.bite && Math.abs(p.y - v.y) < F.bite) salp.alive[b] = false;
+    }
+  }
+  return v.leaving && (v.x > W + F.r + 25 || v.x < -F.r - 25);
+}
+
+// Swallowed: the cell vanishes at once. Part of its nutrients is excreted, part sinks as pellets, the rest is carried away.
+function swallow(w, c, kind, S) {
+  c.dying = 1;
+  c.eaten = kind;
+  w.deaths[kind]++;
+  const ex = c.held * S.excreted, pel = c.held * S.pellets;
+  addField(w.fields.nut, c.x, c.y, ex);
+  exportDetritus(w, c.x, pel);
+  w.carried += c.held - ex - pel;
   c.held = 0;
 }
 
@@ -1649,6 +1801,7 @@ const SPECK = { key: -1, half: 0, size: 2, a: 1, frames: [0, 0, 0].map(() => Int
 const IRID_SET = HUE_WHEEL.map((r) => rampBase(r) + BRIGHT).concat([COL.FOAM]);
 
 function drawCell(c, tick, t) {
+  if (c.eaten) return;                                   // swallowed: gone at once
   const S = PARAMS.sprite, z = cam.zoom, rpx = c.rv * z;
   const cx = toSX(c.x + c.ox), cy = toSY(c.y + c.oy), reach = rpx * (2 + S.setaeLen) + 4;
   if (cx < -reach || cy < -reach || cx > W + reach || cy > H + reach) return;
@@ -1788,6 +1941,192 @@ function drawCysts(w) {
         } else if (rpx >= C.spikesFromPx && d <= 1 + 1.2 / rpx && mod(Math.round(Math.atan2(dy, dx) / TAU * 12), 2) === 0) {
           put(cx + dx, cy + dy, base + SHADOW);
         }
+      }
+    }
+  }
+}
+
+// ---- Visitors ----
+// Filled ellipse in world units, each pixel coloured by a callback (u, v in -1..1 across the ellipse), rotated by angle.
+function fillShape(cx, cy, rx, ry, angle, colour) {
+  const z = cam.zoom, sx = toSX(cx), sy = toSY(cy), R = Math.max(rx, ry) * z + 1;
+  const ca = Math.cos(angle), sa = Math.sin(angle);
+  for (let y = Math.floor(sy - R); y <= sy + R; y++) {
+    if (y < 0 || y >= H) continue;
+    for (let x = Math.floor(sx - R); x <= sx + R; x++) {
+      if (x < 0 || x >= W) continue;
+      const dx = (x - sx) / z, dy = (y - sy) / z;
+      const u = (dx * ca + dy * sa) / rx, v = (-dx * sa + dy * ca) / ry;
+      const idx = colour(u, v, x, y);
+      if (idx >= 0) put(x, y, idx);
+    }
+  }
+}
+
+function drawVisitors(w, ta) {
+  for (const v of w.visitors) {
+    if (v.kind === 'salps') drawSalps(v, ta);
+  }
+  for (const v of w.visitors) {
+    if (v.kind === 'sardines') drawSardines(v, ta);
+    else if (v.kind === 'sunfish') drawSunfish(v, ta);
+  }
+}
+
+// A school of silver sardines: dark blue backs, a bright flank stripe, white bellies, beating tails
+function drawSardines(v, ta) {
+  const L = PARAMS.look.sardine, S = PARAMS.visitors.sardines, blue = rampBase(BLUE), ice = rampBase(LIGHTBLUE);
+  const tilt = clamp(v.vy / Math.abs(v.vx), -0.5, 0.5) * v.dir;
+  for (let i = 0; i < v.fish; i++) {
+    const h = v.id * 131 + i * 7;
+    const fx = v.x + (hash01(h + 1) * 2 - 1) * S.rx * L.spread + Math.sin(ta * 0.9 + i) * 1.5;
+    const fy = v.y + (hash01(h + 2) * 2 - 1) * S.ry * L.spread + Math.sin(ta * 1.3 + i * 2.1) * 1.2;
+    const beat = Math.sin(ta * L.tailBeat + i * 1.7);
+    const len = L.len * (0.85 + 0.3 * hash01(h + 3)), hh = L.height * (0.85 + 0.3 * hash01(h + 3));
+    fillShape(fx, fy, len / 2, hh, tilt, (u, q, x, y) => {
+      u *= v.dir;                                           // u = 1 at the head
+      const tail = u < -0.62;
+      if (tail) {                                           // forked tail fin, swinging with the beat
+        const tq = q - beat * 0.5 * (-0.62 - u);
+        return Math.abs(tq) > (-u - 0.62) * 2.4 || Math.abs(tq) < (-u - 0.62) * 0.9 - 0.05 ? -1 : blue + SHADOW;
+      }
+      const half = Math.sqrt(Math.max(0, 1 - u * u)) * (u > 0 ? 1 : 0.55 + 0.45 * (1 + u / 0.62));
+      if (Math.abs(q) > half) return -1;
+      if (u > 0.72 && q < -0.05 && q > -0.45) return COL.WATER;   // eye
+      if (q < -0.25) return blue + (q < -0.6 ? SHADOW : BASE);    // dark back
+      if (q < 0.15) return wb(x, y) < 0.5 ? ice + BRIGHT : COL.GLOW;   // silver flank stripe
+      return COL.FOAM;                                       // white belly
+    });
+  }
+}
+
+// Salp chain: translucent barrels with muscle bands and a coloured gut nucleus; pellets sink from them
+function drawSalps(v, ta) {
+  const L = PARAMS.look.salp, gold = rampBase(GOLD);
+  for (let b = 0; b < v.alive.length; b++) {
+    if (!v.alive[b]) continue;
+    const p = salpBarrel(v, b), ang = PARAMS.visitors.salps.tilt * v.dir + Math.sin(ta * 0.7 + b) * 0.08;
+    const pulse = 1 + 0.08 * Math.sin(ta * 2.2 + b * 0.9);   // jet-propelled pumping
+    fillShape(p.x, p.y, L.rx * pulse, L.ry / pulse, ang, (u, q, x, y) => {
+      const d = u * u + q * q;
+      if (d > 1) return -1;
+      const k = y * W + x, under = view.ibuf[k];
+      if (d > 0.72) return wb(x, y) < 0.7 ? COL.FOAM : LIGHT_UP[under];        // glassy rim
+      if (Math.abs(Math.abs(u) - 0.45) < 0.08) return LIGHT_UP[LIGHT_UP[under]];   // muscle bands
+      const gu = u * v.dir + 0.55, gq = q - 0.1;
+      if (gu * gu * 3 + gq * gq * 4 < 0.12) return gold + (gu + gq < 0 ? BRIGHT : HIGHLIGHT);   // gut nucleus
+      return wb(x, y) < 0.5 ? LIGHT_UP[under] : under;                            // see-through body
+    });
+    if (b > 0 && v.alive[b - 1]) {   // stolon linking the barrels
+      const q = salpBarrel(v, b - 1);
+      worldLine(q.x, q.y, p.x, p.y, COL.SHAFT);
+    }
+    for (let i = 0; i < L.pellets; i++) {   // fast-sinking fecal pellets
+      const h = v.id * 977 + b * 31 + i, fall = mod(ta * L.pelletFall + hash01(h) * L.pelletSpan, L.pelletSpan);
+      if (fall < 3) continue;
+      const sx = toSX(p.x + (hash01(h + 1) - 0.5) * 3), sy = toSY(p.y + fall);
+      if (wb(sx, sy) < 1 - fall / L.pelletSpan) put(sx, sy, gold + OUTLINE);
+    }
+  }
+}
+
+// Filled triangle in world units; colour(t, x, y) gets t = 0 at the base .. 1 at the tip
+function fillTri(bx0, by0, bx1, by1, tx, ty, colour) {
+  const P = [[toSX(bx0), toSY(by0)], [toSX(bx1), toSY(by1)], [toSX(tx), toSY(ty)]];
+  const minX = Math.max(0, Math.floor(Math.min(P[0][0], P[1][0], P[2][0]))), maxX = Math.min(W - 1, Math.ceil(Math.max(P[0][0], P[1][0], P[2][0])));
+  const minY = Math.max(0, Math.floor(Math.min(P[0][1], P[1][1], P[2][1]))), maxY = Math.min(H - 1, Math.ceil(Math.max(P[0][1], P[1][1], P[2][1])));
+  const area = (P[1][0] - P[0][0]) * (P[2][1] - P[0][1]) - (P[2][0] - P[0][0]) * (P[1][1] - P[0][1]);
+  if (Math.abs(area) < 1e-6) return;
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      const w0 = ((P[1][0] - x) * (P[2][1] - y) - (P[2][0] - x) * (P[1][1] - y)) / area;
+      const w1 = ((P[2][0] - x) * (P[0][1] - y) - (P[0][0] - x) * (P[2][1] - y)) / area;
+      const w2 = 1 - w0 - w1;
+      if (w0 < 0 || w1 < 0 || w2 < 0) continue;
+      const idx = colour(w2, x, y);
+      if (idx >= 0) put(x, y, idx);
+    }
+  }
+}
+
+// Silver-grey skin of the sunfish, dark to light
+const MOLA = [COL.WATER + 2, COL.SLATE, COL.WATER + 6, COL.SHAFT, COL.FOAM];
+
+// Ocean sunfish (Mola): a tall disc with long blade-like dorsal and anal fins sculling in turn,
+// and a frilly clavus where a tail would be
+function drawSunfish(v, ta) {
+  const L = PARAMS.look.sunfish, dir = v.dir, beat = Math.sin(ta * L.finBeat) * L.finSwing;
+  // Fins first, behind the body: bases on the rear half of the back and belly, tips swinging fore and aft
+  for (const side of [-1, 1]) {
+    const sw = side * beat;
+    const b0x = v.x - dir * L.rx * 0.05, b1x = v.x - dir * L.rx * 0.55;
+    const b0y = v.y + side * L.ry * 0.82, b1y = v.y + side * L.ry * 0.62;
+    const tx = v.x - dir * (L.rx * 0.45 + sw), ty = v.y + side * (L.ry + L.fin);
+    fillTri(b0x, b0y, b1x, b1y, tx, ty, (t, x, y) => MOLA[t > 0.85 ? 1 : wb(x, y) < 0.5 - t * 0.3 ? 3 : 2]);
+  }
+  // Body
+  fillShape(v.x, v.y, L.rx, L.ry, 0, (u, q, x, y) => {
+    const fu = u * dir, d = u * u + q * q;
+    if (d > 1) {
+      // clavus: a scalloped frill along the rear edge
+      if (fu < 0 && Math.abs(q) < 0.8) {
+        const scallop = L.clavus * (0.6 + 0.4 * Math.abs(Math.sin(q * 7 + ta * 1.5)));
+        return d < 1 + scallop ? MOLA[d < 1 + scallop * 0.5 ? 2 : 1] : -1;
+      }
+      return -1;
+    }
+    if (fu > 0.6 && fu < 0.78 && q > -0.4 && q < -0.2) return fu > 0.68 && q > -0.32 ? COL.WATER : COL.FOAM;   // eye
+    if (fu > 0.92 && Math.abs(q + 0.02) < 0.08) return COL.WATER;                                          // small round mouth
+    if (Math.abs(fu - 0.3) < 0.05 && Math.abs(q + 0.05) < 0.22) return MOLA[1];                            // gill slit
+    if (fu < -0.1 && fu > -0.85 && Math.abs(q) < 0.9 && Math.abs(fu + 0.7) < 0.04) return MOLA[1];         // clavus seam
+    const lit = -u * 0.3 - q * 0.7 + (hash01((x + view.bx0) * 73 + (y + view.by0) * 131) - 0.5) * 0.3;    // mottled skin
+    return MOLA[d > 0.88 && lit < 0.2 ? 1 : lit > 0.5 ? 4 : lit > 0.1 ? 3 : lit > -0.4 ? 2 : 1];
+  });
+}
+
+// Copepods: the grazer field made visible. Teardrop bodies with a red eye and long swept antennae,
+// hovering, then hopping away in quick jumps.
+function drawCopepods(w, ta) {
+  const L = PARAMS.look.copepod, { cols, rows } = PARAMS.grid, Z = w.fields.graz, gold = rampBase(GOLD), rose = rampBase(ROSE);
+  const z = cam.zoom, x0 = cam.x, y0 = cam.y, x1 = cam.x + W / z, y1 = cam.y + H / z;
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      const zv = Z[j * cols + i];
+      if (zv < L.zFrom) continue;
+      const n = Math.min(L.perNode, Math.floor((zv - L.zFrom) / L.zStep) + 1);
+      for (let k = 0; k < n; k++) {
+        const h = (j * cols + i) * 17 + k * 5;
+        const every = L.hopEvery * (0.7 + 0.6 * hash01(h + 1)), ph = ta / every + hash01(h + 2), hop = Math.floor(ph), f = ph - hop;
+        const jump = Math.min(1, f * every / L.hopTime);
+        const ax = (hash01(h * 3 + hop) - 0.5) * 2, ay = (hash01(h * 3 + hop + 7) - 0.5) * 2;
+        const bx = (hash01(h * 3 + hop + 1) - 0.5) * 2, by = (hash01(h * 3 + hop + 8) - 0.5) * 2;
+        const ox = ax + (bx - ax) * jump, oy = ay + (by - ay) * jump;
+        const cx = (i + 0.5 + hash01(h + 3) - 0.5) * GRID_W + ox * L.hopDist, cy = (j + 0.5 + hash01(h + 4) - 0.5) * GRID_H + oy * L.hopDist;
+        if (cx < x0 - 4 || cx > x1 + 4 || cy < y0 - 4 || cy > y1 + 4) continue;
+        const hx = bx - ax, hy = by - ay, hl = Math.sqrt(hx * hx + hy * hy) || 1, dx = hx / hl, dy = hy / hl;   // heading
+        const sx = toSX(cx), sy = toSY(cy);
+        if (z < 2) {                                         // a speck with an eye at low zoom
+          put(sx, sy, gold + BASE); put(sx + Math.round(dx), sy + Math.round(dy), rose + HIGHLIGHT);
+          continue;
+        }
+        // Glassy cephalothorax tapering to the tail, a gold gut, a red eye
+        fillShape(cx, cy, L.len, L.len * L.width, Math.atan2(dy, dx), (u, q, x, y) => {
+          const half = u > 0 ? Math.sqrt(1 - u * u) : 1 + u * 0.5;
+          if (u < -1 || u > 1 || Math.abs(q) > half) return -1;
+          if (u > 0.55 && Math.abs(q) < 0.35) return rose + HIGHLIGHT;          // naupliar eye
+          if (Math.abs(q) < 0.3 && u > -0.5 && u < 0.4) return gold + BASE;     // gut
+          const under = view.ibuf[y * W + x];
+          return Math.abs(q) > half - 0.35 ? LIGHT_UP[LIGHT_UP[under]] : LIGHT_UP[under];   // see-through shell
+        });
+        // Long antennules held out sideways like a T, swept back a little; flicked back during a hop
+        const sweep = 0.25 + (jump < 1 ? 0.6 : 0), hx0 = cx + dx * L.len * 0.7, hy0 = cy + dy * L.len * 0.7;
+        for (const sd of [-1, 1]) {
+          worldLine(hx0, hy0, hx0 - dx * L.antenna * sweep + sd * -dy * L.antenna, hy0 - dy * L.antenna * sweep + sd * dx * L.antenna, COL.SHAFT);
+        }
+        // Thin tail with two caudal bristles
+        const tx = cx - dx * (L.len + L.tail), ty = cy - dy * (L.len + L.tail);
+        worldLine(cx - dx * L.len, cy - dy * L.len, tx, ty, COL.SHAFT);
+        for (const sd of [-1, 1]) worldLine(tx, ty, tx - dx * 0.9 + sd * -dy * 0.6, ty - dy * 0.9 + sd * dx * 0.6, COL.SHAFT - 1);
       }
     }
   }
@@ -1977,9 +2316,11 @@ function composeFrame(w, now) {
   drawCysts(w);
   updateCrawlers(w);
   drawCrawlers(t);
+  drawCopepods(w, ta);
   drawThreads(w);
   drawCells(w, t);
   drawFlashes(w);
+  drawVisitors(w, ta);
   drawParticles(P.near, 3000, ta, true);
   drawHud(w, now);
   let overlayMs = 0;
@@ -2163,7 +2504,8 @@ function drawDebug(w) {
     'DROP ' + debug.droppedTicks,
     'CK ' + ck,
     'DAY ' + dayPhase(w).toFixed(2) + ' SUN ' + w.surfaceLight.toFixed(2) + ' WIND ' + w.wind.toFixed(2) + ' PL ' + w.pulses.length,
-    'DIED S ' + w.deaths.starved + ' O ' + w.deaths.old + ' G ' + w.deaths.grazed,
+    'DIED S ' + w.deaths.starved + ' O ' + w.deaths.old + ' G ' + w.deaths.grazed + ' F ' + w.deaths.sardines + ' SP ' + w.deaths.salps,
+    'VISIT ' + (w.visitors.map((v) => v.kind.slice(0, 3).toUpperCase()).join(' ') || '-'),
   ];
   for (let i = 0; i < lines.length; i++) drawText(3, 6 + i * 7, lines[i], COL.FOAM, 1);
   drawFieldMaps(w);

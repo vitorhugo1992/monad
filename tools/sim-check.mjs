@@ -67,7 +67,7 @@ function run(seed) {
     }
     lastPhase = ph;
   }
-  const drift = sim.nutrientInventory(w) - (w.initialInventory + w.upwelled);
+  const drift = sim.nutrientInventory(w) - (w.initialInventory + w.upwelled - w.carried);
   const mean = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : NaN);
   const alive = w.cells.filter((c) => !c.dying);
   const ramps = new Array(sim.HUE_WHEEL.length).fill(0);
@@ -91,12 +91,12 @@ const results = [];
 for (let s = firstSeed; s < firstSeed + seeds; s++) {
   const r = run(s);
   results.push(r);
-  const f = (v) => v.toFixed(2), d = r.deaths, dt = d.starved + d.old + d.grazed || 1;
+  const f = (v) => v.toFixed(2), d = r.deaths, dt = d.starved + d.old + d.grazed + d.sardines + d.salps || 1;
   process.stdout.write(
     `seed ${String(s).padStart(4)} |${spark(r.pops)}| min ${String(r.minPop).padStart(3)} max ${String(r.maxPop).padStart(3)}` +
     ` cap ${(r.capFrac * 100).toFixed(1).padStart(4)}% ${r.extinct ? 'EXTINCT' : '       '} arcs ${r.arc.n} falls ${r.arc.dieoffs}` +
     ` | depth noon ${f(r.noon)} night ${f(r.night)} | pulses ${r.pulses}` +
-    ` | deaths S/O/G ${Math.round(100 * d.starved / dt)}/${Math.round(100 * d.old / dt)}/${Math.round(100 * d.grazed / dt)}%` +
+    ` | deaths S/O/G/F/Sp ${[d.starved, d.old, d.grazed, d.sardines, d.salps].map((x) => Math.round(100 * x / dt)).join('/')}%` +
     ` | size ${f(r.size)} ramps ${r.ramps.join('/')} drift ${r.drift.toExponential(1)}\n`);
 }
 

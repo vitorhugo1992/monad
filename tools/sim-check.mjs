@@ -44,6 +44,7 @@ function arcs(pops) {
 function run(seed) {
   const w = sim.createWorld(seed);
   const pops = [];
+  let lateMin = Infinity, lateCellMin = Infinity, extinctAt = null;
   let capTicks = 0, extinct = false, minPop = Infinity, maxPop = 0, pulses = 0, lastPhase = sim.dayPhase(w);
   const noon = [], night = [], syncs = [], dinos = [];
   const total = minutes * 60 * rate;
@@ -53,10 +54,11 @@ function run(seed) {
     if (w.pulses.length > before) pulses++;
     const pop = sim.aliveCount(w);
     if (pop >= cap) capTicks++;
-    if (pop === 0 && w.cysts.length === 0) extinct = true;
+    if (pop === 0 && w.cysts.length === 0 && !extinct) { extinct = true; extinctAt = t / rate / 60; }
     if (t % sampleTicks === 0) {
       pops.push(pop);
       minPop = Math.min(minPop, pop); maxPop = Math.max(maxPop, pop);
+      if (t > 600 * rate) { lateMin = Math.min(lateMin, pop + w.cysts.length); lateCellMin = Math.min(lateCellMin, pop); }   // after the inoculum has grown
       if (pop >= 20 && t % (3 * sampleTicks) === 0) syncs.push(sim.syncStats(w));
       // Dinoflagellates: their share of the living cells, and how many there are (Margalef: blooms only in calm water)
       let nd = 0;
@@ -79,7 +81,7 @@ function run(seed) {
   const ramps = new Array(sim.HUE_WHEEL.length).fill(0);
   for (const c of alive) ramps[Math.floor(c.g.hue)]++;
   return {
-    seed, pops, minPop, maxPop, capFrac: capTicks / total, extinct, drift, arc: arcs(pops), pulses,
+    seed, pops, minPop, maxPop, lateMin, lateCellMin, extinctAt, capFrac: capTicks / total, extinct, drift, arc: arcs(pops), pulses,
     noon: mean(noon), night: mean(night), deaths: w.deaths, ramps,
     size: mean(alive.map((c) => c.g.size)), checksum: sim.worldChecksum(w),
     sync: Object.fromEntries(['local', 'locked', 'global', 'chained', 'chains', 'longest', 'coils', 'stars'].map((k) => [k, mean(syncs.map((q) => q[k]))])),
@@ -104,7 +106,8 @@ for (let s = firstSeed; s < firstSeed + seeds; s++) {
   const f = (v) => v.toFixed(2), d = r.deaths, dt = d.starved + d.old + d.grazed + d.sardines + d.salps || 1;
   process.stdout.write(
     `seed ${String(s).padStart(4)} |${spark(r.pops)}| min ${String(r.minPop).padStart(3)} max ${String(r.maxPop).padStart(3)}` +
-    ` cap ${(r.capFrac * 100).toFixed(1).padStart(4)}% ${r.extinct ? 'EXTINCT' : '       '} arcs ${r.arc.n} falls ${r.arc.dieoffs}` +
+    ` late min ${String(r.lateCellMin).padStart(3)} (+cysts ${String(r.lateMin).padStart(3)})` +
+    ` cap ${(r.capFrac * 100).toFixed(1).padStart(4)}% ${r.extinct ? `EXTINCT at ${r.extinctAt.toFixed(0)} min` : '       '} arcs ${r.arc.n} falls ${r.arc.dieoffs}` +
     ` | depth noon ${f(r.noon)} night ${f(r.night)} | pulses ${r.pulses}` +
     ` | deaths S/O/G/F/Sp ${[d.starved, d.old, d.grazed, d.sardines, d.salps].map((x) => Math.round(100 * x / dt)).join('/')}%` +
     ` | size ${f(r.size)} ramps ${r.ramps.join('/')} drift ${r.drift.toExponential(1)}` +

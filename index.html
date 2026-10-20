@@ -185,7 +185,9 @@ const PARAMS = {
   // Brighter than the soft flash of other cells, but still palette colours and dithered.
   glow: { halo: 0.8, haloRadius: 4, haloMaxPx: 24, touch: 2, refractory: 75,
           chopFrom: 0.45, chopDepth: 40, chopRate: 0.25 },
-  thread: { maxAge: 40, dotSpacing: 3 },  // drawn only between cells big enough on screen to show a form
+  // Lineage threads: only while the sisters are still close (maxDist x their radii), fading with age and distance;
+  // drawn only between cells big enough on screen to show a form
+  thread: { maxAge: 20, maxDist: 4, dotSpacing: 3 },
   // Chains as drawn: the cells swim and turn as one (a shorter leash for longer chains), stacked along the chain;
   // interlocking setae bridge the gap between linked cells once they show a form
   chainLook: { leashPerCell: 0.25, sway: 0.08, swaySpeed: 0.15 },
@@ -266,7 +268,7 @@ const PARAMS = {
              feelers: 0.95, legBeat: 3, swimBeat: 9, glide: 0.45, wander: 8, dartEvery: 4.5, dartDist: 7, dartTime: 0.6 },
   },
   murk: { from: 0.8, full: 3 },         // bloom biomass summed down the upper column: rays fade in murky water
-  hud: { x: 4, y: 290, line: 7, visibleMs: 6000, fadeMs: 2000 },
+  hud: { x: 4, y: 290, line: 7, visibleMs: 6000, fadeMs: 2000, epitaphFade: 20 },   // epitaph fades in over 20 simulated s
   debug: { syncEvery: 15, sampleEvery: 100, historyLength: 180, frameSamples: 120, graphY: 172, graphH: 48, mapX: 126, mapY: 6, mapCell: 2 },
 };
 
@@ -724,6 +726,7 @@ function createWorld(seed, founderCount, dayLength) {
     fallen: new Float64Array(PARAMS.grid.cols),   // detritus exported per column, ever (observed only, never read by the rules)
     deaths: { starved: 0, old: 0, grazed: 0, sardines: 0, salps: 0 },   // observed only
     visitors: [], nextVisitorId: 1, carried: 0,     // carried: nutrients that left the column inside visitors
+    extinctTick: -1,                                // observed only: when the last cell and the last cyst were gone
   };
   w.nextWind = Math.floor(rng.range(PARAMS.wind.gapMin, PARAMS.wind.gapMax) * PARAMS.time.tickRate);
   updateLight(w);
@@ -807,6 +810,8 @@ function stepWorld(w) {
   updateVisitors(w, dt);
   lifeAndDeath(w);
   updateCysts(w, dt);
+  // Extinction is an ending, not a reset: the water goes on, empty and silent
+  if (w.extinctTick < 0 && !w.cysts.length && aliveCount(w) === 0) w.extinctTick = w.tick;
 }
 
 // Rule 1: Brownian motion, phototaxis toward the preferred light level, soft separation.
@@ -2209,9 +2214,9 @@ function drawThreads(w) {
     const p = byId.get(c.parentId);
     if (!p || p === c.la || p === c.lb || p.rv * z < minR) continue;
     const ax = toSX(c.x + c.ox), ay = toSY(c.y + c.oy), dx = toSX(p.x + p.ox) - ax, dy = toSY(p.y + p.oy) - ay;
-    const len = Math.sqrt(dx * dx + dy * dy);
-    if (len < 1) continue;
-    const fade = c.age / T.maxAge, idx = rampBase(hueRamp(c.g)) + BASE;
+    const len = Math.sqrt(dx * dx + dy * dy), apart = Math.hypot(c.x - p.x, c.y - p.y) / (T.maxDist * (c.r + p.r));
+    if (len < 1 || apart >= 1) continue;                  // sisters that have drifted apart show no thread
+    const fade = Math.max(c.age / T.maxAge, apart), idx = rampBase(hueRamp(c.g)) + BASE;
     for (let s = 0; s <= len; s += T.dotSpacing) {
       const x = Math.round(ax + dx * s / len), y = Math.round(ay + dy * s / len);
       if (wb(x, y) >= fade) put(x, y, idx);
@@ -2803,6 +2808,13 @@ function clock(seconds) {
 // Microscope readout, bottom left; dissolves after inactivity
 function drawHud(w, now) {
   const Hd = PARAMS.hud;
+  if (w.extinctTick >= 0) {   // the ending stays on: how long this world lived
+    const vis = clamp((w.tick - w.extinctTick) * TICK_DT / Hd.epitaphFade, 0, 1);
+    drawText(Hd.x, Hd.y, 'SEED ' + seedLabel, COL.FOAM, vis);
+    drawText(Hd.x, Hd.y + Hd.line, 'LIVED ' + clock(w.extinctTick * TICK_DT), COL.FOAM, vis);
+    drawText(Hd.x, Hd.y + Hd.line * 2, 'EXTINCT', rampBase(ROSE) + HIGHLIGHT, vis);
+    return;
+  }
   const vis = debug.on ? 1 : clamp(1 - (now - input.lastActivity - Hd.visibleMs) / Hd.fadeMs, 0, 1);
   if (vis <= 0) return;
   drawText(Hd.x, Hd.y, 'SEED ' + seedLabel, COL.FOAM, vis);

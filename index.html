@@ -225,7 +225,7 @@ const PARAMS = {
     salp: { rx: 3.3, ry: 2.3, pellets: 5, pelletFall: 7, pelletSpan: 70 },
     sunfish: { rx: 16, ry: 18, fin: 17, finBase: 5.5, sweep: 6, finBeat: 1.4, finTurn: 0.7, bob: 0.8, pectoral: 2.6, gulp: 1.8 },
     // Krill are the grazer field made visible: giants next to the cells, so only a sparse share of the swarm is drawn
-    krill: { zFrom: 0.3, zSpan: 0.6, coverage: 0.25, len: 11, thick: 0.15, curl: 0.12, flick: 0.35,
+    krill: { zFrom: 0.3, zSpan: 0.6, coverage: 0.25, len: 8, thick: 0.15, curl: 0.12, flick: 0.35,
              feelers: 0.95, legBeat: 3, swimBeat: 9, glide: 0.45, wander: 8, dartEvery: 4.5, dartDist: 7, dartTime: 0.6 },
   },
   murk: { from: 0.8, full: 3 },         // bloom biomass summed down the upper column: rays fade in murky water
@@ -2256,12 +2256,10 @@ function drawKrill(w, ta) {
           fx = nx; fy = ny;
         }
       }
-      // photophores: blue-white light organs under the body, glowing at night
-      const glow = 0.25 + 0.75 * dark;
-      for (const sp of [0.04, 0.24, 0.34, 0.5, 0.6, 0.7, 0.8]) {
-        const [bx, by] = spine(sp), th = thick(sp), sx = toSX(bx), sy = toSY(by + th * 0.85);
-        put(sx, sy, glow > 0.6 ? COL.GLOW : ice + BRIGHT);
-        if (glow > 0.5) for (const [ox, oy] of [[1, 0], [-1, 0], [0, 1]]) if (wb(sx + ox, sy + oy) < glow - 0.4) lift(sx + ox, sy + oy);
+      // photophores: small blue light organs under the body, a touch brighter at night (no halo)
+      if (z >= 2) for (const sp of [0.24, 0.5, 0.7]) {
+        const [bx, by] = spine(sp), th = thick(sp);
+        put(toSX(bx), toSY(by + th * 0.85), dark > 0.5 ? ice + HIGHLIGHT : ice + BASE);
       }
     }
   }

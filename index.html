@@ -403,7 +403,7 @@ const PARAMS = {
              feelers: 0.95, legBeat: 3, swimBeat: 9, glide: 0.45, wander: 8, dartEvery: 4.5, dartDist: 7, dartTime: 0.6 },
   },
   murk: { from: 0.8, full: 3 },         // bloom biomass summed down the upper column: rays fade in murky water
-  hud: { x: 4, y: 290, line: 7, visibleMs: 6000, fadeMs: 2000, epitaphFade: 20, listenY: 200, listenVis: 0.7 },   // listen: the TAP TO LISTEN hint   // epitaph fades in over 20 simulated s
+  hud: { x: 4, y: 290, line: 7, visibleMs: 6000, fadeMs: 2000, epitaphFade: 20, listenY: 200, listenVis: 1 },   // listen: the TAP TO START hint, solid (dithering made it hard to read)   // epitaph fades in over 20 simulated s
   debug: { syncEvery: 15, sampleEvery: 100, historyLength: 180, frameSamples: 120, graphY: 172, graphH: 48, mapX: 126, mapY: 6, mapCell: 2 },
 };
 
@@ -3963,7 +3963,7 @@ function drawHud(w, now) {
 // Browsers keep sound off until a gesture; until then a quiet invitation sits in the water
 function drawListenHint() {
   if (audio.started) return;
-  const text = 'TAP TO LISTEN';
+  const text = 'TAP TO START';
   drawText(Math.floor((W - text.length * 4 + 1) / 2), PARAMS.hud.listenY, text, COL.FOAM, PARAMS.hud.listenVis);
 }
 

@@ -5,14 +5,20 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="theme-color" content="#070a14">
 <title>MONAD</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #070a14; }
   body { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
   #screen { position: fixed; inset: 0; width: 100%; height: 100%; image-rendering: crisp-edges; image-rendering: pixelated; }
+  #safe { position: fixed; visibility: hidden; pointer-events: none;
+          padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
 </style>
 </head>
 <body>
 <canvas id="screen"></canvas>
+<div id="safe"></div>
 <script>
 'use strict';
 
@@ -21,7 +27,7 @@
 // Energy is per unit biomass: a cell divides at 1 and each daughter starts at 0.5.
 const PARAMS = {
   world: { w: 180, h: 320, floor: 18 }, // floor: sediment thickness at the bottom
-  time: { tickRate: 30, maxTicksPerFrame: 8, speeds: [1, 2, 4, 8] },   // time-lapse: ?speed= or the [ and ] keys
+  time: { tickRate: 30, maxTicksPerFrame: 8, speeds: [1, 2, 4, 8], awakeMs: 30 },   // awakeMs: the screen-off timer   // time-lapse: ?speed= or the [ and ] keys
   grid: { cols: 24, rows: 40 },
   hash: { cell: 12 },                   // must be >= the largest interaction distance
   cell: { rMin: 1.25, rMax: 4, drawScale: 0.5 },   // body radius at size 0.6 .. 1.6; cells are drawn at half of it
@@ -417,7 +423,7 @@ const PARAMS = {
              feelers: 0.95, legBeat: 3, swimBeat: 9, glide: 0.45, wander: 8, dartEvery: 4.5, dartDist: 7, dartTime: 0.6 },
   },
   murk: { from: 0.8, full: 3 },         // bloom biomass summed down the upper column: rays fade in murky water
-  hud: { x: 4, y: 290, line: 7, visibleMs: 6000, fadeMs: 2000, epitaphFade: 20, listenY: 200, listenVis: 1, music: { x: 155, y: 4 } },   // music: the music button, left of the notebook glyph   // epitaph fades in over 20 simulated s; listen: the solid TAP TO LISTEN hint
+  hud: { x: 4, y: 290, line: 7, visibleMs: 6000, fadeMs: 2000, epitaphFade: 20, listenY: 200, listenVis: 1, music: { x: 155, y: 4 }, awake: { x: 144, y: 4 } },   // awake: the screen-off playing moon, left of the music button   // music: the music button, left of the notebook glyph   // epitaph fades in over 20 simulated s; listen: the solid TAP TO LISTEN hint
   debug: { syncEvery: 15, sampleEvery: 100, historyLength: 180, frameSamples: 120, graphY: 172, graphH: 48, mapX: 126, mapY: 6, mapCell: 2 },
   // Field notebook: the world's records behind one small glyph (top right, fades with the HUD). Observation only:
   // a row every sampleEvery simulated s for the whole life (when maxSamples fill up, every other row is dropped and
@@ -436,7 +442,7 @@ const PARAMS = {
     // Catching up: the time away is lived again, exactly, up to maxAway (s); beyond it the water rests. A worker runs
     // it out of sight and shows a frame every show s (a silent time-lapse); the last tail simulated s play on the page,
     // from tailSpeed x slowing to real time, so the recap glides into the live world. bench: s measured by ?bench.
-    maxAway: 12 * 3600, show: 0.25, tail: 40, tailSpeed: 8, bench: 20 },
+    maxAway: 12 * 3600, show: 0.25, tail: 40, tailSpeed: 8, bench: 20, gap: 2 },   // gap: s hidden before a return catches up
 };
 
 // ===== RNG =====
@@ -2158,7 +2164,7 @@ function storeClear(db) {
 // Discrete, enveloped notes only: every oscillator starts, swells, fades to 0.0001 and is disconnected.
 // voices -> ecosystem bus -> lowpass -> dry + reverb send + delay send -> master -> gentle compressor -> out.
 // Deeper voices also send straight into the reverb, so the depths sound quieter and wetter.
-const audio = { ctx: null, started: false, muted: false, master: null, bus: null, wet: null, waves: [], active: 0, drones: 0, played: 0 };
+const audio = { ctx: null, started: false, muted: false, awake: false, limit: null, stream: null, el: null, master: null, bus: null, wet: null, waves: [], active: 0, drones: 0, played: 0 };
 
 // Wave table along the timbre gene, built once. Soft cells: a warm triangle; dinoflagellates: wood, nearly a sine
 // with a little body; diatoms: glass, a bright sine. The partner oscillator in playNote adds each family's colour.
@@ -2233,7 +2239,8 @@ function startAudio() {
   const noise = ctx.createBuffer(1, Math.floor(Am.noiseSeconds * ctx.sampleRate), ctx.sampleRate), nrng = makeRng(0x5ea);
   const nd = noise.getChannelData(0);
   for (let i = 0; i < nd.length; i++) nd[i] = nrng.next() * 2 - 1;
-  Object.assign(audio, { ctx, master, bendLP, bendShelf, bus, wet, lp, fb, delay, delayIn, verbIn, amb, noise, waves: buildWaves(ctx), started: true });
+  Object.assign(audio, { ctx, master, bendLP, bendShelf, bus, wet, lp, fb, delay, delayIn, verbIn, amb, noise, waves: buildWaves(ctx), started: true, limit });
+  if (audio.awake) routeOutput();
   if (ctx.state !== 'running') ctx.resume();
 }
 
@@ -2536,6 +2543,35 @@ function pluck(w, c) {
 }
 
 // The music button: the cells' notes, drones and plucks fade out or in; ambience and bubbles go on
+// Screen-off playing (author's option): the sound goes out through a media element, so Android treats the page as
+// playing music, lets it run with the screen off and shows a media notification. Off: straight to the speakers.
+function routeOutput() {
+  if (!audio.ctx) return;
+  const on = audio.awake;
+  if (on && !audio.el) {
+    audio.stream = audio.ctx.createMediaStreamDestination();
+    audio.el = new Audio();
+    audio.el.srcObject = audio.stream.stream;
+  }
+  audio.limit.disconnect();
+  audio.limit.connect(on ? audio.stream : audio.ctx.destination);
+  if (!on) { if (audio.el) audio.el.pause(); return; }
+  audio.el.play().catch(() => {});
+  if (!('mediaSession' in navigator)) return;
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title: 'MONAD', artist: 'SEED ' + seedLabel, artwork: [{ src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' }],
+  });
+  navigator.mediaSession.setActionHandler('pause', () => { setAwake(false); if (document.hidden) audio.ctx.suspend(); });
+  navigator.mediaSession.setActionHandler('play', () => { audio.ctx.resume(); setAwake(true); });
+}
+
+function setAwake(on) {
+  audio.awake = on;
+  needsRender = true;
+  if (!audio.started) startAudio(); else routeOutput();
+  saveWorld();   // the choice is kept with the world
+}
+
 function setMuted(muted) {
   audio.muted = muted;
   needsRender = true;
@@ -2611,11 +2647,14 @@ function resize() {
   const cw = Math.round(window.innerWidth * dpr), ch = Math.round(window.innerHeight * dpr);
   view.canvas.width = cw;
   view.canvas.height = ch;
+  // The water fits inside the safe area (clear of a notch or rounded corners when the app runs full screen)
+  const st = getComputedStyle(document.getElementById('safe')), inset = (k) => Math.round((parseFloat(st['padding' + k]) || 0) * dpr);
+  const l = inset('Left'), r = inset('Right'), t = inset('Top'), b = inset('Bottom'), sw = cw - l - r, sh = ch - t - b;
   // Fractional device pixel ratios can leave the canvas a pixel short of a whole multiple;
   // allow that much overhang rather than dropping a whole scale step.
-  view.scale = Math.max(1, Math.floor(Math.min((cw + 2) / W, (ch + 2) / H)));
-  view.ox = Math.floor((cw - W * view.scale) / 2);
-  view.oy = Math.floor((ch - H * view.scale) / 2);
+  view.scale = Math.max(1, Math.floor(Math.min((sw + 2) / W, (sh + 2) / H)));
+  view.ox = l + Math.floor((sw - W * view.scale) / 2);
+  view.oy = t + Math.floor((sh - H * view.scale) / 2);
   view.ctx.imageSmoothingEnabled = false;
   view.ctx.fillStyle = PALETTE_HEX[COL.WATER];
   view.ctx.fillRect(0, 0, cw, ch);
@@ -4242,11 +4281,28 @@ function drawHud(w, now) {
   drawText(Hd.x, Hd.y + Hd.line, 'T ' + clock(w.tick * TICK_DT), COL.FOAM, vis);
   drawText(Hd.x, Hd.y + Hd.line * 2, 'POP ' + pad(aliveCount(w), 3), rampBase(1) + HIGHLIGHT, vis);
   const speed = PARAMS.time.speeds[speedLevel];
-  drawText(Hd.x, Hd.y + Hd.line * 3, 'MAG ' + cam.zoom + 'X' + (speed > 1 ? '  TIME ' + speed + 'X' : '') + (audio.muted ? '  MUSIC OFF' : ''), COL.FOAM, vis);
+  drawText(Hd.x, Hd.y + Hd.line * 3, 'MAG ' + cam.zoom + 'X' + (speed > 1 ? '  TIME ' + speed + 'X' : '') + (audio.muted ? '  MUSIC OFF' : '') + (audio.awake ? '  BACKGROUND ON' : ''), COL.FOAM, vis);
 }
 
 // The music button, a beamed note beside the notebook glyph: shows with the HUD, crossed out while the music is off
 const NOTE_GLYPH = ['.######', '.#....#', '.#....#', '.#....#', '##...##', '##...##'];
+// A crescent moon: lit while the music goes on with the screen off
+const MOON_GLYPH = ['..###', '.##..', '##...', '##...', '.##..', '..###'];
+function drawAwakeGlyph(now) {
+  const G = PARAMS.hud.awake, vis = notebook.open ? 1 : hudVisibility(now);
+  if (vis <= 0) return;
+  for (const dx of [1, 0]) {
+    for (let j = 0; j < MOON_GLYPH.length; j++) {
+      for (let i = 0; i < MOON_GLYPH[j].length; i++) {
+        const x = G.x + i, y = G.y + j;
+        if (MOON_GLYPH[j][i] !== '#' || (vis < 1 && bayer(x, y) >= vis)) continue;
+        put(x + dx, y + dx, dx ? COL.WATER : audio.awake ? rampBase(1) + BRIGHT : COL.SLATE);
+      }
+    }
+  }
+}
+const onAwakeGlyph = (p) => p.x >= PARAMS.hud.awake.x - 3 && p.x < PARAMS.hud.awake.x + 7 && p.y >= PARAMS.hud.awake.y - 4 && p.y < PARAMS.hud.awake.y + 11;
+
 function drawMusicGlyph(now) {
   const G = PARAMS.hud.music, vis = notebook.open ? 1 : hudVisibility(now);
   if (vis <= 0) return;
@@ -4318,6 +4374,7 @@ function composeFrame(w, now) {
   if (debug.on) { const t0 = performance.now(); drawDebug(w); overlayMs = performance.now() - t0; }
   drawNotebookGlyph(now);
   drawMusicGlyph(now);
+  drawAwakeGlyph(now);
   if (notebook.open) drawNotebook(w);
   blitTimeOfDay(w);
   if (notebook.open) inkNotebook();
@@ -5027,6 +5084,7 @@ function setupInput() {
     const tapped = d && d.id === e.pointerId && d.moved <= PARAMS.touch.tapMove && performance.now() - d.t < PARAMS.touch.tapMs;
     if (tapped && onNewWater(p) && !notebook.open) { seedNewWater(); input.down = null; }
     else if (tapped && onMusicGlyph(p) && (d.hud > 0 || notebook.open)) { setMuted(!audio.muted); input.down = null; }   // the music button
+    else if (tapped && onAwakeGlyph(p) && (d.hud > 0 || notebook.open)) { setAwake(!audio.awake); input.down = null; }   // screen-off playing
     else if (d && d.id === e.pointerId && notebook.open) { notebookRelease(d, p); input.down = null; }
     else if (d && d.id === e.pointerId) {
       const tap = d.moved <= PARAMS.touch.tapMove && performance.now() - d.t < PARAMS.touch.tapMs;
@@ -5057,6 +5115,7 @@ function setupInput() {
   window.addEventListener('keydown', (e) => {
     wake();
     if (e.key === 'm' || e.key === 'M') { if (audio.started) setMuted(!audio.muted); else startAudio(); return; }
+    if (e.key === 'b' || e.key === 'B') { setAwake(!audio.awake); return; }
     startAudio();
     if (e.key === 'n' || e.key === 'N') openNotebook(!notebook.open);
     else if (notebook.open && notebookKey(e.key)) e.preventDefault();
@@ -5067,7 +5126,6 @@ function setupInput() {
     else if (e.key === '[') setSpeed(speedLevel - 1);
   });
   window.addEventListener('resize', () => { resize(); needsRender = true; });
-  document.addEventListener('visibilitychange', () => { lastTime = 0; });
 }
 
 // ===== Debug =====
@@ -5180,7 +5238,7 @@ function drawDebug(w) {
 }
 
 // ===== Loop =====
-let world = null, seedLabel = '', lastTime = 0, acc = 0, needsRender = true, speedLevel = 0;
+let world = null, seedLabel = '', lastTime = 0, acc = 0, needsRender = true, speedLevel = 0, lastLive = 0;   // lastLive: wall time the world last stepped on the page
 
 // Time-lapse runs more of the same fixed ticks per second; the world stays deterministic.
 function setSpeed(level) {
@@ -5188,8 +5246,8 @@ function setSpeed(level) {
   needsRender = true;
 }
 
-function frame(now) {
-  requestAnimationFrame(frame);
+// Lives the world on to now (time-lapse, the tail of a catch-up, the fixed ticks) and keeps it saved; returns the ticks run
+function advance(now) {
   if (!lastTime) lastTime = now;
   const speed = playSpeed();
   const real = Math.min((now - lastTime) / 1000, 1);
@@ -5198,7 +5256,6 @@ function frame(now) {
   lastTime = now;
   if (ambientT < 0) ambientT = world.tick * TICK_DT;
   ambientT += real * Math.max(PARAMS.ambient.rate, speed);
-  const t0 = performance.now();
   let ticks = 0;
   while (acc >= TICK_DT && ticks < PARAMS.time.maxTicksPerFrame * speed) {
     stepWorld(world);
@@ -5209,7 +5266,15 @@ function frame(now) {
     ticks++;
   }
   if (acc >= TICK_DT) { debug.droppedTicks += Math.floor(acc / TICK_DT); acc = 0; }
+  if (catchup.phase !== 'worker') lastLive = Date.now();
   if (catchup.phase === 'tail' && world.tick >= catchupTarget()) endCatchup();
+  if (keeper.db && now - keeper.lastSave > PARAMS.persist.every * 1000) saveWorld();
+  return ticks;
+}
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  const t0 = performance.now(), ticks = advance(now);
   // Everything visible is tied to simulation ticks or the camera, so other frames would be identical.
   if (ticks > 0 || needsRender) {
     const overlayMs = render(world, now);
@@ -5218,7 +5283,17 @@ function frame(now) {
     needsRender = false;
     recordFrame(performance.now() - t0 - overlayMs);
   }
-  if (keeper.db && now - keeper.lastSave > PARAMS.persist.every * 1000) saveWorld();
+}
+
+// Screen off with screen-off playing on (author-approved exception to the one rAF loop, only then): a timer goes on
+// living the same fixed ticks and sounding them, drawing nothing
+let awakeTimer = 0;
+function awakeLoop() {
+  awakeTimer = 0;
+  if (!document.hidden || !audio.awake || !audio.started) return;
+  const now = performance.now();
+  if (advance(now) > 0) { audioWeather(world, now); audioAmbience(world); }
+  awakeTimer = setTimeout(awakeLoop, PARAMS.time.awakeMs);
 }
 
 // ===== Init =====
@@ -5233,7 +5308,7 @@ function hashString(s) {
 // ?seed= (number or word), ?debug, ?stress (start at the cell cap), ?ff=seconds (fast-forward),
 // ?zoom=1..4 with ?at=x,y (world point to centre on), ?speed=1|2|4|8 (time-lapse), ?day=5|10|30 (minutes),
 // ?notebook=1..4 (open the field notebook on that page), ?bench (how fast this device lives a world out of sight).
-// M turns the music off, N opens the notebook.
+// M turns the music off, B the screen-off playing on, N opens the notebook.
 function readOptions() {
   const q = new URLSearchParams(location.search);
   const kept = !q.has('seed') && !q.has('stress') && !q.has('ff') && !q.has('day') && !q.has('bench');
@@ -5265,7 +5340,7 @@ function saveWorld() {
   if (!k.db || k.busy || k.off || catchup.phase) return;   // mid catch-up the last save stands (and is caught up again)
   const R = PARAMS.persist.chunkRows, nb = notebookState(), chunks = Math.ceil(nb.count / R);
   const puts = {
-    world: { v: PARAMS.persist.version, label: seedLabel, savedAt: Date.now(), snap: snapshotWorld(world), notebook: nb, chunks, prefs: { muted: audio.muted } },
+    world: { v: PARAMS.persist.version, label: seedLabel, savedAt: Date.now(), snap: snapshotWorld(world), notebook: nb, chunks, prefs: { muted: audio.muted, awake: audio.awake } },
   };
   const thinned = !k.saved || k.saved.every !== nb.every;   // a thinning rewrote every row
   for (let i = thinned ? 0 : Math.floor(k.saved.count / R); i < chunks; i++) puts['rows:' + i] = notebookChunk(i);
@@ -5300,7 +5375,7 @@ function seedNewWater() {
 const catchup = { phase: '', base: 0, lived: 0, rested: 0, openedAt: 0, worker: null, bench: null };
 const RENDER_KEYS = ['spr', 'tempo', 'vt', 'swimPh', 'ox', 'oy', 'along', 'glowTick', 'songAt', 'songAtk', 'songRel', 'songLast', 'songDrone', 'pluckAt'];
 
-const catchupTarget = () => catchup.base + Math.floor((catchup.lived + (performance.now() - catchup.openedAt) / 1000) * PARAMS.time.tickRate);
+const catchupTarget = () => catchup.base + Math.floor((catchup.lived + (Date.now() - catchup.openedAt) / 1000) * PARAMS.time.tickRate);   // wall clock: it runs on while the phone sleeps
 const tailTicks = () => PARAMS.persist.tail * PARAMS.time.tickRate;
 
 // The simulation and notebook code of this very page, run in a worker
@@ -5328,12 +5403,14 @@ function startWorker(onMessage) {
   return wk;
 }
 
-function startCatchup(savedAt) {
-  const P = PARAMS.persist, away = Math.max(0, (Date.now() - savedAt) / 1000);
+// away: seconds the world has not lived (closed, hidden, or still behind in a tail)
+function catchUp(away) {
+  const P = PARAMS.persist;
+  if (catchup.worker) catchup.worker.terminate();
   catchup.lived = Math.min(away, P.maxAway);
   catchup.rested = away - catchup.lived;
   catchup.base = world.tick;
-  catchup.openedAt = performance.now();
+  catchup.openedAt = Date.now();
   if (catchup.rested > 0) notebook.rests.push({ tick: world.tick, s: catchup.rested });
   catchup.phase = 'tail';
   if (catchup.lived <= P.tail) return;
@@ -5350,6 +5427,30 @@ function startCatchup(savedAt) {
     catchup.worker.onerror = () => { catchup.worker.terminate(); restRemainder(); };
     catchup.phase = 'worker';
   } catch (e) { restRemainder(); }
+}
+
+// Back on screen after being hidden (the page lived on in the phone's memory but nothing stepped it): the kept world
+// catches up as if it had been closed. A tail left far behind goes back to the worker.
+function resumeAfterGap() {
+  if (!keeper.db || catchup.bench || catchup.phase === 'worker' || !lastLive) return;
+  if (catchup.phase === 'tail') {
+    const behind = (catchupTarget() - world.tick) / PARAMS.time.tickRate;
+    if (behind > PARAMS.persist.tail) catchUp(behind);
+    return;
+  }
+  const gap = (Date.now() - lastLive) / 1000;
+  if (gap > PARAMS.persist.gap) catchUp(gap);
+}
+
+function onVisibility() {
+  lastTime = 0;
+  if (!document.hidden) {
+    if (audio.ctx && audio.ctx.state !== 'running' && audio.started) audio.ctx.resume();
+    resumeAfterGap();
+    return;
+  }
+  saveWorld();
+  if (audio.awake && audio.started && !awakeTimer) awakeLoop();
 }
 
 // Without a worker the page cannot live hours quickly: the time beyond the tail is rested instead
@@ -5414,16 +5515,19 @@ async function init() {
     restoreNotebook(found.rec.notebook, found.rows);
     keeper.saved = { count: found.rec.notebook.count, every: found.rec.notebook.every, chunks: found.rec.chunks };
     audio.muted = !!(found.rec.prefs && found.rec.prefs.muted);
-    startCatchup(found.rec.savedAt);
+    audio.awake = !!(found.rec.prefs && found.rec.prefs.awake);
+    catchUp(Math.max(0, (Date.now() - found.rec.savedAt) / 1000));
   } else {
     world = createWorld(opts.seed, opts.stress ? PARAMS.division.maxCells : 0, opts.dayLength);
     if (opts.bench) startBench();
   }
   if (keeper.db) {
     saveWorld();
-    document.addEventListener('visibilitychange', () => { if (document.hidden) saveWorld(); });
     window.addEventListener('pagehide', saveWorld);
   }
+  document.addEventListener('visibilitychange', onVisibility);
+  lastLive = Date.now();
+  if ('serviceWorker' in navigator && window.isSecureContext && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
   debug.on = opts.debug;
   const ffTicks = Math.floor(opts.ff * PARAMS.time.tickRate);
   for (let i = 0; i < ffTicks; i++) { stepWorld(world); debugSample(world); notebookSample(world); world.music.notes.length = 0; }

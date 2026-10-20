@@ -124,6 +124,10 @@ const PARAMS = {
     habit: { glass: 0.6, coilChance: 0.5, starChance: 0.7, coilCells: 8, starCells: 8, starRest: 0.45 },   // glass: how far into diatom glass the form must be
   },
   mutation: { step: 0.08, jumpChance: 0.05, jump: 0.3 },
+  // Bioluminescence: an inherited trait of Alexandrium-form dinoflagellates only. At division a daughter may
+  // gain it or lose it, so glowing clades arise now and then, spread among kin and fade (about 1 in 6 at balance).
+  // Seen only at night; it changes nothing else.
+  luminous: { gain: 0.03, loss: 0.15 },
 
   // ---- Everything below is visual only; none of it feeds back into the simulation. ----
   camera: { levels: [1, 1.5, 2, 3, 4, 6, 8], wheelStep: 1 },   // zoom 1 shows the whole column
@@ -171,6 +175,11 @@ const PARAMS = {
     haloRadius: 2.2, haloMinPx: 2, haloMaxPx: 14, haloStrength: 0.3,   // faint light spilling into the water and onto neighbours
     ringTicks: 30, ringStart: 1, ringGrow: 0.25, ringMinR: 14, arcs: 3, arcGap: 0.2,   // broken arcs only on cells large on screen
   },
+  // Bioluminescent dinoflagellates: a rare share of Alexandrium-form lineages glow blue-green at night, on their
+  // own flash and when the water around them is disturbed (a passing school or salp, breaking chop near the surface).
+  // Brighter than the soft flash of other cells, but still palette colours and dithered.
+  glow: { halo: 0.8, haloRadius: 4, haloMaxPx: 24, touch: 2, refractory: 75,
+          chopFrom: 0.45, chopDepth: 40, chopRate: 0.25 },
   thread: { maxAge: 40, dotSpacing: 3 },  // drawn only between cells big enough on screen to show a form
   // Chains as drawn: the cells swim and turn as one (a shorter leash for longer chains), stacked along the chain;
   // interlocking setae bridge the gap between linked cells once they show a form
@@ -587,6 +596,21 @@ function deriveTraits(c) {
   if (!c.la && !c.lb) chainHabit(c);   // a colony keeps the habit it was founded with
 }
 
+// The lineage's dinoflagellate form, drawn in the same order as buildSprite
+function lineageDinoForm(seed) {
+  const S = PARAMS.sprite, D = PARAMS.dino, lin = makeRng(seed);
+  if (lin.range(S.aspectMin, S.aspectMax) < S.polarAspect) lin.int(S.valveSides.length);
+  lin.next();
+  return D.forms[lin.int(D.forms.length)];
+}
+
+// Bioluminescence passes to a daughter, or is gained or lost; only Alexandrium can carry it
+function inheritGlow(c, rng) {
+  const L = PARAMS.luminous, r = rng.next();
+  if (dinoWeight(c.g.timbre) <= 0.5 || lineageDinoForm(c.spriteSeed) !== 'alexandrium') return false;
+  return c.lum ? r >= L.loss : r < L.gain;
+}
+
 function copyHabit(to, from) {
   to.habit = from.habit; to.turn = from.turn; to.tanHalf = from.tanHalf; to.restK = from.restK; to.along = null;
 }
@@ -653,12 +677,14 @@ function createCell(w, x, y, g, energy, parentId, spriteSeed) {
     energy, held: 0, age: 0, lifespan: 0, vigor: 0,   // vigor: smoothed growth conditions, observed only
     theta: w.rng.next() * TAU, flashTick: -1000, dying: 0, grazed: false, eaten: null,
     pull: 0, nbrs: 0,                                  // Kuramoto: sum of sin(theta_j - theta_i) and neighbour count
+    lum: false,                                        // bioluminescent (Alexandrium only; inherited)
     la: null, lb: null, chainLen: 1, chainId: 0,       // chain links toward the head (la) and the tail (lb)
     head: null, kickScale: 1, kx: 0, ky: 0,            // the colony's head and its shared Brownian kick
     habit: 0, turn: 0, tanHalf: 0, restK: 0, along: null,   // colony habit (0 straight, 1 coil, 2 star): from the lineage and form
     g, spriteSeed, gen: 0,
     r: 0, rv: 0, biomass: 0, gainK: 0, halfSat: 0, maintK: 0, targetLight: 0,
     spr: null, ox: 0, oy: 0, swimPh: 0, vt: 0, tempo: 1,   // sprite cache and swimming (own clock, tempo): render only
+    glowTick: -1000,                                       // render only: last disturbance flash
   };
   deriveTraits(c);
   c.lifespan = lifespanFor(c, w.rng);
@@ -814,7 +840,7 @@ function steer(w, c, dt) {
         if (o === c) continue;
         const dx = c.x - o.x, dy = c.y - o.y, d2 = dx * dx + dy * dy;
         if (d2 < PHASE_R2 && !o.dying) { c.pull += dsin(o.theta - c.theta); c.nbrs++; }
-        if (o === c.la || o === c.lb || (c.chainId && o.chainId === c.chainId)) continue;   // a colony holds its own shape
+        if (o === c.la || o === c.lb || (c.habit === 2 && c.chainId && o.chainId === c.chainId)) continue;   // a star's cells meet at its hub
         const reach = (c.r + o.r) * D.separationRange;
         if (d2 >= reach * reach || d2 === 0) continue;
         const d = Math.sqrt(d2), push = D.separation * (1 - d / reach) * dt / d;
@@ -1167,6 +1193,7 @@ function lifeAndDeath(w) {
 function divide(w, c) {
   const rng = w.rng, Ch = PARAMS.chain;
   const gA = mutateGenome(c.g, rng), gB = mutateGenome(c.g, rng);
+  const lumA = inheritGlow(c, rng), lumB = inheritGlow(c, rng);
   const max = chainMax(c.g);
   const link = max >= 2 && chainLength(c) < max && rng.chance(Ch.chance * smoothstep(Ch.from, Ch.full, c.g.coupling));
   let ox = gauss(rng), oy = gauss(rng);
@@ -1196,6 +1223,8 @@ function divide(w, c) {
   c.gen++;
   deriveTraits(c);
   if (link) copyHabit(b, c);
+  c.lum = lumA;
+  b.lum = lumB;
   c.lifespan = lifespanFor(c, rng);
   return b;
 }
@@ -1211,7 +1240,7 @@ function die(w, c, starved) {
     const reserve = give * Cy.reserve;
     give -= reserve;
     w.cysts.push({
-      x: c.x, y: c.y, floorY: H - PARAMS.world.floor + w.rng.range(0.5, 2), g: c.g, spriteSeed: c.spriteSeed,
+      x: c.x, y: c.y, floorY: H - PARAMS.world.floor + w.rng.range(0.5, 2), g: c.g, spriteSeed: c.spriteSeed, lum: c.lum,
       reserve, age: 0, dormancy: w.rng.range(Cy.dormancyMin, Cy.dormancyMax),
     });
   }
@@ -1236,6 +1265,7 @@ function updateCysts(w, dt) {
         && sampleField(w.fields.nut, q.x, q.y) > Cy.germNutrient && w.rng.chance(Cy.germRate * dt)) {
       const c = createCell(w, q.x, q.y, q.g, Cy.germEnergy, null, q.spriteSeed);
       c.held = q.reserve;
+      c.lum = q.lum;
       w.cells.push(c);
       alive++;
       continue;
@@ -2013,7 +2043,7 @@ function drawCell(c, tick, t) {
 
   const frame = (Math.floor(tick * S.wobbleFps / PARAMS.time.tickRate) + c.id) % S.frames;
   const tones = spr.frames[frame], size = spr.size, x0 = cx - spr.half, y0 = cy - spr.half;
-  const pulse = flashLevel(c, tick) * PARAMS.flash.cellLift;
+  const lum = glowing(c), pulse = flashLevel(c, tick) * (lum ? glowNight : PARAMS.flash.cellLift);
   const fade = c.dying ? c.dying / PARAMS.death.fadeTicks : 0;
   const depth = c.y / H, dark = depth > R.deepFrom ? (depth - R.deepFrom) / (1 - R.deepFrom) * R.deepDarken : 0;
   const ib = view.ibuf, bx0 = view.bx0, by0 = view.by0, cw = 2 * R.causticWidth / z;
@@ -2040,7 +2070,11 @@ function drawCell(c, tick, t) {
         if (muted && tt > 0) tt--;
         idx = (alt ? base2 : base) + tt;
       }
-      if (pulse > 0 && BAYER[(((by + 1) & 3) << 2) | ((bx + 3) & 3)] < pulse) idx = LIGHT_UP[idx];   // soft bioluminescent swell
+      if (pulse > 0) {
+        const pb = BAYER[(((by + 1) & 3) << 2) | ((bx + 3) & 3)];
+        if (lum) { if (pb < pulse) idx = GLOW + (pb < pulse * 0.5 ? BRIGHT : HIGHLIGHT); }   // blue-green bioluminescence
+        else if (pb < pulse) idx = LIGHT_UP[idx];                                              // soft swell
+      }
       if (sl > 0 || cl > 0) {                                                    // light shafts and caustics play over the cell
         const wx = (bx + 0.5) / z + rowShift[sy];
         let lit = sl > 0 ? shaftAt(wx, wy) * sl * murkCol[sx] : 0;
@@ -2060,9 +2094,51 @@ function drawCells(w, t) {
   for (let i = 0; i < drawOrder.length; i++) drawCell(drawOrder[i], w.tick, t);
 }
 
-// A flash swells and fades softly: 0..1 over its lifetime
+// ---- Bioluminescence ----
+// Glowing Alexandrium (an inherited trait, see PARAMS.luminous); a daughter whose form drifted out of the
+// dinoflagellate range keeps the flag but no longer shows it
+const isLuminous = (c) => c.lum && dinoWeight(c.g.timbre) > 0.5;
+
+// At night disturbed water sets them flashing: visitors brushing past, breaking chop near the surface
+let glowNight = 0, glowSeen = -1;
+function updateGlow(w) {
+  const G = PARAMS.glow, V = PARAMS.visitors;
+  glowNight = 1 - smoothstep(PARAMS.drift.darkLo, PARAMS.drift.darkHi, w.surfaceLight);
+  const dS = glowSeen < 0 ? 0 : (w.tick - glowSeen) * TICK_DT;
+  if (w.tick === glowSeen) return;
+  glowSeen = w.tick;
+  if (glowNight <= 0) return;
+  const chop = clamp((w.wind - G.chopFrom) * G.chopRate * dS, 0, 1);
+  for (const c of w.cells) {
+    if (c.dying || !isLuminous(c) || w.tick - c.glowTick < G.refractory) continue;
+    let hit = c.y < G.chopDepth && hash01(c.id * 7919 + w.tick) < chop;
+    for (let i = 0; i < w.visitors.length && !hit; i++) {
+      const v = w.visitors[i];
+      if (v.kind === 'sardines') {
+        const S = V.sardines, dx = (c.x - v.x - v.dir * 4) / (S.rx + G.touch), dy = (c.y - v.y) / (S.ry + G.touch);
+        hit = dx * dx + dy * dy < 1;
+      } else if (v.kind === 'salps') {
+        const r = V.salps.reach + G.touch * 2;
+        for (let b = 0; b < v.alive.length && !hit; b++) {
+          if (!v.alive[b]) continue;
+          const p = salpBarrel(v, b), dx = c.x - p.x, dy = c.y - p.y;
+          hit = dx * dx + dy * dy < r * r;
+        }
+      } else {
+        const r = V.sunfish.r + G.touch, dx = c.x - v.x, dy = c.y - v.y;
+        hit = dx * dx + dy * dy < r * r;
+      }
+    }
+    if (hit) c.glowTick = w.tick;
+  }
+}
+
+const glowing = (c) => glowNight > 0 && isLuminous(c);
+const GLOW = rampBase(LIGHTBLUE);
+
+// A flash swells and fades softly: 0..1 over its lifetime (its own flash, or a disturbance flash)
 function flashLevel(c, tick) {
-  const F = PARAMS.flash, a = tick - c.flashTick;
+  const F = PARAMS.flash, a = tick - (c.glowTick > c.flashTick ? c.glowTick : c.flashTick);
   if (c.dying || a < 0 || a >= F.rise + F.fall) return 0;
   return a < F.rise ? smoothstep(0, F.rise, a) : 1 - smoothstep(F.rise, F.rise + F.fall, a);
 }
@@ -2074,8 +2150,9 @@ function drawFlashes(w) {
     const level = flashLevel(c, w.tick);
     if (level <= 0) continue;
     const age = w.tick - c.flashTick;
-    const cx = toSX(c.x + c.ox), cy = toSY(c.y + c.oy), rpx = c.rv * z;
-    const rh = clamp(rpx * F.haloRadius, F.haloMinPx, F.haloMaxPx), strength = F.haloStrength * level;
+    const cx = toSX(c.x + c.ox), cy = toSY(c.y + c.oy), rpx = c.rv * z, G = PARAMS.glow, lum = glowing(c);
+    const rh = lum ? clamp(rpx * G.haloRadius, F.haloMinPx + 2, G.haloMaxPx) : clamp(rpx * F.haloRadius, F.haloMinPx, F.haloMaxPx);
+    const strength = (lum ? G.halo * glowNight : F.haloStrength) * level;
     const y0 = Math.max(0, Math.floor(cy - rh)), y1 = Math.min(H - 1, Math.ceil(cy + rh));
     const x0 = Math.max(0, Math.floor(cx - rh)), x1 = Math.min(W - 1, Math.ceil(cx + rh));
     for (let y = y0; y <= y1; y++) {
@@ -2083,10 +2160,13 @@ function drawFlashes(w) {
         const b = wb(x, y);
         if (b >= strength) continue;                      // can't pass anywhere in the halo
         const dx = x - cx, dy = y - cy, d = Math.sqrt(dx * dx + dy * dy);
-        if (d <= rh && b < strength * (1 - d / rh)) { const k = y * W + x; view.ibuf[k] = LIGHT_UP[view.ibuf[k]]; }
+        const v = strength * (1 - d / rh);
+        if (d > rh || b >= v) continue;
+        const k = y * W + x;
+        view.ibuf[k] = lum && b < v * 0.35 ? GLOW + BASE : LIGHT_UP[view.ibuf[k]];   // a blue-green core for the glowers
       }
     }
-    if (rpx < F.ringMinR || age >= F.ringTicks) continue;
+    if (lum || rpx < F.ringMinR || age >= F.ringTicks) continue;
     const k = age / F.ringTicks, rad = rpx + F.ringStart + age * F.ringGrow * z;
     if (cx < -rad || cy < -rad || cx > W + rad || cy > H + rad) continue;
     const idx = rampBase(hueRamp(c.g)) + (k < 0.5 ? HIGHLIGHT : BASE);
@@ -2740,6 +2820,7 @@ function composeFrame(w, now) {
   updateShimmer(waterT);
   updateCaustics(waterT, w.tick);
   updateSwim(w, ta);
+  updateGlow(w);
   drawBackground(waterT);
   drawParticles(P.far, 1000, ta, false);
   drawParticles(P.mid, 2000, ta, false);

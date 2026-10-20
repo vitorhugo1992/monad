@@ -78,7 +78,7 @@ function run(seed) {
     seed, pops, minPop, maxPop, capFrac: capTicks / total, extinct, drift, arc: arcs(pops), pulses,
     noon: mean(noon), night: mean(night), deaths: w.deaths, ramps,
     size: mean(alive.map((c) => c.g.size)), checksum: sim.worldChecksum(w),
-    sync: Object.fromEntries(['local', 'locked', 'global', 'chained', 'chains', 'longest'].map((k) => [k, mean(syncs.map((q) => q[k]))])),
+    sync: Object.fromEntries(['local', 'locked', 'global', 'chained', 'chains', 'longest', 'coils', 'stars'].map((k) => [k, mean(syncs.map((q) => q[k]))])),
     longest: Math.max(1, ...syncs.map((q) => q.longest)),
   };
 }
@@ -103,7 +103,7 @@ for (let s = firstSeed; s < firstSeed + seeds; s++) {
     ` | deaths S/O/G/F/Sp ${[d.starved, d.old, d.grazed, d.sardines, d.salps].map((x) => Math.round(100 * x / dt)).join('/')}%` +
     ` | size ${f(r.size)} ramps ${r.ramps.join('/')} drift ${r.drift.toExponential(1)}` +
     ` | sync loc ${f(r.sync.local)} lock ${f(r.sync.locked)} glob ${f(r.sync.global)}` +
-    ` | chains ${r.sync.chains.toFixed(1)} in ${Math.round(r.sync.chained * 100)}% max ${r.longest}\n`);
+    ` | chains ${r.sync.chains.toFixed(1)} in ${Math.round(r.sync.chained * 100)}% max ${r.longest} rings ${r.sync.coils.toFixed(1)} stars ${r.sync.stars.toFixed(1)}\n`);
 }
 
 const again = run(firstSeed);

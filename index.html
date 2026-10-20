@@ -115,9 +115,13 @@ const PARAMS = {
   chain: {
     chance: 0.85, from: 0.35, full: 0.9, diatomMax: 8, dinoMax: 4,
     rest: 0.85,                         // link length, x (ri + rj)
-    spring: 3, straighten: 1,           // 1/s^2: pull toward the link length; pull toward the midpoint of both links
+    spring: 6, straighten: 3,           // 1/s^2: pull toward the link length; pull toward the habit's joint angle
     breakRate: 1 / 300,                 // per link per second
     refuge: 1.5,                        // grazing risk x 1/(1 + refuge*(length - 1))
+    // Diatom lineages carry a colony habit: each joint turns by a fixed angle, so the same springs build
+    // straight chains (Chaetoceros), coils that close into rings (C. curvisetus) or snowflake stars of
+    // radiating pennates joined at their feet (Asterionellopsis). Cells per full turn; star links are short.
+    habit: { glass: 0.6, coilChance: 0.5, starChance: 0.7, coilCells: 8, starCells: 8, starRest: 0.45 },   // glass: how far into diatom glass the form must be
   },
   mutation: { step: 0.08, jumpChance: 0.05, jump: 0.3 },
 
@@ -178,6 +182,9 @@ const PARAMS = {
     ostracod: { rx: 4, ry: 2.9, speedMin: 1, speedMax: 1.8 },
     isopod:   { segs: 5, segLen: 2.0, rFront: 2.0, rTail: 1.6, arch: 0.3, speedMin: 0.8, speedMax: 1.5 },
     legH: 1.8, antenna: 5.5, step: 1.4,
+    // Close up (zoom >= detail.zoom) they show their anatomy; zoomed out they keep the simple look
+    detail: { zoom: 3, knee: 0.3, spread: 1.2, reach: 1.7, plate: 3.5, eyeR: 0.45,   // knee: fraction of the way down; plate: squareness of segments uropod: 1.3, pleopod: 0.9, pleoBeat: 5,
+              bristles: 4, bristleLen: 1.6, antenna2: 0.55, curve: 0.9, bead: 2, pick: 0.25, pickRate: 3 },
   },
   render: {
     waterTop: 6.9, waterBottom: 0.3, waterCurve: 1.5,
@@ -577,6 +584,31 @@ function deriveTraits(c) {
   c.maintK = M.maintenance / rs;             // per-biomass upkeep ~ size^-1/2: big cells endure the dark
   c.targetLight = PARAMS.light.surface * dexp(-PARAMS.light.atten * c.g.depthPref);
   c.rv = c.r * PARAMS.cell.drawScale * (1 + (PARAMS.dino.scale - 1) * dinoWeight(c.g.timbre));   // drawn radius only
+  if (!c.la && !c.lb) chainHabit(c);   // a colony keeps the habit it was founded with
+}
+
+function copyHabit(to, from) {
+  to.habit = from.habit; to.turn = from.turn; to.tanHalf = from.tanHalf; to.restK = from.restK; to.along = null;
+}
+
+// The lineage's first draw is its elongation (as in buildSprite): pennate boats are the long ones
+function lineagePennate(seed) {
+  const S = PARAMS.sprite;
+  return makeRng(seed).range(S.aspectMin, S.aspectMax) >= S.polarAspect;
+}
+
+// Colony habit of diatom lineages: straight, coiled into a ring, or a star of radiating pennates
+function chainHabit(c) {
+  const Hb = PARAMS.chain.habit, S = PARAMS.sprite, h = hash01(c.spriteSeed * 11 + 7), hand = hash01(c.spriteSeed * 11 + 8) < 0.5 ? -1 : 1;
+  c.habit = 0;
+  if (smoothstep(S.diatomFrom, S.diatomFull, c.g.timbre) >= Hb.glass) {   // only true glass frustules build shaped colonies
+    if (lineagePennate(c.spriteSeed)) { if (h < Hb.starChance) c.habit = 2; }
+    else if (h < Hb.coilChance) c.habit = 1;
+  }
+  c.turn = c.habit ? hand * TAU / (c.habit === 1 ? Hb.coilCells : Hb.starCells) : 0;
+  c.tanHalf = dsin(c.turn / 2) / dsin(c.turn / 2 + Math.PI / 2);
+  c.restK = c.habit === 2 ? Hb.starRest : PARAMS.chain.rest;
+  c.along = null;                                       // render cache of the chain orientation
 }
 
 // How much of a dinoflagellate a cell is (the middle of the timbre range): 0..1
@@ -621,11 +653,12 @@ function createCell(w, x, y, g, energy, parentId, spriteSeed) {
     energy, held: 0, age: 0, lifespan: 0, vigor: 0,   // vigor: smoothed growth conditions, observed only
     theta: w.rng.next() * TAU, flashTick: -1000, dying: 0, grazed: false, eaten: null,
     pull: 0, nbrs: 0,                                  // Kuramoto: sum of sin(theta_j - theta_i) and neighbour count
-    la: null, lb: null, chainLen: 1,                   // chain links toward the head (la) and the tail (lb)
+    la: null, lb: null, chainLen: 1, chainId: 0,       // chain links toward the head (la) and the tail (lb)
+    head: null, kickScale: 1, kx: 0, ky: 0,            // the colony's head and its shared Brownian kick
+    habit: 0, turn: 0, tanHalf: 0, restK: 0, along: null,   // colony habit (0 straight, 1 coil, 2 star): from the lineage and form
     g, spriteSeed, gen: 0,
     r: 0, rv: 0, biomass: 0, gainK: 0, halfSat: 0, maintK: 0, targetLight: 0,
     spr: null, ox: 0, oy: 0, swimPh: 0, vt: 0, tempo: 1,   // sprite cache and swimming (own clock, tempo): render only
-    along: null,                                           // render only: lies along its chain (or across it)
   };
   deriveTraits(c);
   c.lifespan = lifespanFor(c, w.rng);
@@ -722,6 +755,10 @@ function stepWorld(w) {
   updateWind(w, dt);
   updatePulses(w, dt);
   buildHash(w);
+  for (let i = 0; i < cells.length; i++) {   // Brownian kicks, drawn in the same order as always
+    const c = cells[i];
+    if (!c.dying) { c.kx = gauss(w.rng) * BROWNIAN_K; c.ky = gauss(w.rng) * BROWNIAN_K; }
+  }
   for (let i = 0; i < cells.length; i++) if (!cells[i].dying) steer(w, cells[i], dt);
   for (let i = 0; i < cells.length; i++) move(cells[i], dt);
   const Dr = PARAMS.drift, rest = PARAMS.diel.rest;
@@ -750,8 +787,10 @@ function steer(w, c, dt) {
   const D = PARAMS.drift, hs = w.hash;
   c.pull = 0;
   c.nbrs = 0;
-  c.vx += gauss(w.rng) * BROWNIAN_K;
-  c.vy += gauss(w.rng) * BROWNIAN_K;
+  // A colony diffuses as one body: its cells share the head's kick, smaller for a bigger colony
+  const kick = c.chainId ? c.head : c, ks = c.chainId ? c.kickScale : 1;
+  c.vx += kick.kx * ks;
+  c.vy += kick.ky * ks;
 
   // Brighter than preferred -> swim down (+y); dimmer -> swim up. Bounded ratio, no log.
   const night = 1 - smoothstep(D.darkLo, D.darkHi, w.surfaceLight);
@@ -775,7 +814,7 @@ function steer(w, c, dt) {
         if (o === c) continue;
         const dx = c.x - o.x, dy = c.y - o.y, d2 = dx * dx + dy * dy;
         if (d2 < PHASE_R2 && !o.dying) { c.pull += dsin(o.theta - c.theta); c.nbrs++; }
-        if (o === c.la || o === c.lb) continue;
+        if (o === c.la || o === c.lb || (c.chainId && o.chainId === c.chainId)) continue;   // a colony holds its own shape
         const reach = (c.r + o.r) * D.separationRange;
         if (d2 >= reach * reach || d2 === 0) continue;
         const d = Math.sqrt(d2), push = D.separation * (1 - d / reach) * dt / d;
@@ -789,16 +828,19 @@ function steer(w, c, dt) {
     const Ch = PARAMS.chain;
     if (c.la) linkSpring(c, c.la, dt);
     if (c.lb) linkSpring(c, c.lb, dt);
-    if (c.la && c.lb) {   // an intercalary cell is pulled toward the line between its neighbours: chains stay straight
-      c.vx += ((c.la.x + c.lb.x) * 0.5 - c.x) * Ch.straighten * dt;
-      c.vy += ((c.la.y + c.lb.y) * 0.5 - c.y) * Ch.straighten * dt;
+    if (c.la && c.lb) {
+      // An intercalary cell is pulled to the point where the chain turns by its habit's angle:
+      // midway between its neighbours for a straight chain, off to one side for coils and stars
+      const a = c.la, b = c.lb, ex = b.x - a.x, ey = b.y - a.y;
+      c.vx += ((a.x + b.x) * 0.5 + ey * 0.5 * c.tanHalf - c.x) * Ch.straighten * dt;
+      c.vy += ((a.y + b.y) * 0.5 - ex * 0.5 * c.tanHalf - c.y) * Ch.straighten * dt;
     }
   }
 }
 
 function linkSpring(c, o, dt) {
   const Ch = PARAMS.chain, dx = o.x - c.x, dy = o.y - c.y, d = Math.sqrt(dx * dx + dy * dy) + 1e-9;
-  const k = Ch.spring * (d - Ch.rest * (c.r + o.r)) * dt / d;
+  const k = Ch.spring * (d - (c.restK + o.restK) * 0.5 * (c.r + o.r)) * dt / d;
   c.vx += dx * k;
   c.vy += dy * k;
 }
@@ -851,7 +893,8 @@ function updateChains(w, dt) {
     if (c.la) continue;
     let n = 0;
     for (let k = c; k; k = k.lb) n++;
-    for (let k = c; k; k = k.lb) k.chainLen = n;
+    const ks = 1 / Math.sqrt(n);
+    for (let k = c; k; k = k.lb) { k.chainLen = n; k.chainId = n > 1 ? c.id : 0; k.head = c; k.kickScale = ks; }
   }
 }
 
@@ -860,12 +903,16 @@ function updateChains(w, dt) {
 // Global sync is the classic order parameter over the whole column.
 function syncStats(w) {
   const R2 = PHASE_R2, cells = w.cells, cosT = (x) => dsin(x + Math.PI / 2);
-  let gx = 0, gy = 0, n = 0, local = 0, counted = 0, locked = 0, chains = 0, chained = 0, longest = 1;
+  let gx = 0, gy = 0, n = 0, local = 0, counted = 0, locked = 0, chains = 0, chained = 0, longest = 1, coils = 0, stars = 0;
   for (const c of cells) {
     if (c.dying) continue;
     n++;
     gx += cosT(c.theta); gy += dsin(c.theta);
-    if (!c.la && c.lb) { chains++; longest = Math.max(longest, c.chainLen); }
+    if (!c.la && c.lb) {
+      chains++; longest = Math.max(longest, c.chainLen);
+      if (c.chainLen >= 4 && c.lb.habit === 1) coils++;   // shaped colonies of four or more
+      if (c.chainLen >= 4 && c.lb.habit === 2) stars++;
+    }
     if (c.chainLen > 1) chained++;
     let sx = cosT(c.theta), sy = dsin(c.theta), m = 1;
     for (const o of cells) {
@@ -881,7 +928,7 @@ function syncStats(w) {
   return {
     global: n ? Math.sqrt(gx * gx + gy * gy) / n : 0, local: counted ? local / counted : 0,
     locked: counted ? locked / counted : 0, crowded: n ? counted / n : 0,
-    chains, chained: n ? chained / n : 0, longest,
+    chains, chained: n ? chained / n : 0, longest, coils, stars,
   };
 }
 
@@ -1148,6 +1195,7 @@ function divide(w, c) {
   c.parentId = null;
   c.gen++;
   deriveTraits(c);
+  if (link) copyHabit(b, c);
   c.lifespan = lifespanFor(c, rng);
   return b;
 }
@@ -1914,11 +1962,7 @@ function updateSwim(w, ta) {
 // round and box-like cells stacked valve to valve like coins. The whole chain sways gently.
 function chainAngle(c, t) {
   const a = c.la || c, b = c.lb || c, CL = PARAMS.chainLook, head = chainHead(c);
-  if (c.along === null) {
-    const S = PARAMS.sprite;   // the lineage's first draw is its elongation (as in buildSprite)
-    const pennate = makeRng(c.spriteSeed).range(S.aspectMin, S.aspectMax) >= S.polarAspect;
-    c.along = pennate || dinoWeight(c.g.timbre) > 0.5;
-  }
+  if (c.along === null) c.along = c.habit !== 2 && (lineagePennate(c.spriteSeed) || dinoWeight(c.g.timbre) > 0.5);   // stars radiate
   return Math.atan2(b.y - a.y, b.x - a.x) + (c.along ? 0 : Math.PI / 2) + CL.sway * Math.sin(t * CL.swaySpeed + head.id);
 }
 
@@ -2065,7 +2109,7 @@ function drawThreads(w) {
   for (const c of w.cells) if (!c.dying) byId.set(c.id, c);
   for (const c of w.cells) {
     const o = c.lb;
-    if (!o || c.rv * z < minR || o.rv * z < minR) continue;
+    if (!o || c.habit === 2 || o.habit === 2 || c.rv * z < minR || o.rv * z < minR) continue;   // stars join by invisible mucilage pads
     const ax = toSX(c.x + c.ox), ay = toSY(c.y + c.oy), dx = toSX(o.x + o.ox) - ax, dy = toSY(o.y + o.oy) - ay;
     const len = Math.sqrt(dx * dx + dy * dy), b1 = rampBase(hueRamp(c.g)), b2 = rampBase(hueRamp(o.g));
     for (let s = 0; s <= len; s += 0.5) {
@@ -2488,51 +2532,145 @@ function worldLine(x0, y0, x1, y1, idx) {
   for (let i = 0; i <= n; i++) put(Math.floor(ax + (bx - ax) * i / n), Math.floor(ay + (by - ay) * i / n), idx);
 }
 
-function drawShell(bl, type) {
+// A shaded body part (world units). Close up it shows more: a seam along its rear rim (segments overlap
+// head to tail), a lit band along the back, and for ostracods a bean-shaped, pitted carapace.
+function drawShell(bl, type, dir, detail) {
   const z = cam.zoom, cx = bl.x * z - view.bx0, cy = bl.y * z - view.by0;
   const rx = Math.max(0.7, bl.rx * z), ry = Math.max(0.7, bl.ry * z);
   for (let y = Math.floor(cy - ry); y <= Math.ceil(cy + ry); y++) {
     for (let x = Math.floor(cx - rx); x <= Math.ceil(cx + rx); x++) {
-      const dx = (x + 0.5 - cx) / rx, dy = (y + 0.5 - cy) / ry;
-      if (dx * dx + dy * dy > 1) continue;
-      const lit = -dx * 0.6 - dy * 0.8 + (wb(x, y) - 0.5) * 0.3;
-      const tone = dx * dx + dy * dy > 0.7 && dx + dy > 0.4 ? OUTLINE : lit > 0.5 ? HIGHLIGHT : lit > -0.1 ? BASE : SHADOW;
+      const dx = (x + 0.5 - cx) / rx;
+      let dy = (y + 0.5 - cy) / ry;
+      if (detail && bl.bean) dy *= (dy > 0 ? 1.25 : 1) * (1 + 0.2 * Math.max(0, dx * dir));   // flat belly, narrower front
+      const q = (detail && bl.plate ? Math.pow(Math.abs(dx), PARAMS.crawlers.detail.plate) : dx * dx) + dy * dy;
+      if (q > 1) continue;
+      const b = wb(x, y), lit = -dx * 0.6 - dy * 0.8 + (b - 0.5) * 0.3;
+      let tone = q > 0.7 && dx + dy > 0.4 ? OUTLINE : lit > 0.5 ? HIGHLIGHT : lit > -0.1 ? BASE : SHADOW;
+      if (detail) {
+        if (bl.seam && dx * dir < -0.7 && q > 0.5 && dy > -0.8) tone = SHADOW;           // rear rim over the next segment
+        else if (dy < -0.55 && q > 0.3 && q < 0.8 && lit > 0.3) tone = BRIGHT;            // lit band along the back
+        else if (bl.pits && q < 0.7 && tone > SHADOW) {                                    // pitted shell
+          const bx = x + view.bx0, by = y + view.by0;
+          if ((bx & 3) === 0 && ((by + (bx >> 1)) & 3) === 0) tone--;
+        }
+        if (bl.gut && Math.abs(dy - 0.1) < 0.18 && Math.abs(dx) < 0.9 && b < 0.6) { put(x, y, rampBase(1) + SHADOW); continue; }   // amber gut showing through
+      }
       put(x, y, crawlerColour(type, tone));
     }
   }
 }
 
+// A jointed leg: up and out to the knee, down to the foot; bend +1 points the knee forward, -1 back
+function drawLeg(hx, hy, fx, fy, bend, dir, idx) {
+  const D = PARAMS.crawlers.detail, kx = hx + dir * bend * D.spread, ky = hy + (fy - hy) * D.knee, px = 1 / cam.zoom;
+  worldLine(hx, hy, kx, ky, idx);
+  worldLine(hx, hy + px, kx, ky + px, idx);   // the thigh is stouter than the shin
+  worldLine(kx, ky, fx, fy, idx);
+}
+
+// A gently curved antenna; close up it is beaded (segmented)
+function drawAntenna(x0, y0, x1, y1, curve, type, beaded) {
+  const z = cam.zoom, mx = (x0 + x1) / 2 - (y1 - y0) * curve * 0.2, my = (y0 + y1) / 2 + (x1 - x0) * curve * 0.2;
+  const len = Math.sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0)) * z, n = Math.ceil(len * 1.5) + 1;
+  for (let i = 0; i <= n; i++) {
+    const s = i / n, a = (1 - s) * (1 - s), b = 2 * (1 - s) * s, c = s * s;
+    const x = (a * x0 + b * mx + c * x1) * z - view.bx0, y = (a * y0 + b * my + c * y1) * z - view.by0;
+    const tone = beaded && Math.floor(s * len / PARAMS.crawlers.detail.bead) & 1 ? HIGHLIGHT : BASE;
+    put(Math.floor(x), Math.floor(y), crawlerColour(type, s > 0.85 ? SHADOW : tone));
+  }
+}
+
+function drawEye(x, y, r, type) {
+  const z = cam.zoom, cx = x * z - view.bx0, cy = y * z - view.by0, rx = Math.max(0.7, r * 0.75 * z), ry = Math.max(0.7, r * z);
+  for (let py = Math.floor(cy - ry); py <= Math.ceil(cy + ry); py++) {
+    for (let px = Math.floor(cx - rx); px <= Math.ceil(cx + rx); px++) {
+      const dx = (px + 0.5 - cx) / rx, dy = (py + 0.5 - cy) / ry;
+      if (dx * dx + dy * dy <= 1) put(px, py, dx < -0.2 && dy < -0.2 && dx > -0.8 && dy > -0.8 ? crawlerColour(type, HIGHLIGHT) : COL.WATER);
+    }
+  }
+}
+
 function drawCrawlers(t) {
-  const C = PARAMS.crawlers;
+  const C = PARAMS.crawlers, D = C.detail, detail = cam.zoom >= D.zoom;
   for (const cr of crawlers) {
-    const ground = floorY(cr.x), moving = cr.state !== 'feed', bob = moving ? Math.sin(cr.walk * 2) * 0.12 : 0;
+    const ground = floorY(cr.x), moving = cr.state !== 'feed', bob = moving ? Math.sin(cr.walk * 2) * 0.12 : 0, dir = cr.dir;
+    const pick = !moving && detail ? Math.max(0, Math.sin(t * D.pickRate + cr.id)) * D.pick : 0;   // head dips to pick at detritus
     const body = [];   // tail first, so the head is drawn in front
     if (cr.type === 'ostracod') {
       const T = C.ostracod;
-      body.push({ x: cr.x, y: ground - C.legH * 0.6 - T.ry + bob, rx: T.rx, ry: T.ry });
+      body.push({ x: cr.x, y: ground - C.legH * 0.6 - T.ry + bob, rx: T.rx, ry: T.ry, bean: true, pits: true });
     } else {
-      const T = C[cr.type], n = T.segs, half = (n - 1) * T.segLen / 2;
+      const T = C[cr.type], n = T.segs, half = (n - 1) * T.segLen / 2, amph = cr.type === 'amphipod';
       for (let k = n - 1; k >= 0; k--) {
         const f = k / (n - 1), r = T.rFront + (T.rTail - T.rFront) * f;
         body.push({
-          x: cr.x + cr.dir * (half - k * T.segLen), y: ground - C.legH - r - T.arch * Math.sin(Math.PI * f) + bob,
-          rx: r, ry: cr.type === 'isopod' ? r * 0.7 : r,
+          x: cr.x + dir * (half - k * T.segLen), y: ground - C.legH - r - T.arch * Math.sin(Math.PI * f) + bob + pick * (1 - f),
+          // close up an amphipod shows tall, laterally compressed plates rather than beads
+          rx: detail && amph ? T.segLen * 0.72 : r, ry: cr.type === 'isopod' ? r * 0.7 : detail && amph ? r * 1.12 : r,
+          seam: k < n - 1, gut: amph && k > 0 && k < n - 1, plate: amph && k > 0,   // body plates are squarer than the head
         });
       }
     }
-    const head = body[body.length - 1];
+    const head = body[body.length - 1], tail = body[0], legIdx = crawlerColour(cr.type, SHADOW);
+
     // Legs, stepping while walking
-    const legXs = cr.type === 'ostracod' ? [head.x - cr.dir * 0.6, head.x + cr.dir * 0.6] : body.map((s) => s.x);
-    legXs.forEach((lx, k) => {
-      const swing = moving ? Math.sin(cr.walk + k * 1.3) * 0.5 : 0;
-      worldLine(lx, ground - C.legH - 0.3, lx + cr.dir * swing, ground, crawlerColour(cr.type, SHADOW));
-    });
-    for (const s of body) drawShell(s, cr.type);
-    // Antennae, always feeling about
-    const hx = head.x + cr.dir * head.rx * 0.8, hy = head.y - head.ry * 0.4;
+    if (!detail) {
+      const legXs = cr.type === 'ostracod' ? [head.x - dir * 0.6, head.x + dir * 0.6] : body.map((s) => s.x);
+      legXs.forEach((lx, k) => {
+        const swing = moving ? Math.sin(cr.walk + k * 1.3) * 0.5 : 0;
+        worldLine(lx, ground - C.legH - 0.3, lx + dir * swing, ground, legIdx);
+      });
+    } else if (cr.type === 'ostracod') {   // short legs poking out of the shell's gape
+      for (let k = 0; k < 3; k++) {
+        const hx = head.x + dir * (k - 1) * head.rx * 0.45, swing = moving ? Math.sin(cr.walk + k * 2.1) * 0.4 : 0;
+        drawLeg(hx, head.y + head.ry * 0.7, hx + dir * ((k - 1) * 0.8 + swing), ground, k - 1 || 0.5, dir, legIdx);
+      }
+    } else {
+      // Amphipods ("both kinds of feet"): front legs bend forward, back legs bend back; isopods all alike
+      const n = body.length;
+      for (let k = 1; k < n - 1; k++) {
+        const s = body[k], fwd = cr.type === 'amphipod' ? (k >= n - 4 ? 1 : -1) : (k >= n / 2 ? 1 : -1);
+        const swing = moving ? Math.sin(cr.walk + k * 1.3) * 0.5 : 0;
+        drawLeg(s.x, s.y + s.ry * 0.6, s.x + dir * (fwd * D.spread * D.reach + swing), ground, fwd, dir, legIdx);
+      }
+      if (cr.type === 'amphipod') {
+        // Pleopods beating under the abdomen; gnathopod claw held under the head
+        for (let k = 1; k <= 2; k++) {
+          const s = body[k], beat = Math.sin(t * D.pleoBeat + k) * 0.4;
+          worldLine(s.x, s.y + s.ry * 0.7, s.x - dir * (0.3 + beat), s.y + s.ry * 0.7 + D.pleopod, legIdx);
+        }
+        const gx = head.x + dir * head.rx * 0.6, gy = head.y + head.ry * 0.9;
+        worldLine(head.x, head.y + head.ry * 0.5, gx, gy, legIdx);
+        worldLine(gx, gy, gx + dir * 0.6, gy - 0.5, crawlerColour(cr.type, BASE));
+      }
+    }
+
+    for (const s of body) drawShell(s, cr.type, dir, detail);
+
+    if (detail) {
+      // Tail: amphipods carry three pairs of uropods, isopods a forked pair beside the tail shield
+      const tx = tail.x - dir * tail.rx * 0.8, ty = tail.y + tail.ry * 0.2;
+      const forks = cr.type === 'amphipod' ? [0.5, 0, -0.45] : cr.type === 'isopod' ? [0.25, -0.15] : [];
+      for (const a of forks) worldLine(tx, ty, tx - dir * D.uropod * Math.cos(a), ty + D.uropod * Math.sin(a) + 0.3, crawlerColour(cr.type, BASE));
+      // Eye: kidney eye of amphipods, compound eye of isopods, single naupliar eye spot of ostracods
+      const os = cr.type === 'ostracod';
+      drawEye(head.x + dir * head.rx * (os ? 0.55 : 0.35), head.y - head.ry * (os ? 0.35 : 0.2), D.eyeR * (os ? 0.8 : 1), cr.type);
+    }
+
+    // Antennae, always feeling about (close up: beaded, the second pair shorter; ostracods row with bristle fans)
+    const hx = head.x + dir * head.rx * 0.8, hy = head.y - head.ry * 0.4 + pick;
     for (let k = 0; k < 2; k++) {
-      const e = 0.35 + 0.4 * k + Math.sin(t * 3 + k * 2 + cr.id) * 0.15;
-      worldLine(hx, hy, hx + cr.dir * Math.cos(e) * C.antenna, hy - Math.sin(e) * C.antenna, crawlerColour(cr.type, BASE));
+      const e = 0.35 + 0.4 * k + Math.sin(t * 3 + k * 2 + cr.id) * 0.15 - pick;
+      const L = C.antenna * (detail && k === 0 && cr.type !== 'ostracod' ? D.antenna2 : 1);
+      const ex = hx + dir * Math.cos(e) * L, ey = hy - Math.sin(e) * L;
+      if (!detail) { worldLine(hx, hy, ex, ey, crawlerColour(cr.type, BASE)); continue; }
+      drawAntenna(hx, hy, ex, ey, D.curve * dir * (k ? 1 : -0.5), cr.type, cr.type !== 'ostracod');
+      if (cr.type === 'ostracod') {
+        for (let j = 0; j < D.bristles; j++) {
+          const a = e + (j - (D.bristles - 1) / 2) * 0.35 + Math.sin(t * 4 + j + cr.id) * 0.1;
+          worldLine(ex, ey, ex + dir * Math.cos(a) * D.bristleLen, ey - Math.sin(a) * D.bristleLen, crawlerColour(cr.type, SHADOW));
+        }
+      }
     }
   }
 }

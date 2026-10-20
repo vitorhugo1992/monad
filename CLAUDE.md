@@ -14,7 +14,7 @@ The author is a phytoplankton researcher. The biology is load-bearing, not decor
 
 - No archetypes, no hard-coded "pad cell / looper cell" types.
 - No scripted events ("every 60s do a bloom"). Blooms, die-offs, rhythms and chords must come out of the rules below.
-- No "if the player is playing, then..." branches. The player only changes the inputs to the same rules (nutrients, phases, the harmonic field).
+- No "if the player is playing, then..." branches. The player only changes the inputs to the same rules (where the water moves, which cells startle, which cells sound).
 - If something needs to happen and no rule produces it, stop and propose a new **local rule** instead of an authored behaviour. Ask before adding it.
 
 The music works through constraints, not randomness: one shared harmonic field, a voice budget, slow time constants. Freedom inside tight constraints is what makes emergent results beautiful rather than chaotic.
@@ -123,10 +123,12 @@ That's it. Colonies, blooms, silence and rhythm must all come out of these rules
 - Shared chain: `voices → ecosystemBus → lowpass → (dry + reverb send + subtle delay send) → master → gentle compressor → out`.
 - The ecosystem is the room the music happens in: dark, wet, soft. Never harsh, never bright fizz.
 
-### The player (phase 6)
-- A mother voice played via QWERTY and Web MIDI (note-on with velocity 0 = note-off; release all notes on window blur).
-- Dry, present, clearly in front. Never ducks the ecosystem by more than ~15%.
-- A perturbation, not a layer: her notes pull the harmonic field and nudge the phases of nearby cells; a tap/click drops nutrients. When she stops, the water slowly forgets her.
+### The hand in the water (phase 6, redesigned with the author)
+No keyboard, no MIDI, no voice of the player's own: the water is the instrument. The author found the original mother-voice player too complicated and off-goal.
+- **Tap to scatter**: cells near a tap swim away for a few seconds (an escape response, as real dinoflagellates flee a disturbance), flash and blurt startle notes. Taps work at every zoom.
+- **Swipe to strum** (at 1× zoom, where dragging can't pan; a mouse drag on desktop): every cell the finger passes through plucks its own note in its own voice and register, so moving up through the water plays low to high and down plays high to low, like strumming a harp. Plucks bypass the voice budget (with a safety cap), ring and flash. The finger also drags the water a little along its path, and leaves a fading pixel wake.
+- **Swipe sideways to sweep the filter**: left to right opens (brightens) the master filter, right to left closes (darkens) it; a diagonal does both. When the finger lifts the filter eases back over ~2 s.
+- Player input enters the simulation at tick boundaries; a touched world no longer matches its seed (the seed is the starting point, not a recording).
 
 ---
 
@@ -181,7 +183,7 @@ The order was changed with the author (visuals first): the world's cycles and co
 5. **Elders** ✅ — cells that survive long in deep, low-light water slow their metabolism, grow, and sing low drones. The oldest living elder sets the harmonic root; when it dies, the root may shift.
    *Done when*: root changes are rare and feel like events.
    As built: **dark acclimation** (approved local rule): days spent in deep, dim water (light profile < 0.12, about the lower half of the column; judged by day only) slowly make a cell an elder (0..1 over ~3.3 min of daylight; fades at half that rate in brighter water). Its uptake and upkeep slow by 80%, ageing by 95%, its pulse by 75%, its swimming by 90% (it settles where it is), it stores energy up to 3× before dividing (division halves its elder level) and it is drawn up to 1.5× larger and darker, so it also sings lower. Elders die of old age after ~10–20 min as elders; that is fine (author). Elders (≥ 0.6) drone instead of singing tunes: a sine sub (C1–B1) with soft octave and twelfth pad partials under a filter that opens through a 6–10 s swell and closes through a 16–28 s fade, at most 3 at once, with a slow wide ring. Soft cells singing within 30 units of a droning elder hold their notes 2.5× longer with slower attacks: the pads. **The root**: the oldest full elder holds it; when it dies or stops being an elder, the next oldest takes it and its own note becomes the new tonal centre (the whole water modulates; the new holder drones at once). A new key holds at least 3 min; a holder appointed sooner adopts it. Measured: first elder at ~5–10 min (author asked for sooner), 3–6 key changes per hour, drones 30–80% of the time, ecosystem unchanged (no extinctions, blooms and recoveries in every seed).
-6. **The player** — mother voice, QWERTY + MIDI, tap to feed, harmonic pull, phase nudging.
+6. **The hand in the water** — tap to scatter, swipe to strum, swipe sideways to sweep the filter (see above).
    *Done when*: playing and watching both feel complete, and stopping lets the water drift back on its own.
 7. **Field notebook** (planned last, author's request; a deliberate exception to "no UI panels") — infographics behind one subtle button: vertical migration lines per form, how many of each form live in the column, the phase of the day, and similar records. Pixel-art, palette-only, hidden by default.
 

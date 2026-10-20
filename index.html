@@ -138,6 +138,10 @@ const PARAMS = {
   // gain it or lose it, so glowing clades arise now and then, spread among kin and fade (about 1 in 6 at balance).
   // Seen only at night; it changes nothing else.
   luminous: { gain: 0.03, loss: 0.15 },
+  // The hand in the water (phase 6): a tap makes cells within radius swim away (escape response, px/s^2 at the
+  // centre, fading over time s) and startle; a swipe drags the water along the finger (wake: share of the finger's
+  // speed given to cells within wakeR, at most wakeMax px/s). Inputs enter the simulation at tick boundaries.
+  hand: { radius: 28, flee: 16, time: 3, startle: 3, wakeR: 8, wake: 0.15, wakeMax: 12 },
 
   // Harmonic field: one root and one pentatonic-family scale for the whole water, chosen by the seed.
   // Rule 7: each cell holds a scale degree (inherited; a daughter may start one step away). When it flashes it
@@ -185,7 +189,7 @@ const PARAMS = {
     },
     // Startle: cells brushed by a passing school (or a salp chain or the sunfish) flash and blurt a short, high,
     // staccato note an octave up. Chance per second inside the visitor's reach (+reach units), one per refractory s.
-    startle: { reach: 8, rate: { sardines: 2.5, salps: 0.8, sunfish: 1.2 }, refractory: 3, attack: 0.004, release: 0.22, octaves: 1 },
+    startle: { reach: 8, rate: { sardines: 2.5, salps: 0.8, sunfish: 1.2, hand: 3 }, refractory: 3, attack: 0.004, release: 0.22, octaves: 1 },
     // Grazers muffle: where the grazer field is dense, notes are duller and shorter, so heavy grazing sounds
     // smothered before the die-off (field from..full; at full the cutoff and release shrink by these shares).
     muffle: { from: 0.3, full: 1.5, cutoff: 0.6, release: 0.5 },
@@ -212,6 +216,9 @@ const PARAMS = {
     // swells and fades (overlapping, so the bed never stops). Each layer follows the world: the surface wash with
     // the wind, the deep hum darker at night, a groan while an upwelling plume rises, a whoosh as a school passes,
     // and a chirp for every bubble you see.
+    // Filter sweep by hand: closing lowers a master lowpass by up to closeOctaves below open (20 kHz), opening lifts
+    // a high shelf by up to openDb; both follow the finger (glide s) and ease back when it lifts (back s)
+    bend: { open: 20000, closeOctaves: 6, shelfHz: 2500, openDb: 9, glide: 0.06, back: 2 },
     ambience: {
       gain: 0.55, wet: 0.25, noiseSeconds: 3,
       swell: { everyCalm: 6, everyStorm: 2.2, durCalm: 10, durStorm: 5, gainCalm: 0.012, gainStorm: 0.09, freqCalm: 320, freqStorm: 1300 },
@@ -288,6 +295,10 @@ const PARAMS = {
   // now and then gas seeps from the sediment and a few bubbles rise through the whole column. Each one chirps.
   bubbles: { chopFrom: 0.35, chopFull: 0.85, clusters: 1.4, clusterMin: 3, clusterMax: 8, depthMin: 3, depthMax: 18, plunge: 9,
              seepRate: 0.025, seepMin: 2, seepMax: 5, rMin: 0.35, rMax: 1.1, riseMin: 5, riseMax: 13, drag: 2, wobble: 0.6, wobbleRate: 5, max: 120 },
+  // Touch: a tap is a short press that barely moves; at zoom 1 a drag strums (each touched cell plucks its note,
+  // within touch units of the finger, at most once per pluckRest s, at most plucksPerSecond overall) and leaves a
+  // wake fading over trail s. Sideways movement bends the master filter (bendSpan of the column = full bend).
+  touch: { tapMs: 300, tapMove: 4, touch: 2.5, pluckRest: 0.4, plucksPerSecond: 16, trail: 1.5, trailSpacing: 2, bendSpan: 0.6 },
   elderLook: { darken: 0.55, ringSlow: 3.5, ringBig: 2.5, haloBig: 2 },   // elders: darker pigment; slow, wide rings and halo while droning
   song: { ringPx: 9, ringZoom: 0.6, ringTime: 1.6, ringStart: 1.5, swell: 0.35, lift: 0.9,
           haloRadius: 2.5, haloMinPx: 3, haloMaxPx: 16, haloStrength: 0.45 },
@@ -837,6 +848,7 @@ function createWorld(seed, founderCount, dayLength) {
     wind: PARAMS.wind.start, windTarget: PARAMS.wind.start, nextWind: 0,
     fallen: new Float64Array(PARAMS.grid.cols),   // detritus exported per column, ever (observed only, never read by the rules)
     deaths: { starved: 0, old: 0, grazed: 0, sardines: 0, salps: 0 },   // observed only
+    inputs: [], disturb: [],                        // the hand: queued gestures, active disturbances
     visitors: [], nextVisitorId: 1, carried: 0,     // carried: nutrients that left the column inside visitors
     extinctTick: -1,                                // observed only: when the last cell and the last cyst were gone
     music: createMusic(seed),                       // harmonic field and voice budget; never feeds back into the biology
@@ -905,6 +917,7 @@ function stepWorld(w) {
   w.upwelled += diffuseNutrients(w.fields, dt);
   updateWind(w, dt);
   updatePulses(w, dt);
+  applyHand(w);
   buildHash(w);
   for (let i = 0; i < cells.length; i++) {   // Brownian kicks, drawn in the same order as always
     const c = cells[i];
@@ -932,6 +945,41 @@ function stepWorld(w) {
   if (w.extinctTick < 0 && !w.cysts.length && aliveCount(w) === 0) w.extinctTick = w.tick;
 }
 
+// The hand in the water: taps become disturbances cells flee from; swipes drag the water along the finger.
+// Queued by the input handler, applied here at a tick boundary.
+function applyHand(w) {
+  const Hd = PARAMS.hand, rate = PARAMS.time.tickRate;
+  for (const q of w.inputs) {
+    if (q.kind === 'tap') { w.disturb.push({ x: q.x, y: q.y, t0: w.tick }); continue; }
+    const r2 = Hd.wakeR * Hd.wakeR;
+    let vx = q.vx * Hd.wake, vy = q.vy * Hd.wake;
+    const sp = Math.sqrt(vx * vx + vy * vy);
+    if (sp > Hd.wakeMax) { vx *= Hd.wakeMax / sp; vy *= Hd.wakeMax / sp; }
+    for (const c of w.cells) {
+      if (c.dying) continue;
+      const dx = c.x - q.x, dy = c.y - q.y, d2 = dx * dx + dy * dy;
+      if (d2 >= r2) continue;
+      const k = 1 - Math.sqrt(d2) / Hd.wakeR;
+      c.vx += vx * k; c.vy += vy * k;
+    }
+  }
+  w.inputs.length = 0;
+  let k = 0;
+  for (const d of w.disturb) if (w.tick - d.t0 < Hd.time * rate) w.disturb[k++] = d;
+  w.disturb.length = k;
+}
+
+// Escape response: swim away from a recent disturbance, strongest close in and at first
+function flee(w, c, dt) {
+  const Hd = PARAMS.hand, rate = PARAMS.time.tickRate;
+  for (const d of w.disturb) {
+    const dx = c.x - d.x, dy = c.y - d.y, dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist >= Hd.radius || dist === 0) continue;
+    const a = Hd.flee * (1 - dist / Hd.radius) * (1 - (w.tick - d.t0) / (Hd.time * rate)) * dt / dist;
+    c.vx += dx * a; c.vy += dy * a;
+  }
+}
+
 // Rule 1: Brownian motion, phototaxis toward the preferred light level, soft separation.
 // The preferred level is relative to the surface, so a cell holds its depth all day.
 // Night descent: in darkness cells follow the nutrient gradient down instead; phototaxis brings them back at dawn.
@@ -944,6 +992,7 @@ function steer(w, c, dt) {
   c.pull = 0;
   c.nbrs = 0;
   c.locked = 0;
+  if (w.disturb.length) flee(w, c, dt);
   // A colony diffuses as one body: its cells share the head's kick, smaller for a bigger colony
   const kick = c.chainId ? c.head : c, ks = c.chainId ? c.kickScale : 1;
   c.vx += kick.kx * ks;
@@ -1628,7 +1677,7 @@ function singAndListen(w) {
       else startPhrase(w, c);
     }
   }
-  if (w.visitors.length) startle(w);
+  if (w.visitors.length || w.disturb.length) startle(w);
   playPending(w);
 }
 
@@ -1696,6 +1745,10 @@ function startle(w) {
     if (c.dying || w.tick - c.startleTick < wait) continue;
     let rate = 0;
     for (const v of w.visitors) if (brushedBy(v, c)) rate = Math.max(rate, St.rate[v.kind]);
+    for (const d of w.disturb) {   // a fresh tap close by
+      const dx = c.x - d.x, dy = c.y - d.y, r = PARAMS.hand.radius * 0.6;
+      if (w.tick - d.t0 < PARAMS.time.tickRate && dx * dx + dy * dy < r * r) rate = Math.max(rate, St.rate.hand);
+    }
     if (rate > 0 && m.rng.chance(rate * TICK_DT) && m.tokens >= 1 && m.ends.length < V.max) {
       c.startleTick = w.tick;
       m.tokens -= 1;
@@ -1901,8 +1954,10 @@ function startAudio() {
   comp.threshold.value = A.comp.threshold; comp.knee.value = A.comp.knee; comp.ratio.value = A.comp.ratio;
   comp.attack.value = A.comp.attack; comp.release.value = A.comp.release;
   comp.connect(ctx.destination);
-  const master = gain(audio.muted ? 0.0001 : A.master);
-  master.connect(comp);
+  const master = gain(audio.muted ? 0.0001 : A.master), bendLP = ctx.createBiquadFilter(), bendShelf = ctx.createBiquadFilter();
+  bendLP.type = 'lowpass'; bendLP.frequency.value = A.bend.open; bendLP.Q.value = 0.7;
+  bendShelf.type = 'highshelf'; bendShelf.frequency.value = A.bend.shelfHz; bendShelf.gain.value = 0;
+  master.connect(bendLP); bendLP.connect(bendShelf); bendShelf.connect(comp);
 
   const verb = ctx.createConvolver();
   verb.buffer = buildImpulse(ctx);
@@ -1926,7 +1981,7 @@ function startAudio() {
   const noise = ctx.createBuffer(1, Math.floor(Am.noiseSeconds * ctx.sampleRate), ctx.sampleRate), nrng = makeRng(0x5ea);
   const nd = noise.getChannelData(0);
   for (let i = 0; i < nd.length; i++) nd[i] = nrng.next() * 2 - 1;
-  Object.assign(audio, { ctx, master, bus, wet, lp, fb, delayIn, verbIn, amb, noise, waves: buildWaves(ctx), started: true });
+  Object.assign(audio, { ctx, master, bendLP, bendShelf, bus, wet, lp, fb, delayIn, verbIn, amb, noise, waves: buildWaves(ctx), started: true });
   if (ctx.state !== 'running') ctx.resume();
 }
 
@@ -2139,6 +2194,26 @@ function audioAmbience(w) {
     noiseEvent(S.dur, S.gain, 'bandpass', up ? S.freq : S.freqEnd, S.q, school.x / W * 2 - 1, up ? S.freqEnd : S.freq);
     ambNext.school = t + S.every * (0.7 + 0.6 * r());
   }
+}
+
+// The hand bends the master filter: b < 0 closes the lowpass, b > 0 lifts the high shelf; secs to get there
+function setBend(b, secs) {
+  if (!audio.started) return;
+  const Bd = PARAMS.audio.bend, t = audio.ctx.currentTime;
+  const to = (param, v) => { param.setValueAtTime(param.value, t); param.linearRampToValueAtTime(v, t + secs); };
+  to(audio.bendLP.frequency, Bd.open * Math.pow(2, Math.min(0, b) * Bd.closeOctaves));
+  to(audio.bendShelf.gain, Math.max(0, b) * Bd.openDb);
+}
+
+// A cell plucked by the finger sounds its own note at once, outside the budget (the caller caps the rate)
+let pluckId = 1;
+function pluck(w, c) {
+  const m = w.music, sh = voiceShape(c, false, true), midi = notePitch(m, c, 0);
+  const n = { id: 0x40000000 + pluckId++, phrase: 0, c, midi, pc: midi % 12, x: c.x, y: c.y, timbre: c.g.timbre,
+              attack: sh.attack, release: sh.release, soft: sh.soft, dino: sh.dino, glass: sh.glass, last: false, startled: false, muffle: 0 };
+  c.songAt = performance.now() + PARAMS.audio.lookahead * 1000; c.songAtk = n.attack; c.songRel = n.release; c.songLast = false; c.songDrone = false;
+  c.glowTick = w.tick;
+  if (audio.started && !audio.muted && audio.ctx.state === 'running') playNote(n);
 }
 
 function setMuted(muted) {
@@ -2565,6 +2640,20 @@ function drawParticles(L, seed, t, near) {
       put(sx, sy, Math.min(COL.SHAFT, Math.floor(waterBand(wy)) + L.lift));
     }
   }
+}
+
+// ---- The finger's wake: dotted foam along its path, thinning as it fades ----
+function drawTrail(now) {
+  const T = PARAMS.touch;
+  let k = 0;
+  for (const q of trail) {
+    const a = (now - q.t) / 1000 / T.trail;
+    if (a >= 1) continue;
+    trail[k++] = q;
+    const x = toSX(q.x), y = toSY(q.y);
+    if (x >= 0 && y >= 0 && x < W && y < H && wb(x, y) < (1 - a) * 0.9) put(x, y, a < 0.3 ? COL.FOAM : COL.SHAFT);
+  }
+  trail.length = k;
 }
 
 // ---- Bubbles ----
@@ -3819,6 +3908,7 @@ function composeFrame(w, now) {
   drawVisitors(w, ta);
   updateBubbles(w, ta);
   drawBubbles();
+  drawTrail(now);
   drawParticles(P.near, 3000, ta, true);
   drawHud(w, now);
   drawListenHint();
@@ -3837,7 +3927,28 @@ function render(w, now) {
 
 // ===== Input =====
 // One finger or mouse drag pans, two fingers pinch-zoom, the mouse wheel zooms at the cursor.
-const input = { lastActivity: 0, pointers: new Map(), pinch: null };
+// The hand in the water: a tap scatters cells (any zoom); at zoom 1 a drag strums the cells it passes through,
+// drags the water along, and its sideways travel bends the master filter until the finger lifts.
+const input = { lastActivity: 0, pointers: new Map(), pinch: null, down: null, bend: 0, plucks: 0, plucksAt: 0 };
+const trail = [];
+
+const toWorld = (p) => ({ x: cam.x + p.x / cam.zoom, y: cam.y + p.y / cam.zoom });
+
+// Cells within reach of the finger's path from a to b (world units) pluck, each at most once per pluckRest
+function strum(a, b, now) {
+  const T = PARAMS.touch, ex = b.x - a.x, ey = b.y - a.y, len2 = ex * ex + ey * ey;
+  input.plucks = Math.min(T.plucksPerSecond, input.plucks + (now - input.plucksAt) / 1000 * T.plucksPerSecond);
+  input.plucksAt = now;
+  for (const c of world.cells) {
+    if (c.dying || now - (c.pluckAt || -1e9) < T.pluckRest * 1000) continue;
+    const t = len2 ? clamp(((c.x - a.x) * ex + (c.y - a.y) * ey) / len2, 0, 1) : 0;
+    const dx = c.x - (a.x + ex * t), dy = c.y - (a.y + ey * t), r = c.rv + T.touch;
+    if (dx * dx + dy * dy > r * r || input.plucks < 1) continue;
+    input.plucks -= 1;
+    c.pluckAt = now;
+    pluck(world, c);
+  }
+}
 
 function toInternal(e) {
   const dpr = window.devicePixelRatio || 1;
@@ -3862,7 +3973,9 @@ function setupInput() {
     wake();
     startAudio();
     el.setPointerCapture(e.pointerId);
-    input.pointers.set(e.pointerId, toInternal(e));
+    const p0 = toInternal(e);
+    input.pointers.set(e.pointerId, p0);
+    input.down = input.pointers.size === 1 ? { id: e.pointerId, x: p0.x, y: p0.y, t: performance.now(), moved: 0 } : null;
     if (input.pointers.size === 2) startPinch();
   });
   el.addEventListener('pointermove', (e) => {
@@ -3881,10 +3994,30 @@ function setupInput() {
       cam.y = input.pinch.wy - my / cam.zoom;
       clampCamera();
     } else if (input.pointers.size === 1) {
-      panBy(p.x - prev.x, p.y - prev.y);
+      const d = input.down;
+      if (d && d.id === e.pointerId) d.moved = Math.max(d.moved, Math.hypot(p.x - d.x, p.y - d.y));
+      if (cam.level === 0 && d && d.moved > PARAMS.touch.tapMove) {   // zoomed out: the finger plays the water
+        const a = toWorld(prev), b = toWorld(p), now = performance.now(), dt = Math.max(0.008, (now - (d.last || d.t)) / 1000);
+        d.last = now;
+        strum(a, b, now);
+        world.inputs.push({ kind: 'wake', x: b.x, y: b.y, vx: (b.x - a.x) / dt, vy: (b.y - a.y) / dt });
+        const T = PARAMS.touch, steps = Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / T.trailSpacing);
+        for (let i = 1; i <= steps; i++) trail.push({ x: a.x + (b.x - a.x) * i / steps, y: a.y + (b.y - a.y) * i / steps, t: now });
+        input.bend = clamp(input.bend + (b.x - a.x) / (W * T.bendSpan), -1, 1);
+        setBend(input.bend, PARAMS.audio.bend.glide);
+      } else panBy(p.x - prev.x, p.y - prev.y);
     }
   });
   const release = (e) => {
+    const d = input.down;
+    if (d && d.id === e.pointerId) {
+      if (d.moved <= PARAMS.touch.tapMove && performance.now() - d.t < PARAMS.touch.tapMs) {   // a tap scatters the cells
+        const q = toWorld(input.pointers.get(e.pointerId) || d);
+        world.inputs.push({ kind: 'tap', x: q.x, y: q.y });
+      }
+      input.down = null;
+      if (input.bend !== 0) { input.bend = 0; setBend(0, PARAMS.audio.bend.back); }   // the water forgets the hand
+    }
     input.pointers.delete(e.pointerId);
     if (input.pointers.size < 2) input.pinch = null;
   };

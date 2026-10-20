@@ -144,7 +144,8 @@ const PARAMS = {
     sizeDrop: 24,                       // semitones lower for the biggest-looking cells (drawn size: dinoflagellates are big)
     listen: 12, recent: 4,              // neighbours within this distance (<= hash.cell) whose last flash is this recent (s)
     consonance: [0.7, 0, 0.3, 0.85, 0.9, 1, 0.1],   // by interval class 0..6: unison/octave, m2, M2, m3, M3, 4th/5th, tritone
-    stay: 0.1,                          // per neighbour heard: a cell keeps its degree unless a step sounds clearly better
+    choirUnison: 0,                     // against a neighbour flashing in phase (or a chain mate) a unison only doubles: spread out
+    stay: 0.05,                         // per neighbour heard: a cell keeps its degree unless a step sounds clearly better
     drift: 0.25,                        // chance a daughter starts one degree from her mother
     // Lineage motifs (local rule): each lineage carries a short tune, scale steps from the cell's degree placed on
     // a Euclidean rhythm (notes spread as evenly as they fit, rotated) on a loop of 3..8 slots across one period of its own pulse. Inherited at division; now and then a note
@@ -1515,8 +1516,12 @@ function attractDegree(w, c) {
         if (o === c || o.dying || w.tick - o.flashTick > RECENT_TICKS) continue;
         const dx = c.x - o.x, dy = c.y - o.y;
         if (dx * dx + dy * dy >= LISTEN2) continue;
-        const po = m.scale[o.deg];
-        for (let s = 0; s < 3; s++) SCORE[s] += cons[intervalClass(m.scale[(c.deg + s + n - 1) % n], po)];
+        // In a choir: with a neighbour in phase, or a chain mate, a unison would only double the same note
+        const po = m.scale[o.deg], choir = o === c.la || o === c.lb || dsin(o.theta - c.theta + HALF_PI) > PARAMS.voices.lockCos;
+        for (let s = 0; s < 3; s++) {
+          const ic = intervalClass(m.scale[(c.deg + s + n - 1) % n], po);
+          SCORE[s] += ic === 0 && choir ? Hm.choirUnison : cons[ic];
+        }
         heard++;
       }
     }
@@ -1556,7 +1561,7 @@ function singAndListen(w) {
       const len = c.motif.slots.length;
       let sing;
       if (c.bout > 0) { c.bout--; sing = m.tokens >= len; }                      // still in its bout
-      else if (heardNote(w, c)) sing = m.tokens >= len && m.rng.chance(V.join);  // joins a neighbour's song
+      else if (heardNote(w, c)) sing = m.tokens >= len && (c.la || c.lb || m.rng.chance(V.join));   // joins a neighbour's song (chain mates always)
       else {
         const thrive = c.lum && dark ? 1 : Math.max(V.restFloor, smoothstep(0, V.thriveFull, c.vigor));
         const lock = smoothstep(0, V.lockedFull, c.locked);
@@ -1612,7 +1617,7 @@ function startPhrase(w, c) {
   for (let i = 0; i < mo.slots.length; i++) {
     m.pending.push({
       due: w.tick + Math.round(mo.slots[i] / mo.grid * period * PARAMS.time.tickRate),
-      c, step: mo.steps[i], phrase, final: i === mo.slots.length - 1,
+      c, step: mo.steps[i], phrase, final: i === 0 || i === mo.slots.length - 1,   // the first note holds the chord
     });
   }
 }

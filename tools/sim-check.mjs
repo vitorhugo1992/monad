@@ -3,19 +3,23 @@
 //
 //   node tools/sim-check.mjs [seeds=30] [minutes=30] [firstSeed=1] [param.path=value ...]
 //
+// Also checks that a world saved and restored twice on the way ends exactly where an unbroken run ends.
+//
 // Reports per seed: population sparkline, min/max, cap pressure, extinctions, the bloom arc,
 // diel migration, nutrient pulses, deaths by cause, nutrient conservation, phase sync and chains,
 // and the music the voice budget lets through: onsets/s, silences, chords and how consonant it is.
 // Run with phase.K=0 to see that the sync comes from rule 6.
 
 import { readFileSync } from 'node:fs';
+import { isDeepStrictEqual } from 'node:util';
+import { serialize } from 'node:v8';
 
 const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const start = html.indexOf('// ===== PARAMS =====');
 const end = html.indexOf('// ===== Audio =====');
 if (start < 0 || end < 0) throw new Error('section markers not found');
 const sim = new Function(html.slice(start, end) +
-  '\nreturn { PARAMS, createWorld, stepWorld, aliveCount, nutrientInventory, worldChecksum, dayPhase, syncStats, dinoWeight, GENES, HUE_WHEEL, intervalClass, keyName };')();
+  '\nreturn { PARAMS, createWorld, stepWorld, aliveCount, nutrientInventory, worldChecksum, dayPhase, syncStats, dinoWeight, GENES, HUE_WHEEL, intervalClass, keyName, snapshotWorld, restoreWorld };')();
 
 // Positional numbers, plus PARAMS overrides like metabolism.efficiency=0.2 or diel.dayLength=600
 const args = process.argv.slice(2);
@@ -141,6 +145,27 @@ for (let s = firstSeed; s < firstSeed + seeds; s++) {
 }
 
 const again = run(firstSeed);
+
+// Save and restore: a world saved, stored (structured clone, as IndexedDB does) and restored twice on the way
+// must end exactly where an unbroken run ends, down to every field of every cell.
+function roundTrip(seed) {
+  const total = minutes * 60 * rate, cuts = [Math.floor(total / 3), Math.floor(2 * total / 3)];
+  const step = (w) => { sim.stepWorld(w); w.music.notes.length = 0; };
+  const a = sim.createWorld(seed);
+  for (let t = 0; t < total; t++) step(a);
+  let b = sim.createWorld(seed), saveMs = 0, bytes = 0;
+  for (let t = 0; t < total; t++) {
+    if (cuts.includes(t)) {
+      const s0 = Date.now(), snap = structuredClone(sim.snapshotWorld(b));
+      bytes = Math.max(bytes, serialize(snap).length);
+      b = sim.restoreWorld(snap);
+      saveMs = Math.max(saveMs, Date.now() - s0);
+    }
+    step(b);
+  }
+  return { same: isDeepStrictEqual(sim.snapshotWorld(a), sim.snapshotWorld(b)), sum: sim.worldChecksum(a) === sim.worldChecksum(b), saveMs, bytes };
+}
+const trip = roundTrip(firstSeed);
 const n = results.length;
 console.log('\n' + [
   `seeds ${n}, ${minutes} min each, day ${sim.PARAMS.diel.dayLength} s, ${((Date.now() - t0) / 1000).toFixed(1)} s`,
@@ -155,6 +180,7 @@ console.log('\n' + [
   `music (median): onsets ${median(results.map((r) => r.music.ons)).toFixed(2)}/s, near-silence ${Math.round(100 * median(results.map((r) => r.music.quiet)))}% of the time, chords ${median(results.map((r) => r.music.chords2)).toFixed(1)}/min (3+ ${median(results.map((r) => r.music.chords3)).toFixed(1)}), m2/tritone clashes ${(100 * median(results.map((r) => r.music.harsh))).toFixed(1)}%, seconds ${Math.round(100 * median(results.map((r) => r.music.seconds)))}%`,
   `max |nutrient drift|: ${Math.max(...results.map((r) => Math.abs(r.drift))).toExponential(2)}`,
   `deterministic rerun: ${again.checksum === results[0].checksum ? 'yes' : 'NO'} (${results[0].checksum.toString(16)})`,
+  `save/restore round trip: ${trip.same && trip.sum ? 'identical' : 'DIFFERENT'} (snapshot ~${(trip.bytes / 1024).toFixed(0)} KB, save+restore ${trip.saveMs} ms)`,
 ].join('\n'));
 
 function median(a) { const s = [...a].sort((p, q) => p - q); return s[Math.floor(s.length / 2)]; }

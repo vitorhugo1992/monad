@@ -429,28 +429,28 @@ const PARAMS = {
     page: { x: 6, y: 14, w: 168, h: 292 }, chart: { x: 20, w: 140 }, glyph: { x: 167, y: 4 }, bar: { x: 64, w: 84 },
     dim: 0.55, swipe: 20, nightBelow: 0.15, seaStates: [0.15, 0.35, 0.6], noonHour: 12, dialR: 34,
   },
+  // One world that lives on between visits (unless the URL picks a seed or another start: a scratch world, never saved).
+  // every: real s between autosaves (also on hiding the page); chunkRows: notebook rows per stored chunk, so a save
+  // writes only the rows that changed.
+  persist: { db: 'monad', every: 30, chunkRows: 1024, version: 1 },
 };
 
 // ===== RNG =====
-function mulberry32(seed) {
-  let a = seed >>> 0;
-  return function () {
-    a = (a + 0x6D2B79F5) | 0;
+// mulberry32 with its state in the open (s), so a saved world resumes the same stream
+class Rng {
+  constructor(seed) { this.s = seed >>> 0; }
+  next() {
+    const a = this.s = (this.s + 0x6D2B79F5) | 0;
     let t = Math.imul(a ^ (a >>> 15), 1 | a);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+  }
+  range(lo, hi) { return lo + (hi - lo) * this.next(); }
+  int(n) { return Math.floor(this.next() * n); }
+  chance(p) { return this.next() < p; }
 }
 
-function makeRng(seed) {
-  const next = mulberry32(seed);
-  return {
-    next,
-    range(lo, hi) { return lo + (hi - lo) * next(); },
-    int(n) { return Math.floor(next() * n); },
-    chance(p) { return next() < p; },
-  };
-}
+const makeRng = (seed) => new Rng(seed);
 
 // Stateless hash for visuals, so rendering never draws from the simulation stream.
 function hash32(n) {
@@ -1949,6 +1949,129 @@ function emitNote(w, c, step, last, final, phrase, startled, stretch) {
 }
 
 const keyName = (m) => NOTE_NAMES[m.root] + ' ' + m.scaleName.toUpperCase();
+
+// ===== Persist =====
+// A saved world is the same world: the snapshot holds everything the rules read (cells and their links, cysts,
+// fields, grazers, wind, plumes, visitors, the harmonic field and voice budget, both random streams), so a restored
+// world steps on exactly as if it had never stopped. Shared objects and cycles (chains, the cells notes point at)
+// survive; references into PARAMS are kept as paths, so a restored world reads the very same constants. Render
+// caches are left out and rebuilt. The snapshot is structured-cloneable (IndexedDB, and later a worker).
+const SNAP_SKIP = new Set(['spr', 'along', 'songAt', 'songAtk', 'songRel', 'songLast', 'songDrone', 'pluckAt']);
+let paramPaths = null;
+
+function paramPathMap() {
+  if (paramPaths) return paramPaths;
+  paramPaths = new Map();
+  const walk = (o, path) => {
+    if (!o || typeof o !== 'object' || paramPaths.has(o)) return;
+    paramPaths.set(o, path);
+    for (const k of Object.keys(o)) walk(o[k], path.concat(k));
+  };
+  walk(PARAMS, []);
+  return paramPaths;
+}
+
+function encodeSnap(v, memo) {
+  if (!v || typeof v !== 'object') {
+    if (typeof v === 'function') throw new Error('snapshot: a function in the world');
+    return v;
+  }
+  if (memo.has(v)) return memo.get(v);
+  let out;
+  const path = paramPathMap().get(v);
+  if (path) out = { $param: path };
+  else if (v instanceof Rng) out = { $rng: v.s };
+  else if (ArrayBuffer.isView(v)) out = v.slice();
+  else if (Array.isArray(v)) {
+    out = [];
+    memo.set(v, out);
+    for (let i = 0; i < v.length; i++) out.push(encodeSnap(v[i], memo));
+    return out;
+  } else {
+    const proto = Object.getPrototypeOf(v);
+    if (proto !== Object.prototype && proto !== null) throw new Error('snapshot: cannot store ' + (v.constructor && v.constructor.name));
+    out = {};
+    memo.set(v, out);
+    for (const k of Object.keys(v)) if (!SNAP_SKIP.has(k)) out[k] = encodeSnap(v[k], memo);
+    return out;
+  }
+  memo.set(v, out);
+  return out;
+}
+
+// In place: markers become random streams and PARAMS objects again (a shared marker stays one shared object)
+function decodeSnap(root) {
+  const made = new Map(), seen = new Set();
+  const revive = (v) => {
+    if (!v || typeof v !== 'object' || ArrayBuffer.isView(v)) return v;
+    if (made.has(v)) return made.get(v);
+    if ('$rng' in v) { const r = new Rng(0); r.s = v.$rng; made.set(v, r); return r; }
+    if ('$param' in v) { let o = PARAMS; for (const k of v.$param) o = o[k]; made.set(v, o); return o; }
+    if (!seen.has(v)) {
+      seen.add(v);
+      for (const k of Object.keys(v)) v[k] = revive(v[k]);
+    }
+    return v;
+  };
+  return revive(root);
+}
+
+// Fields a newer version added get the values a fresh world starts with, so an old saved world wakes up in new code
+function fillMissing(to, from) {
+  for (const k of Object.keys(from)) if (!(k in to)) to[k] = from[k];
+}
+
+function snapshotWorld(w) {
+  return { v: PARAMS.persist.version, world: encodeSnap(w, new Map()) };
+}
+
+function restoreWorld(snap) {
+  const w = decodeSnap(snap.world), fresh = createWorld(w.seed, 1, w.dayLength), cell = fresh.cells[0];
+  fillMissing(w, fresh);
+  fillMissing(w.music, fresh.music);
+  fillMissing(w.fields, fresh.fields);
+  for (const c of w.cells) for (const k of Object.keys(cell)) if (!(k in c) && (cell[k] === null || typeof cell[k] !== 'object')) c[k] = cell[k];
+  return w;
+}
+
+// ---- Storage: one IndexedDB store; 'world' holds the snapshot, 'rows:i' the notebook in chunks ----
+function openStore() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(PARAMS.persist.db, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore('kv');
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function storeGet(db, keys) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('kv', 'readonly'), st = tx.objectStore('kv'), out = {};
+    for (const k of keys) st.get(k).onsuccess = (e) => { out[k] = e.target.result; };
+    tx.oncomplete = () => resolve(out);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+// puts: { key: value }, value undefined deletes the key. One transaction, so a save is all or nothing.
+function storeWrite(db, puts) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('kv', 'readwrite'), st = tx.objectStore('kv');
+    for (const k of Object.keys(puts)) { if (puts[k] === undefined) st.delete(k); else st.put(puts[k], k); }
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+}
+
+function storeClear(db) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('kv', 'readwrite');
+    tx.objectStore('kv').clear();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
 
 // ===== Audio =====
 // Discrete, enveloped notes only: every oscillator starts, swells, fades to 0.0001 and is disconnected.
@@ -4019,6 +4142,7 @@ function drawHud(w, now) {
     drawText(Hd.x, Hd.y, 'SEED ' + seedLabel, COL.FOAM, vis);
     drawText(Hd.x, Hd.y + Hd.line, 'LIVED ' + clock(w.extinctTick * TICK_DT), COL.FOAM, vis);
     drawText(Hd.x, Hd.y + Hd.line * 2, 'EXTINCT', rampBase(ROSE) + HIGHLIGHT, vis);
+    if (keeper.db) drawText(Hd.x, Hd.y + Hd.line * 3, 'TAP TO SEED NEW WATER', COL.FOAM, vis);   // only the kept world
     return;
   }
   const vis = hudVisibility(now);
@@ -4045,6 +4169,12 @@ function drawMusicGlyph(now) {
     }
   }
   if (audio.muted) for (let k = 0; k < 8; k++) if (vis >= 1 || bayer(G.x + k, G.y + 6 - k) < vis) put(G.x - 1 + k, G.y + 6 - k, rampBase(ROSE) + HIGHLIGHT);
+}
+// TAP TO SEED NEW WATER, once the epitaph has fully appeared (kept world only)
+function onNewWater(p) {
+  const Hd = PARAMS.hud, y = Hd.y + Hd.line * 3;
+  return !!keeper.db && world.extinctTick >= 0 && (world.tick - world.extinctTick) * TICK_DT >= Hd.epitaphFade &&
+    p.x < Hd.x + 92 && p.y >= y - 4 && p.y < y + 9;
 }
 const onMusicGlyph = (p) => p.x >= PARAMS.hud.music.x - 3 && p.x < PARAMS.hud.music.x + 8 && p.y >= PARAMS.hud.music.y - 4 && p.y < PARAMS.hud.music.y + 11;
 
@@ -4211,6 +4341,25 @@ function makeRoom() {
   for (let i = 1; i < half; i++) nb.rows.copyWithin(i * S, 2 * i * S, 2 * i * S + S);
   nb.count = half;
   nb.every *= 2;
+}
+
+// Saved with the world: the record's bookkeeping, and its rows in chunks of chunkRows (only new rows change between
+// saves, until a thinning rewrites them all)
+function notebookState() {
+  const nb = notebook;
+  return { count: nb.count, every: nb.every, next: nb.next, visits: nb.visits, seenVisitor: nb.seenVisitor, cap: nb.rows.length / NB.STRIDE };
+}
+
+function notebookChunk(i) {
+  const S = NB.STRIDE, R = PARAMS.persist.chunkRows;
+  return notebook.rows.slice(i * R * S, Math.min((i + 1) * R, notebook.count) * S);
+}
+
+function restoreNotebook(st, chunks) {
+  const nb = notebook, S = NB.STRIDE, R = PARAMS.persist.chunkRows;
+  nb.rows = new Float32Array(Math.max(st.cap, 4096) * S);
+  chunks.forEach((rows, i) => nb.rows.set(rows, i * R * S));
+  nb.count = st.count; nb.every = st.every; nb.next = st.next; nb.visits = st.visits; nb.seenVisitor = st.seenVisitor;
 }
 
 const spanLabel = (s) => (!s ? 'ALL' : s >= 3600 ? s / 3600 + 'H' : s / 60 + 'M');
@@ -4775,7 +4924,8 @@ function setupInput() {
     const d = input.down;
     const p = input.pointers.get(e.pointerId) || d;
     const tapped = d && d.id === e.pointerId && d.moved <= PARAMS.touch.tapMove && performance.now() - d.t < PARAMS.touch.tapMs;
-    if (tapped && onMusicGlyph(p) && (d.hud > 0 || notebook.open)) { setMuted(!audio.muted); input.down = null; }   // the music button
+    if (tapped && onNewWater(p) && !notebook.open) { seedNewWater(); input.down = null; }
+    else if (tapped && onMusicGlyph(p) && (d.hud > 0 || notebook.open)) { setMuted(!audio.muted); input.down = null; }   // the music button
     else if (d && d.id === e.pointerId && notebook.open) { notebookRelease(d, p); input.down = null; }
     else if (d && d.id === e.pointerId) {
       const tap = d.moved <= PARAMS.touch.tapMove && performance.now() - d.t < PARAMS.touch.tapMs;
@@ -4972,6 +5122,7 @@ function frame(now) {
     needsRender = false;
     recordFrame(performance.now() - t0 - overlayMs);
   }
+  if (keeper.db && now - keeper.lastSave > PARAMS.persist.every * 1000) saveWorld();
 }
 
 // ===== Init =====
@@ -4981,16 +5132,19 @@ function hashString(s) {
   return h >>> 0;
 }
 
+// With none of ?seed, ?stress, ?ff, ?day the page keeps one world that lives on between visits (saved in IndexedDB);
+// any of them starts a scratch world that is never saved, so trying a seed never overwrites the kept one.
 // ?seed= (number or word), ?debug, ?stress (start at the cell cap), ?ff=seconds (fast-forward),
 // ?zoom=1..4 with ?at=x,y (world point to centre on), ?speed=1|2|4|8 (time-lapse), ?day=5|10|30 (minutes),
 // ?notebook=1..4 (open the field notebook on that page). M turns the music off, N opens the notebook.
 function readOptions() {
   const q = new URLSearchParams(location.search);
+  const kept = !q.has('seed') && !q.has('stress') && !q.has('ff') && !q.has('day');
   let label = (q.get('seed') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12), seed;
   if (!label) {
     seed = crypto.getRandomValues(new Uint32Array(1))[0] % 1000000;   // the one non-seeded draw: picking the seed
     label = String(seed);
-    try { q.set('seed', label); history.replaceState(null, '', location.pathname + '?' + q.toString()); } catch (e) { /* file:// may refuse */ }
+    if (!kept) try { q.set('seed', label); history.replaceState(null, '', location.pathname + '?' + q.toString()); } catch (e) { /* file:// may refuse */ }
   } else {
     seed = /^\d+$/.test(label) ? Number(label) >>> 0 : hashString(label);
   }
@@ -5000,13 +5154,72 @@ function readOptions() {
     zoom: Number(q.get('zoom')) || 1, atX: at.length === 2 ? at[0] : W / 2, atY: at.length === 2 ? at[1] : H / 2,
     speed: Number(q.get('speed')) || 1, notebook: Math.floor(Number(q.get('notebook')) || 0),
     dayLength: PARAMS.diel.dayMinutes.includes(Number(q.get('day'))) ? Number(q.get('day')) * 60 : PARAMS.diel.dayLength,
+    kept,
   };
 }
 
-function init() {
+// ---- The kept world: saved every few seconds and on leaving, found again on the next visit ----
+// saved: what the last save wrote of the notebook, so the next one only writes the rows that changed
+const keeper = { db: null, lastSave: 0, busy: false, off: false, saved: null };
+
+function saveWorld() {
+  const k = keeper;
+  k.lastSave = performance.now();
+  if (!k.db || k.busy || k.off) return;
+  const R = PARAMS.persist.chunkRows, nb = notebookState(), chunks = Math.ceil(nb.count / R);
+  const puts = {
+    world: { v: PARAMS.persist.version, label: seedLabel, savedAt: Date.now(), snap: snapshotWorld(world), notebook: nb, chunks, prefs: { muted: audio.muted } },
+  };
+  const thinned = !k.saved || k.saved.every !== nb.every;   // a thinning rewrote every row
+  for (let i = thinned ? 0 : Math.floor(k.saved.count / R); i < chunks; i++) puts['rows:' + i] = notebookChunk(i);
+  for (let i = chunks; k.saved && i < k.saved.chunks; i++) puts['rows:' + i] = undefined;
+  k.busy = true;
+  storeWrite(k.db, puts)
+    .then(() => { k.saved = { count: nb.count, every: nb.every, chunks }; })
+    .catch(() => { k.saved = null; })   // the next save writes everything again
+    .finally(() => { k.busy = false; });
+}
+
+async function loadWorld(db) {
+  const rec = (await storeGet(db, ['world'])).world;
+  if (!rec) return null;
+  const keys = [];
+  for (let i = 0; i < rec.chunks; i++) keys.push('rows:' + i);
+  const rows = await storeGet(db, keys);
+  return { rec, world: restoreWorld(rec.snap), rows: keys.map((k) => rows[k] || new Float32Array(0)) };
+}
+
+// After an extinction: the kept world is let go and new water is seeded on reload
+function seedNewWater() {
+  keeper.off = true;
+  storeClear(keeper.db).finally(() => location.reload());
+}
+
+async function init() {
   const opts = readOptions();
   seedLabel = opts.label;
-  world = createWorld(opts.seed, opts.stress ? PARAMS.division.maxCells : 0, opts.dayLength);
+  let found = null;
+  if (opts.kept && window.indexedDB) {
+    try {
+      keeper.db = await openStore();
+      found = await loadWorld(keeper.db);
+      if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+    } catch (e) { keeper.db = null; found = null; }   // no storage (private window, blocked): a world for this visit only
+  }
+  if (found) {
+    world = found.world;
+    seedLabel = found.rec.label;
+    restoreNotebook(found.rec.notebook, found.rows);
+    keeper.saved = { count: found.rec.notebook.count, every: found.rec.notebook.every, chunks: found.rec.chunks };
+    audio.muted = !!(found.rec.prefs && found.rec.prefs.muted);
+  } else {
+    world = createWorld(opts.seed, opts.stress ? PARAMS.division.maxCells : 0, opts.dayLength);
+  }
+  if (keeper.db) {
+    saveWorld();
+    document.addEventListener('visibilitychange', () => { if (document.hidden) saveWorld(); });
+    window.addEventListener('pagehide', saveWorld);
+  }
   debug.on = opts.debug;
   const ffTicks = Math.floor(opts.ff * PARAMS.time.tickRate);
   for (let i = 0; i < ffTicks; i++) { stepWorld(world); debugSample(world); notebookSample(world); world.music.notes.length = 0; }

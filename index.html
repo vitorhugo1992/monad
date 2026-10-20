@@ -218,8 +218,8 @@ const PARAMS = {
     // and a chirp for every bubble you see.
     // Filter sweep by hand: closing lowers a master lowpass by up to closeOctaves below open (20 kHz), opening lifts
     // a high shelf by up to openDb; both follow the finger (glide s) and ease back when it lifts (back s).
-    // Stirring sends up to stir of the music into the echoes and the reverb (the water swirls), settling the same way.
-    bend: { open: 20000, closeOctaves: 6, shelfHz: 2500, openDb: 9, glide: 0.06, back: 2, stir: 0.9 },
+    // octave: gain of the added octave on a plucked note at full sideways travel (relative to the note)
+    bend: { open: 20000, closeOctaves: 6, shelfHz: 2500, openDb: 9, glide: 0.06, back: 2, octave: 0.8 },
     ambience: {
       gain: 0.55, wet: 0.25, noiseSeconds: 3,
       swell: { everyCalm: 6, everyStorm: 2.2, durCalm: 10, durStorm: 5, gainCalm: 0.012, gainStorm: 0.09, freqCalm: 320, freqStorm: 1300 },
@@ -312,8 +312,9 @@ const PARAMS = {
   // Touch: a tap is a short press that barely moves; at zoom 1 a drag strums (each touched cell plucks its note,
   // within touch units of the finger, at most once per pluckRest s, at most plucksPerSecond overall) and leaves a
   // wake fading over trail s. Moving toward the surface opens the master filter, toward the deep closes it (bendSpan
-  // of the column = full bend); sweeping sideways stirs the water (stirFull px/s of sideways speed = full swirl).
-  touch: { tapMs: 300, tapMove: 4, touch: 2.5, pluckRest: 0.4, plucksPerSecond: 16, trail: 1.5, trailSpacing: 2, bendSpan: 0.6, stirFull: 150, stirEase: 0.25 },
+  // of the column = full bend). Sideways works like a piano: travel right adds an octave above every plucked note,
+  // travel left an octave below (octaveSpan of the column's width = full), only on the hand's own plucks.
+  touch: { tapMs: 300, tapMove: 4, touch: 2.5, pluckRest: 0.4, plucksPerSecond: 16, trail: 1.5, trailSpacing: 2, bendSpan: 0.6, octaveSpan: 0.5 },
   elderLook: { darken: 0.55, ringSlow: 3.5, ringBig: 2.5, haloBig: 2 },   // elders: darker pigment; slow, wide rings and halo while droning
   song: { ringPx: 9, ringZoom: 0.6, ringTime: 1.6, ringStart: 1.5, swell: 0.35, lift: 0.9,
           haloRadius: 2.5, haloMinPx: 3, haloMaxPx: 16, haloStrength: 0.45 },
@@ -1991,16 +1992,15 @@ function startAudio() {
   const bus = gain(1), lp = ctx.createBiquadFilter();
   lp.type = 'lowpass'; lp.frequency.value = A.busCutoff; lp.Q.value = 0.5;
   bus.connect(lp); lp.connect(master); lp.connect(verbIn); lp.connect(delayIn);
-  const wet = gain(1), stirIn = gain(0.0001);   // stirIn: the hand stirring the water into echoes and reverb
+  const wet = gain(1);
   wet.connect(verb);
-  lp.connect(stirIn); stirIn.connect(delay); stirIn.connect(verb);
 
   const Am = A.ambience, amb = gain(Am.gain), ambWet = gain(Am.wet);
   amb.connect(master); amb.connect(ambWet); ambWet.connect(verb);
   const noise = ctx.createBuffer(1, Math.floor(Am.noiseSeconds * ctx.sampleRate), ctx.sampleRate), nrng = makeRng(0x5ea);
   const nd = noise.getChannelData(0);
   for (let i = 0; i < nd.length; i++) nd[i] = nrng.next() * 2 - 1;
-  Object.assign(audio, { ctx, master, bendLP, bendShelf, stirIn, bus, wet, lp, fb, delay, delayIn, verbIn, amb, noise, waves: buildWaves(ctx), started: true });
+  Object.assign(audio, { ctx, master, bendLP, bendShelf, bus, wet, lp, fb, delay, delayIn, verbIn, amb, noise, waves: buildWaves(ctx), started: true });
   if (ctx.state !== 'running') ctx.resume();
 }
 
@@ -2098,6 +2098,14 @@ function playNote(n) {
   if (pan) { pan.pan.value = (n.x / W * 2 - 1) * A.pan; env.connect(pan); out = pan; }
   out.connect(dry); out.connect(wet);
   dry.connect(audio.bus); wet.connect(audio.wet);
+  let oct = null, octEnv = null;
+  if (n.octave && Math.abs(n.octave) > 0.05) {   // a plucked note gains an octave above or below, like a piano
+    oct = ctx.createOscillator(); octEnv = ctx.createGain();
+    oct.setPeriodicWave(wave); oct.frequency.value = freq * (n.octave > 0 ? 2 : 0.5);
+    octEnv.gain.value = Math.abs(n.octave) * A.bend.octave;
+    oct.connect(octEnv); octEnv.connect(filt);
+    oct.start(t0); oct.stop(end + 0.05);
+  }
   let shim = null, shimEnv = null;
   if (n.steady) {   // a steadied pad shimmers an octave up, swelling in late
     shim = ctx.createOscillator(); shimEnv = ctx.createGain();
@@ -2123,7 +2131,7 @@ function playNote(n) {
   audio.active++;
   audio.played++;
   osc.onended = () => {
-    for (const node of [osc, twin, twinEnv, filt, env, pan, dry, wet, lfo, lfoDepth, shim, shimEnv]) if (node) node.disconnect();
+    for (const node of [osc, twin, twinEnv, filt, env, pan, dry, wet, lfo, lfoDepth, shim, shimEnv, oct, octEnv]) if (node) node.disconnect();
     audio.active--;
   };
 }
@@ -2275,20 +2283,13 @@ function setBend(b, secs) {
   to(audio.bendShelf.gain, Math.max(0, b) * Bd.openDb);
 }
 
-// The hand stirs the water: k 0..1 of swirl, reached in secs
-function setStir(k, secs) {
-  if (!audio.started) return;
-  const g = audio.stirIn.gain, t = audio.ctx.currentTime;
-  g.setValueAtTime(g.value, t);
-  g.linearRampToValueAtTime(Math.max(0.0001, k * PARAMS.audio.bend.stir), t + secs);
-}
-
 // A cell plucked by the finger sounds its own note at once, outside the budget (the caller caps the rate)
 let pluckId = 1;
 function pluck(w, c) {
   const m = w.music, sh = voiceShape(c, false, true), midi = notePitch(m, c, 0);
   const n = { id: 0x40000000 + pluckId++, phrase: 0, c, midi, pc: midi % 12, x: c.x, y: c.y, timbre: c.g.timbre,
-              attack: sh.attack, release: sh.release, soft: sh.soft, dino: sh.dino, glass: sh.glass, last: false, startled: false, muffle: 0 };
+              attack: sh.attack, release: sh.release, soft: sh.soft, dino: sh.dino, glass: sh.glass, last: false, startled: false, muffle: 0,
+              octave: input.octave };   // the hand's sideways travel: an octave above (right) or below (left)
   c.songAt = performance.now() + PARAMS.audio.lookahead * 1000; c.songAtk = n.attack; c.songRel = n.release; c.songLast = false; c.songDrone = false;
   c.glowTick = w.tick;
   if (audio.started && !audio.muted && audio.ctx.state === 'running') playNote(n);
@@ -4020,8 +4021,8 @@ function render(w, now) {
 // One finger or mouse drag pans, two fingers pinch-zoom, the mouse wheel zooms at the cursor.
 // The hand in the water: a tap scatters cells (any zoom); at zoom 1 a drag strums the cells it passes through and
 // drags the water along; moving toward the surface opens the master filter, toward the deep closes it, and sideways
-// speed stirs the sound into the echoes, until the finger lifts.
-const input = { lastActivity: 0, pointers: new Map(), pinch: null, down: null, bend: 0, stir: 0, plucks: 0, plucksAt: 0 };
+// travel adds an octave above (right) or below (left) to the plucks, like a piano, until the finger lifts.
+const input = { lastActivity: 0, pointers: new Map(), pinch: null, down: null, bend: 0, octave: 0, plucks: 0, plucksAt: 0 };
 const trail = [];
 
 const toWorld = (p) => ({ x: cam.x + p.x / cam.zoom, y: cam.y + p.y / cam.zoom });
@@ -4097,8 +4098,7 @@ function setupInput() {
         for (let i = 1; i <= steps; i++) trail.push({ x: a.x + (b.x - a.x) * i / steps, y: a.y + (b.y - a.y) * i / steps, t: now });
         input.bend = clamp(input.bend - (b.y - a.y) / (H * T.bendSpan), -1, 1);   // toward the light opens, the deep closes
         setBend(input.bend, PARAMS.audio.bend.glide);
-        input.stir += (clamp(Math.abs(b.x - a.x) / dt / T.stirFull, 0, 1) - input.stir) * T.stirEase;   // sideways speed stirs
-        setStir(input.stir, PARAMS.audio.bend.glide);
+        input.octave = clamp(input.octave + (b.x - a.x) / (W * T.octaveSpan), -1, 1);   // right adds an octave above, left below
       } else panBy(p.x - prev.x, p.y - prev.y);
     }
   });
@@ -4110,10 +4110,8 @@ function setupInput() {
         world.inputs.push({ kind: 'tap', x: q.x, y: q.y });
       }
       input.down = null;
-      if (input.bend !== 0 || input.stir !== 0) {   // the water forgets the hand
-        input.bend = 0; input.stir = 0;
-        setBend(0, PARAMS.audio.bend.back); setStir(0, PARAMS.audio.bend.back);
-      }
+      input.octave = 0;
+      if (input.bend !== 0) { input.bend = 0; setBend(0, PARAMS.audio.bend.back); }   // the water forgets the hand
     }
     input.pointers.delete(e.pointerId);
     if (input.pointers.size < 2) input.pinch = null;

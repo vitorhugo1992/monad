@@ -4,7 +4,8 @@
 //   node tools/sim-check.mjs [seeds=30] [minutes=30] [firstSeed=1] [param.path=value ...]
 //
 // Reports per seed: population sparkline, min/max, cap pressure, extinctions, the bloom arc,
-// diel migration, nutrient pulses, deaths by cause and nutrient conservation.
+// diel migration, nutrient pulses, deaths by cause, nutrient conservation, phase sync and chains.
+// Run with phase.K=0 to see that the sync comes from rule 6.
 
 import { readFileSync } from 'node:fs';
 
@@ -13,7 +14,7 @@ const start = html.indexOf('// ===== PARAMS =====');
 const end = html.indexOf('// ===== Harmony =====');
 if (start < 0 || end < 0) throw new Error('section markers not found');
 const sim = new Function(html.slice(start, end) +
-  '\nreturn { PARAMS, createWorld, stepWorld, aliveCount, nutrientInventory, worldChecksum, dayPhase, GENES, HUE_WHEEL };')();
+  '\nreturn { PARAMS, createWorld, stepWorld, aliveCount, nutrientInventory, worldChecksum, dayPhase, syncStats, GENES, HUE_WHEEL };')();
 
 // Positional numbers, plus PARAMS overrides like metabolism.efficiency=0.2 or diel.dayLength=600
 const args = process.argv.slice(2);
@@ -44,7 +45,7 @@ function run(seed) {
   const w = sim.createWorld(seed);
   const pops = [];
   let capTicks = 0, extinct = false, minPop = Infinity, maxPop = 0, pulses = 0, lastPhase = sim.dayPhase(w);
-  const noon = [], night = [];
+  const noon = [], night = [], syncs = [];
   const total = minutes * 60 * rate;
   for (let t = 1; t <= total; t++) {
     const before = w.pulses.length;
@@ -56,6 +57,7 @@ function run(seed) {
     if (t % sampleTicks === 0) {
       pops.push(pop);
       minPop = Math.min(minPop, pop); maxPop = Math.max(maxPop, pop);
+      if (pop >= 20 && t % (3 * sampleTicks) === 0) syncs.push(sim.syncStats(w));
     }
     // Mean depth at mid-day and late night: diel vertical migration
     const ph = sim.dayPhase(w), D = sim.PARAMS.diel;
@@ -76,6 +78,8 @@ function run(seed) {
     seed, pops, minPop, maxPop, capFrac: capTicks / total, extinct, drift, arc: arcs(pops), pulses,
     noon: mean(noon), night: mean(night), deaths: w.deaths, ramps,
     size: mean(alive.map((c) => c.g.size)), checksum: sim.worldChecksum(w),
+    sync: Object.fromEntries(['local', 'locked', 'global', 'chained', 'chains', 'longest'].map((k) => [k, mean(syncs.map((q) => q[k]))])),
+    longest: Math.max(1, ...syncs.map((q) => q.longest)),
   };
 }
 
@@ -97,7 +101,9 @@ for (let s = firstSeed; s < firstSeed + seeds; s++) {
     ` cap ${(r.capFrac * 100).toFixed(1).padStart(4)}% ${r.extinct ? 'EXTINCT' : '       '} arcs ${r.arc.n} falls ${r.arc.dieoffs}` +
     ` | depth noon ${f(r.noon)} night ${f(r.night)} | pulses ${r.pulses}` +
     ` | deaths S/O/G/F/Sp ${[d.starved, d.old, d.grazed, d.sardines, d.salps].map((x) => Math.round(100 * x / dt)).join('/')}%` +
-    ` | size ${f(r.size)} ramps ${r.ramps.join('/')} drift ${r.drift.toExponential(1)}\n`);
+    ` | size ${f(r.size)} ramps ${r.ramps.join('/')} drift ${r.drift.toExponential(1)}` +
+    ` | sync loc ${f(r.sync.local)} lock ${f(r.sync.locked)} glob ${f(r.sync.global)}` +
+    ` | chains ${r.sync.chains.toFixed(1)} in ${Math.round(r.sync.chained * 100)}% max ${r.longest}\n`);
 }
 
 const again = run(firstSeed);
@@ -109,6 +115,8 @@ console.log('\n' + [
   `bloom+die-off+recovery: ${results.filter((r) => r.arc.n > 0).length}/${n}`,
   `migration (night - noon depth, median): ${median(results.map((r) => r.night - r.noon)).toFixed(2)} of the column`,
   `median min/max pop: ${median(results.map((r) => r.minPop))} / ${median(results.map((r) => r.maxPop))}`,
+  `sync local / locked / global (median): ${['local', 'locked', 'global'].map((k) => median(results.map((r) => r.sync[k])).toFixed(2)).join(' / ')}`,
+  `chains: median count ${median(results.map((r) => r.sync.chains)).toFixed(1)}, cells chained ${Math.round(100 * median(results.map((r) => r.sync.chained)))}%, longest ${Math.max(...results.map((r) => r.longest))}`,
   `max |nutrient drift|: ${Math.max(...results.map((r) => Math.abs(r.drift))).toExponential(2)}`,
   `deterministic rerun: ${again.checksum === results[0].checksum ? 'yes' : 'NO'} (${results[0].checksum.toString(16)})`,
 ].join('\n'));

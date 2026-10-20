@@ -106,6 +106,19 @@ const PARAMS = {
              reach: 4.5, eat: 0.25, sway: 2, excreted: 0.3, pellets: 0.5 },  // salp pellets sink fast
     sunfish: { rate: 1 / 90, speed: 4.5, turn: 1.2, r: 18, bite: 7, stay: 150, baskY: 30, baskSpeed: 0.35 },   // comes for salps, never eats cells; basks at the surface after
   },
+  // Rule 6: phase coupling (Kuramoto). dtheta/dt = 2pi*omega + coupling*K*mean(sin(theta_j - theta_i))
+  // over living neighbours within radius. K in rad/s: kin (one mutation apart in omega) lock, strangers drift.
+  phase: { K: 0.9, radius: 10 },        // radius must be <= hash.cell
+  // Chain adhesion (local rule): on division daughters may stay linked, setae interlocking as in Chaetoceros.
+  // The form sets how long a chain can grow (diatoms long, dinoflagellates 2-4, soft flagellates never);
+  // coupling sets the chance of staying linked. Chains are a size refuge from the small grazers (rule 5).
+  chain: {
+    chance: 0.85, from: 0.35, full: 0.9, diatomMax: 8, dinoMax: 4,
+    rest: 0.85,                         // link length, x (ri + rj)
+    spring: 3, straighten: 1,           // 1/s^2: pull toward the link length; pull toward the midpoint of both links
+    breakRate: 1 / 300,                 // per link per second
+    refuge: 1.5,                        // grazing risk x 1/(1 + refuge*(length - 1))
+  },
   mutation: { step: 0.08, jumpChance: 0.05, jump: 0.3 },
 
   // ---- Everything below is visual only; none of it feeds back into the simulation. ----
@@ -155,6 +168,9 @@ const PARAMS = {
     ringTicks: 30, ringStart: 1, ringGrow: 0.25, ringMinR: 14, arcs: 3, arcGap: 0.2,   // broken arcs only on cells large on screen
   },
   thread: { maxAge: 40, dotSpacing: 3 },  // drawn only between cells big enough on screen to show a form
+  // Chains as drawn: the cells swim and turn as one (a shorter leash for longer chains), stacked along the chain;
+  // interlocking setae bridge the gap between linked cells once they show a form
+  chainLook: { leashPerCell: 0.25, sway: 0.08, swaySpeed: 0.15 },
   // Seafloor scavengers: decoration that comes where detritus recently fell, lingers, and walks off
   crawlers: {
     max: 4, rate: 0.12, smellFull: 15, smellTau: 60, feedMin: 8, feedMax: 20, margin: 16,
@@ -230,7 +246,7 @@ const PARAMS = {
   },
   murk: { from: 0.8, full: 3 },         // bloom biomass summed down the upper column: rays fade in murky water
   hud: { x: 4, y: 290, line: 7, visibleMs: 6000, fadeMs: 2000 },
-  debug: { sampleEvery: 100, historyLength: 180, frameSamples: 120, graphY: 172, graphH: 48, mapX: 126, mapY: 6, mapCell: 2 },
+  debug: { syncEvery: 15, sampleEvery: 100, historyLength: 180, frameSamples: 120, graphY: 172, graphH: 48, mapX: 126, mapY: 6, mapCell: 2 },
 };
 
 // ===== RNG =====
@@ -569,6 +585,30 @@ function dinoWeight(tb) {
   return smoothstep(Dn.from, Dn.full, tb) * (1 - smoothstep(Dn.fade, Dn.gone, tb));
 }
 
+// How long a chain this form can build: diatoms long, dinoflagellates short, soft flagellates none (< 2)
+function chainMax(g) {
+  const Ch = PARAMS.chain, Dn = PARAMS.dino;
+  return Math.floor(Ch.diatomMax * smoothstep(Dn.fade, Dn.gone, g.timbre) + Ch.dinoMax * dinoWeight(g.timbre));
+}
+
+function chainHead(c) {
+  while (c.la) c = c.la;
+  return c;
+}
+
+function chainLength(c) {
+  let n = 0;
+  for (let k = chainHead(c); k; k = k.lb) n++;
+  return n;
+}
+
+// A dying cell breaks out of its chain; the chain splits there
+function unlink(c) {
+  if (c.la) c.la.lb = null;
+  if (c.lb) c.lb.la = null;
+  c.la = c.lb = null;
+}
+
 function lifespanFor(c, rng) {
   const L = PARAMS.lifespan;
   return L.base * Math.sqrt(c.g.size) * rng.range(L.jitterMin, L.jitterMax);
@@ -580,9 +620,12 @@ function createCell(w, x, y, g, energy, parentId, spriteSeed) {
     id: w.nextId++, parentId, x, y, vx: 0, vy: 0,
     energy, held: 0, age: 0, lifespan: 0, vigor: 0,   // vigor: smoothed growth conditions, observed only
     theta: w.rng.next() * TAU, flashTick: -1000, dying: 0, grazed: false, eaten: null,
+    pull: 0, nbrs: 0,                                  // Kuramoto: sum of sin(theta_j - theta_i) and neighbour count
+    la: null, lb: null, chainLen: 1,                   // chain links toward the head (la) and the tail (lb)
     g, spriteSeed, gen: 0,
     r: 0, rv: 0, biomass: 0, gainK: 0, halfSat: 0, maintK: 0, targetLight: 0,
     spr: null, ox: 0, oy: 0, swimPh: 0, vt: 0, tempo: 1,   // sprite cache and swimming (own clock, tempo): render only
+    along: null,                                           // render only: lies along its chain (or across it)
   };
   deriveTraits(c);
   c.lifespan = lifespanFor(c, w.rng);
@@ -662,7 +705,7 @@ function worldChecksum(w) {
     h = Math.imul(h ^ CK_VIEW.getUint32(4), 16777619);
   };
   mix(w.tick); mix(w.cells.length); mix(w.cysts.length); mix(w.wind); mix(w.visitors.length); mix(w.carried);
-  for (const c of w.cells) { mix(c.id); mix(c.x); mix(c.y); mix(c.energy); mix(c.theta); }
+  for (const c of w.cells) { mix(c.id); mix(c.x); mix(c.y); mix(c.energy); mix(c.theta); mix(c.lb ? c.lb.id : 0); }
   for (let i = 0; i < w.fields.nut.length; i += 7) { mix(w.fields.nut[i]); mix(w.fields.graz[i]); }
   return h >>> 0;
 }
@@ -690,6 +733,7 @@ function stepWorld(w) {
     advancePhase(w, c, dt);
     c.age += dt * pace;
   }
+  updateChains(w, dt);
   graze(w, dt);
   updateVisitors(w, dt);
   lifeAndDeath(w);
@@ -699,8 +743,13 @@ function stepWorld(w) {
 // Rule 1: Brownian motion, phototaxis toward the preferred light level, soft separation.
 // The preferred level is relative to the surface, so a cell holds its depth all day.
 // Night descent: in darkness cells follow the nutrient gradient down instead; phototaxis brings them back at dawn.
+// The same neighbour pass gathers the Kuramoto pull (rule 6) from the phases before any of them move this tick,
+// and linked cells (chain adhesion) are held by springs instead of pushed apart.
+const PHASE_R2 = PARAMS.phase.radius * PARAMS.phase.radius;
 function steer(w, c, dt) {
   const D = PARAMS.drift, hs = w.hash;
+  c.pull = 0;
+  c.nbrs = 0;
   c.vx += gauss(w.rng) * BROWNIAN_K;
   c.vy += gauss(w.rng) * BROWNIAN_K;
 
@@ -725,6 +774,8 @@ function steer(w, c, dt) {
         const o = bucket[n];
         if (o === c) continue;
         const dx = c.x - o.x, dy = c.y - o.y, d2 = dx * dx + dy * dy;
+        if (d2 < PHASE_R2 && !o.dying) { c.pull += dsin(o.theta - c.theta); c.nbrs++; }
+        if (o === c.la || o === c.lb) continue;
         const reach = (c.r + o.r) * D.separationRange;
         if (d2 >= reach * reach || d2 === 0) continue;
         const d = Math.sqrt(d2), push = D.separation * (1 - d / reach) * dt / d;
@@ -733,6 +784,23 @@ function steer(w, c, dt) {
       }
     }
   }
+
+  if (c.la || c.lb) {
+    const Ch = PARAMS.chain;
+    if (c.la) linkSpring(c, c.la, dt);
+    if (c.lb) linkSpring(c, c.lb, dt);
+    if (c.la && c.lb) {   // an intercalary cell is pulled toward the line between its neighbours: chains stay straight
+      c.vx += ((c.la.x + c.lb.x) * 0.5 - c.x) * Ch.straighten * dt;
+      c.vy += ((c.la.y + c.lb.y) * 0.5 - c.y) * Ch.straighten * dt;
+    }
+  }
+}
+
+function linkSpring(c, o, dt) {
+  const Ch = PARAMS.chain, dx = o.x - c.x, dy = o.y - c.y, d = Math.sqrt(dx * dx + dy * dy) + 1e-9;
+  const k = Ch.spring * (d - Ch.rest * (c.r + o.r)) * dt / d;
+  c.vx += dx * k;
+  c.vy += dy * k;
 }
 
 function move(c, dt) {
@@ -762,10 +830,59 @@ function metabolise(w, c, dt, pace) {
   c.held += got;
 }
 
-// Phase advances at the natural rate (coupling arrives in phase 3). Wrapping past 2pi is a flash.
+// Rule 6: the phase runs at the natural rate, pulled toward the neighbours' phases (Kuramoto).
+// Wrapping past 2pi is a flash. Synchronised colonies come out of this; nothing else groups them.
 function advancePhase(w, c, dt) {
-  c.theta += TAU * c.g.omega * dt;
+  const pull = c.nbrs ? c.g.coupling * PARAMS.phase.K * c.pull / c.nbrs : 0;
+  c.theta += (TAU * c.g.omega + pull) * dt;
   if (c.theta >= TAU) { c.theta -= TAU; c.flashTick = w.tick; }
+  else if (c.theta < 0) c.theta += TAU;
+}
+
+// Chain links break slowly at random; then every cell learns the length of its chain
+function updateChains(w, dt) {
+  const cells = w.cells, p = PARAMS.chain.breakRate * dt;
+  for (let i = 0; i < cells.length; i++) {
+    const c = cells[i];
+    if (c.lb && w.rng.chance(p)) { c.lb.la = null; c.lb = null; }
+  }
+  for (let i = 0; i < cells.length; i++) {
+    const c = cells[i];
+    if (c.la) continue;
+    let n = 0;
+    for (let k = c; k; k = k.lb) n++;
+    for (let k = c; k; k = k.lb) k.chainLen = n;
+  }
+}
+
+// Observed only (debug and sim-check), never read by the rules. Local sync: for each cell with neighbours
+// within the coupling radius, |mean e^(i theta)| over it and them; `locked` = share of those above 0.9.
+// Global sync is the classic order parameter over the whole column.
+function syncStats(w) {
+  const R2 = PHASE_R2, cells = w.cells, cosT = (x) => dsin(x + Math.PI / 2);
+  let gx = 0, gy = 0, n = 0, local = 0, counted = 0, locked = 0, chains = 0, chained = 0, longest = 1;
+  for (const c of cells) {
+    if (c.dying) continue;
+    n++;
+    gx += cosT(c.theta); gy += dsin(c.theta);
+    if (!c.la && c.lb) { chains++; longest = Math.max(longest, c.chainLen); }
+    if (c.chainLen > 1) chained++;
+    let sx = cosT(c.theta), sy = dsin(c.theta), m = 1;
+    for (const o of cells) {
+      if (o === c || o.dying) continue;
+      const dx = o.x - c.x, dy = o.y - c.y;
+      if (dx * dx + dy * dy < R2) { sx += cosT(o.theta); sy += dsin(o.theta); m++; }
+    }
+    if (m < 2) continue;
+    const r = Math.sqrt(sx * sx + sy * sy) / m;
+    local += r; counted++;
+    if (r > 0.9) locked++;
+  }
+  return {
+    global: n ? Math.sqrt(gx * gx + gy * gy) / n : 0, local: counted ? local / counted : 0,
+    locked: counted ? locked / counted : 0, crowded: n ? counted / n : 0,
+    chains, chained: n ? chained / n : 0, longest,
+  };
 }
 
 // Weather: the wind eases toward a target that changes at random intervals.
@@ -821,7 +938,7 @@ function graze(w, dt) {
     const c = cells[i];
     if (c.dying) continue;
     const B = sampleField(f.bio, c.x, c.y), Z = sampleField(f.graz, c.x, c.y);
-    const m = G.rate * Z * K * B / (B * B + K * K);
+    const m = G.rate * Z * K * B / (B * B + K * K) / (1 + PARAMS.chain.refuge * (c.chainLen - 1));   // chains: a size refuge
     if (w.rng.chance(m * dt)) eaten(w, c);
   }
 }
@@ -829,6 +946,7 @@ function graze(w, dt) {
 // A grazed cell vanishes quietly: no cyst; most of its nutrients are excreted in place, the rest sink as pellets.
 function eaten(w, c) {
   c.dying = 1;
+  unlink(c);
   c.grazed = true;
   w.deaths.grazed++;
   const recycled = c.held * PARAMS.grazing.recycled;
@@ -960,6 +1078,7 @@ function moveSunfish(w, v, salp, dt) {
 // Swallowed: the cell vanishes at once. Part of its nutrients is excreted, part sinks as pellets, the rest is carried away.
 function swallow(w, c, kind, S) {
   c.dying = 1;
+  unlink(c);
   c.eaten = kind;
   w.deaths[kind]++;
   const ex = c.held * S.excreted, pel = c.held * S.pellets;
@@ -997,14 +1116,25 @@ function lifeAndDeath(w) {
 }
 
 // The mother continues as daughter A (keeps her id); daughter B is new and points to her.
+// Chain adhesion: B may stay linked to A, inserted after her in the chain, so a chain grows from within.
 function divide(w, c) {
-  const rng = w.rng;
+  const rng = w.rng, Ch = PARAMS.chain;
   const gA = mutateGenome(c.g, rng), gB = mutateGenome(c.g, rng);
+  const max = chainMax(c.g);
+  const link = max >= 2 && chainLength(c) < max && rng.chance(Ch.chance * smoothstep(Ch.from, Ch.full, c.g.coupling));
   let ox = gauss(rng), oy = gauss(rng);
+  if (link && c.lb) { ox = c.lb.x - c.x; oy = c.lb.y - c.y; }        // daughters split along the chain axis
+  else if (link && c.la) { ox = c.x - c.la.x; oy = c.y - c.la.y; }
   const off = c.r * PARAMS.division.spread / (Math.sqrt(ox * ox + oy * oy) || 1);
   ox *= off; oy *= off;
 
   const b = createCell(w, c.x + ox, c.y + oy, gB, c.energy * 0.5, c.id, c.spriteSeed);
+  if (link) {
+    b.la = c;
+    b.lb = c.lb;
+    if (c.lb) c.lb.la = b;
+    c.lb = b;
+  }
   b.held = c.held * 0.5;
   b.vx = c.vx; b.vy = c.vy;
   b.theta = c.theta;
@@ -1027,6 +1157,7 @@ function divide(w, c) {
 function die(w, c, starved) {
   const Cy = PARAMS.cyst, nut = w.fields.nut;
   c.dying = 1;
+  unlink(c);
   let give = c.held;
   if (w.cysts.length < Cy.max && w.rng.chance(starved ? Cy.chanceStarved : Cy.chanceOld)) {
     const reserve = give * Cy.reserve;
@@ -1770,6 +1901,25 @@ function updateSwim(w, ta) {
     c.ox = wx + amp * Math.cos(a) + rock;
     c.oy = wy + amp * Sw.flatten * Math.sin(a) + rock * 0.5;
   }
+  // Chains swim as one body: every cell takes the head's motion, on a shorter leash the longer the chain
+  const CL = PARAMS.chainLook;
+  for (const c of w.cells) {
+    if (c.la || !c.lb) continue;
+    const k = 1 / (1 + CL.leashPerCell * (chainLength(c) - 1)), ox = c.ox * k, oy = c.oy * k;
+    for (let q = c; q; q = q.lb) { q.ox = ox; q.oy = oy; }
+  }
+}
+
+// Chained cells line up along the chain: dinoflagellates apex to antapex and pennate boats end to end,
+// round and box-like cells stacked valve to valve like coins. The whole chain sways gently.
+function chainAngle(c, t) {
+  const a = c.la || c, b = c.lb || c, CL = PARAMS.chainLook, head = chainHead(c);
+  if (c.along === null) {
+    const S = PARAMS.sprite;   // the lineage's first draw is its elongation (as in buildSprite)
+    const pennate = makeRng(c.spriteSeed).range(S.aspectMin, S.aspectMax) >= S.polarAspect;
+    c.along = pennate || dinoWeight(c.g.timbre) > 0.5;
+  }
+  return Math.atan2(b.y - a.y, b.x - a.x) + (c.along ? 0 : Math.PI / 2) + CL.sway * Math.sin(t * CL.swaySpeed + head.id);
 }
 
 // Spin is a lineage trait (relatives turn alike) shaped by form: dinoflagellates whirl, diatoms barely turn
@@ -1810,7 +1960,7 @@ function drawCell(c, tick, t) {
   const S = PARAMS.sprite, z = cam.zoom, rpx = c.rv * z;
   const cx = toSX(c.x + c.ox), cy = toSY(c.y + c.oy), reach = rpx * (2 + S.setaeLen) + 4;
   if (cx < -reach || cy < -reach || cx > W + reach || cy > H + reach) return;
-  const steps = S.tumbleSteps, angle = tumbleAngle(c, c.vt);   // tumbles on its own clock
+  const steps = S.tumbleSteps, angle = c.la || c.lb ? chainAngle(c, t) : tumbleAngle(c, c.vt);   // tumbles on its own clock unless chained
   const step = mod(Math.round(angle / TAU * steps), steps);
   const spr = rpx < S.dotR ? DOT : rpx < S.speckR ? SPECK : spriteFor(c, rpx, step);
   const irPhase = step + c.id + Math.floor(t * S.iridSpeed);
@@ -1906,16 +2056,27 @@ function drawFlashes(w) {
   }
 }
 
-// Dotted thread from a young daughter to her living sister-mother, thinning with age
+// Dotted thread from a young daughter to her living sister-mother, thinning with age.
+// Linked cells show their bond instead: interlocking setae bridging the gap (drawn under the cells).
 const byId = new Map();
 function drawThreads(w) {
-  const T = PARAMS.thread;
+  const T = PARAMS.thread, minR = PARAMS.sprite.speckR, z = cam.zoom;
   byId.clear();
   for (const c of w.cells) if (!c.dying) byId.set(c.id, c);
   for (const c of w.cells) {
-    if (c.dying || c.parentId === null || c.age > T.maxAge || c.rv * cam.zoom < PARAMS.sprite.speckR) continue;
+    const o = c.lb;
+    if (!o || c.rv * z < minR || o.rv * z < minR) continue;
+    const ax = toSX(c.x + c.ox), ay = toSY(c.y + c.oy), dx = toSX(o.x + o.ox) - ax, dy = toSY(o.y + o.oy) - ay;
+    const len = Math.sqrt(dx * dx + dy * dy), b1 = rampBase(hueRamp(c.g)), b2 = rampBase(hueRamp(o.g));
+    for (let s = 0; s <= len; s += 0.5) {
+      const f = s / len, x = Math.round(ax + dx * f), y = Math.round(ay + dy * f);
+      put(x, y, (f < 0.5 ? b1 : b2) + (Math.abs(f - 0.5) < 0.15 ? BASE : SHADOW));   // the spines cross mid-gap
+    }
+  }
+  for (const c of w.cells) {
+    if (c.dying || c.parentId === null || c.age > T.maxAge || c.rv * z < minR) continue;
     const p = byId.get(c.parentId);
-    if (!p || p.rv * cam.zoom < PARAMS.sprite.speckR) continue;
+    if (!p || p === c.la || p === c.lb || p.rv * z < minR) continue;
     const ax = toSX(c.x + c.ox), ay = toSY(c.y + c.oy), dx = toSX(p.x + p.ox) - ax, dy = toSY(p.y + p.oy) - ay;
     const len = Math.sqrt(dx * dx + dy * dy);
     if (len < 1) continue;
@@ -2547,7 +2708,7 @@ function setupInput() {
 const debug = {
   on: false, history: [], nextSample: 0,
   frameMs: new Float64Array(PARAMS.debug.frameSamples), frameIdx: 0, frameCount: 0,
-  droppedTicks: 0, checksum: null,
+  droppedTicks: 0, checksum: null, sync: null, syncTick: 0,
 };
 
 function meanNutrient(w) {
@@ -2622,16 +2783,16 @@ function drawFieldMaps(w) {
 
 function drawDebug(w) {
   const D = PARAMS.debug, pop = aliveCount(w);
-  let sx = 0, sy = 0;
-  for (const c of w.cells) if (!c.dying) { sx += Math.cos(c.theta); sy += Math.sin(c.theta); }
-  const sync = pop ? Math.sqrt(sx * sx + sy * sy) / pop : 0;
+  if (!debug.sync || w.tick - debug.syncTick >= D.syncEvery) { debug.sync = syncStats(w); debug.syncTick = w.tick; }
+  const sy = debug.sync;
   const n = Math.min(debug.frameCount, debug.frameMs.length);
   const ms = Array.from(debug.frameMs.subarray(0, n)).sort((p, q) => p - q);
   const avg = n ? ms.reduce((s, v) => s + v, 0) / n : 0, p95 = n ? ms[Math.floor(n * 0.95)] : 0;
   const ck = debug.checksum ? pad(debug.checksum.minute, 2) + ' ' + debug.checksum.hash.toString(16).toUpperCase().padStart(8, '0') : '-';
   const lines = [
-    'POP ' + pop + '  CYST ' + w.cysts.length,
-    'SYNC ' + sync.toFixed(2) + '  NUT ' + meanNutrient(w).toFixed(2),
+    'POP ' + pop + '  CYST ' + w.cysts.length + '  NUT ' + meanNutrient(w).toFixed(2),
+    'SYNC ' + sy.local.toFixed(2) + ' LK ' + sy.locked.toFixed(2) + ' G ' + sy.global.toFixed(2),
+    'CHAIN ' + sy.chains + ' MAX ' + sy.longest + ' IN ' + Math.round(sy.chained * 100) + '%',
     'VOX -  ONS -',
     'MS ' + avg.toFixed(1) + '  P95 ' + p95.toFixed(1),
     'DROP ' + debug.droppedTicks,

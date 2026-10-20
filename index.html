@@ -95,7 +95,7 @@ const PARAMS = {
   //   per-cell mortality = rate * Z * K*B/(B^2+K^2)      dZ/dt = Z*(growth*f - decay) + diffusion
   // The lag between food and grazers ends blooms and lets the water recover.
   grazing: {
-    rate: 0.05, halfB: 0.5, growth: 0.03, decay: 0.006,   // 1/s; halfB in biomass per grid node
+    rate: 0.05, halfB: 0.5, growth: 0.03, decay: 0.0025,   // 1/s; halfB in biomass per grid node
     floor: 0.05, diffusion: 0.05, max: 6,
     recycled: 0.7,                      // excreted in place; the rest sinks as fecal pellets
   },

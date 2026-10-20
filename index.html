@@ -133,7 +133,7 @@ const PARAMS = {
   // light) slowly becomes an elder (0..1): its uptake, upkeep, ageing, pulse and swimming slow (it settles where it is), it stores energy before dividing
   // and grows (an elder barely divides). Judged by day only (at night every cell is in the dark); fades slowly in brighter water. Dividing
   // halves it. Elders sing long, low drones; the oldest full elder holds the harmonic root.
-  elder: { light: 0.12, grow: 1 / 300, fade: 1 / 300, slowUpkeep: 0.8, slowAge: 0.95, slowPulse: 0.75, settle: 0.9, store: 2, size: 0.5, singFrom: 0.6 },   // light 0.12: deeper than ~half the column
+  elder: { light: 0.12, grow: 1 / 200, fade: 1 / 300, slowUpkeep: 0.8, slowAge: 0.95, slowPulse: 0.75, settle: 0.9, store: 2, size: 0.5, singFrom: 0.6 },   // light 0.12: deeper than ~half the column
   // Bioluminescence: an inherited trait of Alexandrium-form dinoflagellates only. At division a daughter may
   // gain it or lose it, so glowing clades arise now and then, spread among kin and fade (about 1 in 6 at balance).
   // Seen only at night; it changes nothing else.
@@ -153,6 +153,11 @@ const PARAMS = {
     stay: 0.05,                         // per neighbour heard: a cell keeps its degree unless a step sounds clearly better
     drift: 0.25,                        // chance a daughter starts one degree from her mother
     rootRest: 180,                      // s a new key holds before another elder can move it
+    // A free colony sings melody over chord: the cell that starts plays its tune, neighbours who join hold one long
+    // chord tone each (release x hold). A chain plays its chord as an arpeggio instead: its cells' notes from low to
+    // high, and back down for a straight chain, round and round for rings and stars, over one period of its pulse.
+    hold: 1.6,
+    arp: { minNotes: 4, maxNotes: 8, rest: 0.8 },   // rest: periods before the same chain arpeggiates again
     // Lineage motifs (local rule): each lineage carries a short tune, scale steps from the cell's degree placed on
     // a Euclidean rhythm (notes spread as evenly as they fit, rotated) on a loop of 3..8 slots across one period of its own pulse. Inherited at division; now and then a note
     // moves a step (mutate) or a note is added or dropped (grow). A singer sings it over a bout of 1..boutMax flashes.
@@ -203,6 +208,18 @@ const PARAMS = {
     startleGain: 0.7, startleDry: 0.5, startleBright: 1.3,
     // Elder drones: a sine sub with two soft pad partials (octave and twelfth, detuned apart) under a filter that
     // opens through the swell and closes through the long fade
+    // Ambience: the ocean itself, built from filtered noise and short tones, every sound a discrete event that
+    // swells and fades (overlapping, so the bed never stops). Each layer follows the world: the surface wash with
+    // the wind, the deep hum darker at night, a groan while an upwelling plume rises, a whoosh as a school passes,
+    // and a chirp for every bubble you see.
+    ambience: {
+      gain: 0.55, wet: 0.25, noiseSeconds: 3,
+      swell: { everyCalm: 6, everyStorm: 2.2, durCalm: 10, durStorm: 5, gainCalm: 0.012, gainStorm: 0.09, freqCalm: 320, freqStorm: 1300 },
+      hum: { every: 8, dur: 18, gain: 0.045, freqDay: 150, freqNight: 75 },
+      plume: { every: 5, dur: 11, gain: 0.07, freq: 70, freqEnd: 150, q: 3 },
+      school: { every: 2.4, dur: 2.4, gain: 0.05, freq: 260, freqEnd: 950, q: 1.2 },
+      bubble: { gain: 0.035, perSecond: 10, rise: 1.8, durMin: 0.04, durMax: 0.12, freqMin: 500, freqMax: 1600, seepFreq: 260 },
+    },
     drone: { gain: 0.2, pad: 0.06, cutLow: 160, cutHigh: 950, detune: 7, wet: 0.55, pan: 0.35, maxNodes: 4 },   // startle blurts: a little quieter, drier and brighter
     vibrato: { rateMin: 0.15, rateMax: 0.45, cents: 7 },   // soft cells' slow breathing, each note at its own rate
     // The world as macros, eased every update s: brightness follows daylight, echoes follow the sea state (long in
@@ -267,6 +284,10 @@ const PARAMS = {
           chopFrom: 0.45, chopDepth: 40, chopRate: 0.25 },
   // Singing made visible: the cell swells and brightens with the note's own envelope (a dot grows to a speck),
   // and one ring of its pigment spreads from it, so every note can be traced to its singer at any zoom.
+  // Bubbles: breaking chop entrains clusters just under the surface that sink a little and rise back to pop;
+  // now and then gas seeps from the sediment and a few bubbles rise through the whole column. Each one chirps.
+  bubbles: { chopFrom: 0.35, chopFull: 0.85, clusters: 1.4, clusterMin: 3, clusterMax: 8, depthMin: 3, depthMax: 18, plunge: 9,
+             seepRate: 0.025, seepMin: 2, seepMax: 5, rMin: 0.35, rMax: 1.1, riseMin: 5, riseMax: 13, drag: 2, wobble: 0.6, wobbleRate: 5, max: 120 },
   elderLook: { darken: 0.55, ringSlow: 3.5, ringBig: 2.5, haloBig: 2 },   // elders: darker pigment; slow, wide rings and halo while droning
   song: { ringPx: 9, ringZoom: 0.6, ringTime: 1.6, ringStart: 1.5, swell: 0.35, lift: 0.9,
           haloRadius: 2.5, haloMinPx: 3, haloMaxPx: 16, haloStrength: 0.45 },
@@ -774,7 +795,7 @@ function createCell(w, x, y, g, energy, parentId, spriteSeed) {
     theta: w.rng.next() * TAU, flashTick: -1000, dying: 0, grazed: false, eaten: null,
     pull: 0, nbrs: 0, locked: 0,                       // Kuramoto: sum of sin(theta_j - theta_i), neighbours, those in phase
     deg: 0, noteTick: -1000, startleTick: -1000, motif: null, bout: 0,
-    elder: 0, elderAge: 0, droneNext: 0, droneEnd: 0, rvBase: 0,   // elder (0..1), time as a full elder; drones     // scale degree (rule 7); last phrase began; lineage tune; flashes left to sing
+    elder: 0, elderAge: 0, droneNext: 0, droneEnd: 0, rvBase: 0, arpTick: -1e9,   // elder (0..1), time as a full elder; drones     // scale degree (rule 7); last phrase began; lineage tune; flashes left to sing
     lum: false,                                        // bioluminescent (Alexandrium only; inherited)
     la: null, lb: null, chainLen: 1, chainId: 0,       // chain links toward the head (la) and the tail (lb)
     head: null, kickScale: 1, kx: 0, ky: 0,            // the colony's head and its shared Brownian kick
@@ -1592,16 +1613,19 @@ function singAndListen(w) {
       if (c.elder >= PARAMS.elder.singFrom) { drone(w, c); continue; }   // elders drone instead of singing tunes
       if (c.energy < V.minEnergy) { c.bout = 0; continue; }
       const len = c.motif.slots.length;
-      let sing;
+      let sing, hold = false;
       if (c.bout > 0) { c.bout--; sing = m.tokens >= len; }                      // still in its bout
-      else if (heardNote(w, c)) sing = m.tokens >= len && (c.la || c.lb || m.rng.chance(V.join));   // joins a neighbour's song (chain mates always)
+      else if (heardNote(w, c)) { hold = true; sing = m.tokens >= 1 && (c.la || c.lb || m.rng.chance(V.join)); }   // joins (chain mates always)
       else {
         const thrive = c.lum && dark ? 1 : Math.max(V.restFloor, smoothstep(0, V.thriveFull, c.vigor));
         const lock = smoothstep(0, V.lockedFull, c.locked);
         sing = m.rng.chance(V.start * thrive) && m.tokens >= len * (1 + V.lonerRoom * (1 - lock));
         if (sing) c.bout = m.rng.int(PARAMS.harmony.motif.boutMax);
       }
-      if (sing) startPhrase(w, c);
+      if (!sing) continue;
+      if (c.chainId) arpeggio(w, c);       // a chain arpeggiates its chord
+      else if (hold) holdTone(w, c);       // a joiner holds a chord tone under the tune
+      else startPhrase(w, c);
     }
   }
   if (w.visitors.length) startle(w);
@@ -1699,6 +1723,39 @@ function brushedBy(v, c) {
   return dx * dx + dy * dy < reach * reach;
 }
 
+// A joiner holds one long chord tone under the neighbour's tune
+function holdTone(w, c) {
+  const m = w.music;
+  m.tokens -= 1;
+  c.noteTick = w.tick;
+  if (m.ends.length < PARAMS.voices.max) emitNote(w, c, 0, false, true, m.nextPhrase++, false, PARAMS.harmony.hold);
+}
+
+// A chain's arpeggio: its cells sound in pitch order (up and back for a straight chain, round for rings and stars),
+// spread over one period of the singer's pulse. Once per chain until it has rested.
+const ARP = [];
+function arpeggio(w, c) {
+  const m = w.music, A = PARAMS.harmony.arp, head = c.head, period = 1 / c.g.omega;
+  if (!head || w.tick - head.arpTick < A.rest * period * PARAMS.time.tickRate) return;
+  const order = [];
+  for (let k = head; k; k = k.lb) if (!k.dying) order.push({ k, p: notePitch(m, k, 0) });
+  if (order.length < 2) return;
+  order.sort((a, b) => a.p - b.p || a.k.id - b.k.id);
+  ARP.length = 0;
+  for (const o of order) ARP.push(o.k);
+  if (c.habit === 0) for (let i = order.length - 2; i > 0; i--) ARP.push(order[i].k);
+  for (let i = 0; ARP.length < A.minNotes; i++) ARP.push(ARP[i]);
+  ARP.length = Math.min(ARP.length, A.maxNotes);
+  if (m.tokens < ARP.length) return;
+  m.tokens -= ARP.length;
+  head.arpTick = w.tick;
+  c.noteTick = w.tick;
+  const phrase = m.nextPhrase++, step = period / ARP.length;
+  for (let i = 0; i < ARP.length; i++) {
+    m.pending.push({ due: w.tick + Math.round(i * step * PARAMS.time.tickRate), c: ARP[i], step: 0, phrase, final: i === ARP.length - 1 });
+  }
+}
+
 // The motif's notes fall on its rhythm grid across one period of the cell's own pulse: fast pulses, quick tunes
 function startPhrase(w, c) {
   const m = w.music, mo = c.motif, period = 1 / c.g.omega, phrase = m.nextPhrase++;
@@ -1768,8 +1825,9 @@ function bendStep(m, c, step) {
   return up < base ? step + 1 : step;
 }
 
-function emitNote(w, c, step, last, final, phrase, startled) {
+function emitNote(w, c, step, last, final, phrase, startled, stretch) {
   const m = w.music, V = PARAMS.voices, Mu = V.muffle, sh = voiceShape(c, last, final);
+  if (stretch) sh.release *= stretch;
   let midi = notePitch(m, c, last || startled ? step : bendStep(m, c, step));
   if (startled) {
     midi += 12 * V.startle.octaves;
@@ -1863,7 +1921,12 @@ function startAudio() {
   const wet = gain(1);
   wet.connect(verb);
 
-  Object.assign(audio, { ctx, master, bus, wet, lp, fb, delayIn, verbIn, waves: buildWaves(ctx), started: true });
+  const Am = A.ambience, amb = gain(Am.gain), ambWet = gain(Am.wet);
+  amb.connect(master); amb.connect(ambWet); ambWet.connect(verb);
+  const noise = ctx.createBuffer(1, Math.floor(Am.noiseSeconds * ctx.sampleRate), ctx.sampleRate), nrng = makeRng(0x5ea);
+  const nd = noise.getChannelData(0);
+  for (let i = 0; i < nd.length; i++) nd[i] = nrng.next() * 2 - 1;
+  Object.assign(audio, { ctx, master, bus, wet, lp, fb, delayIn, verbIn, amb, noise, waves: buildWaves(ctx), started: true });
   if (ctx.state !== 'running') ctx.resume();
 }
 
@@ -1998,6 +2061,84 @@ function audioWeather(w, now) {
   glide(audio.fb.gain, Wt.echoCalm + (Wt.echoStorm - Wt.echoCalm) * w.wind);
   glide(audio.delayIn.gain, Wt.sendCalm + (Wt.sendStorm - Wt.sendCalm) * w.wind);
   glide(audio.verbIn.gain, Wt.roomClear + (Wt.roomBloom - Wt.roomClear) * clamp(bio / Wt.bloomFull, 0, 1));
+}
+
+// ---- Ambience ----
+// A noise event: a stretch of the noise buffer through a filter (optionally sweeping), swelling and fading once
+function noiseEvent(dur, peak, type, freq, q, panX, freqEnd) {
+  const ctx = audio.ctx, t0 = ctx.currentTime + 0.05, end = t0 + dur;
+  const src = ctx.createBufferSource();
+  src.buffer = audio.noise;
+  src.loop = true;
+  const f = ctx.createBiquadFilter();
+  f.type = type; f.Q.value = q;
+  f.frequency.setValueAtTime(freq, t0);
+  if (freqEnd) f.frequency.exponentialRampToValueAtTime(freqEnd, end);
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.linearRampToValueAtTime(Math.max(0.0002, peak), t0 + dur * 0.4);
+  g.gain.exponentialRampToValueAtTime(0.0001, end);
+  const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+  src.connect(f); f.connect(g);
+  if (pan) { pan.pan.value = clamp(panX, -1, 1); g.connect(pan); pan.connect(audio.amb); } else g.connect(audio.amb);
+  src.start(t0, ambRng.next() * audio.noise.duration);
+  src.stop(end + 0.05);
+  src.onended = () => { for (const node of [src, f, g, pan]) if (node) node.disconnect(); };
+}
+
+// A bubble's chirp: a small sine whose pitch rises as it rings down (smaller bubbles ring higher)
+let bubbleBudget = 0, bubbleBudgetAt = 0;
+function bubbleSound(x, size, seep) {
+  if (!audio.started || audio.muted) return;
+  const B = PARAMS.audio.ambience.bubble, ctx = audio.ctx, now = ctx.currentTime;
+  bubbleBudget = Math.min(B.perSecond, bubbleBudget + (now - bubbleBudgetAt) * B.perSecond);
+  bubbleBudgetAt = now;
+  if (bubbleBudget < 1) return;
+  bubbleBudget -= 1;
+  const t0 = now + 0.02 + ambRng.next() * 0.05, dur = B.durMin + (B.durMax - B.durMin) * ambRng.next();
+  const f0 = seep ? B.seepFreq * (0.8 + 0.4 * ambRng.next()) : B.freqMax - (B.freqMax - B.freqMin) * size;
+  const osc = ctx.createOscillator(), g = ctx.createGain(), pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+  osc.frequency.setValueAtTime(f0, t0);
+  osc.frequency.exponentialRampToValueAtTime(f0 * B.rise, t0 + dur);
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.linearRampToValueAtTime(B.gain * (seep ? 1.4 : 1), t0 + 0.004);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  osc.connect(g);
+  if (pan) { pan.pan.value = (x / W * 2 - 1) * 0.8; g.connect(pan); pan.connect(audio.amb); } else g.connect(audio.amb);
+  osc.start(t0);
+  osc.stop(t0 + dur + 0.05);
+  osc.onended = () => { for (const node of [osc, g, pan]) if (node) node.disconnect(); };
+}
+
+// Each layer schedules its next overlapping event from the state of the world
+const ambRng = makeRng(0xa3b1e);
+const ambNext = { swell: 0, hum: 0, plume: 0, school: 0 };
+function audioAmbience(w) {
+  if (!audio.started || audio.muted) return;
+  const Am = PARAMS.audio.ambience, t = audio.ctx.currentTime, wind = w.wind, r = () => ambRng.next();
+  const lerp = (a, b, k) => a + (b - a) * k;
+  if (t >= ambNext.swell) {   // the surface: soft and slow in calm water, loud, bright and quick in a storm
+    const S = Am.swell;
+    noiseEvent(lerp(S.durCalm, S.durStorm, wind) * (0.8 + 0.4 * r()), lerp(S.gainCalm, S.gainStorm, wind),
+               'lowpass', lerp(S.freqCalm, S.freqStorm, wind) * (0.8 + 0.4 * r()), 0.6, r() * 1.6 - 0.8);
+    ambNext.swell = t + lerp(S.everyCalm, S.everyStorm, wind) * (0.7 + 0.6 * r());
+  }
+  if (t >= ambNext.hum) {     // the deep: a low hum of the water column, darker at night
+    const S = Am.hum;
+    noiseEvent(S.dur, S.gain, 'lowpass', lerp(S.freqNight, S.freqDay, w.surfaceLight), 0.7, r() * 0.6 - 0.3);
+    ambNext.hum = t + S.every * (0.8 + 0.4 * r());
+  }
+  if (w.pulses.length && t >= ambNext.plume) {   // an upwelling plume groans as it rises
+    const S = Am.plume, pl = w.pulses[0];
+    noiseEvent(S.dur, S.gain, 'lowpass', S.freq, S.q, pl.x / W * 2 - 1, S.freqEnd);
+    ambNext.plume = t + S.every;
+  }
+  const school = w.visitors.find((v) => v.kind === 'sardines' && v.x > -30 && v.x < W + 30);
+  if (school && t >= ambNext.school) {           // a school's whoosh as it sweeps by
+    const S = Am.school, up = r() < 0.5;
+    noiseEvent(S.dur, S.gain, 'bandpass', up ? S.freq : S.freqEnd, S.q, school.x / W * 2 - 1, up ? S.freqEnd : S.freq);
+    ambNext.school = t + S.every * (0.7 + 0.6 * r());
+  }
 }
 
 function setMuted(muted) {
@@ -2423,6 +2564,59 @@ function drawParticles(L, seed, t, near) {
       if (wy < SURFACE_MAX || wy > FLOOR_MIN) continue;
       put(sx, sy, Math.min(COL.SHAFT, Math.floor(waterBand(wy)) + L.lift));
     }
+  }
+}
+
+// ---- Bubbles ----
+const bubbles = [], bubbleRng = makeRng(0xb0bb1e);
+let bubbleT = -1;
+function spawnBubble(x, y, plunge, seep) {
+  const B = PARAMS.bubbles, size = bubbleRng.next();
+  if (bubbles.length >= B.max) return;
+  bubbles.push({ x, y, vy: plunge, r: B.rMin + (B.rMax - B.rMin) * size, rise: B.riseMin + (B.riseMax - B.riseMin) * size, ph: bubbleRng.next() * TAU });
+  bubbleSound(x, size, seep);
+}
+
+function updateBubbles(w, ta) {
+  const B = PARAMS.bubbles, dt = bubbleT < 0 ? 0 : clamp(ta - bubbleT, 0, 0.5), r = () => bubbleRng.next();
+  bubbleT = ta;
+  const chop = smoothstep(B.chopFrom, B.chopFull, w.wind);
+  if (r() < chop * B.clusters * dt) {
+    const x = r() * W, n = B.clusterMin + Math.floor(r() * (B.clusterMax - B.clusterMin + 1));
+    for (let i = 0; i < n; i++) {
+      const bx = x + (r() - 0.5) * 6;
+      spawnBubble(bx, surfaceY(bx, waterT) + B.depthMin + r() * (B.depthMax - B.depthMin), B.plunge * r(), false);
+    }
+  }
+  if (r() < B.seepRate * dt) {
+    const x = 8 + r() * (W - 16), n = B.seepMin + Math.floor(r() * (B.seepMax - B.seepMin + 1));
+    for (let i = 0; i < n; i++) spawnBubble(x + (r() - 0.5) * 2, H - PARAMS.world.floor - i * 2.5, 0, i === 0);
+  }
+  let k = 0;
+  for (const b of bubbles) {
+    b.vy += (-b.rise - b.vy) * Math.min(1, B.drag * dt);
+    b.y += b.vy * dt;
+    b.ph += B.wobbleRate * dt;
+    b.x += Math.sin(b.ph) * B.wobble * dt * b.rise * 0.3;
+    if (b.y > surfaceY(b.x, waterT) + 0.5) bubbles[k++] = b;   // reached the surface: it pops
+  }
+  bubbles.length = k;
+}
+
+// A bubble is a lit speck far away, a small bright ring with a glint close up
+function drawBubbles() {
+  const z = cam.zoom;
+  for (const b of bubbles) {
+    const cx = toSX(b.x), cy = toSY(b.y), rp = b.r * z;
+    if (cx < -4 || cy < -4 || cx >= W + 4 || cy >= H + 4) continue;
+    if (rp < 1.2) { if (cx >= 0 && cy >= 0 && cx < W && cy < H) put(cx, cy, rp < 0.6 ? COL.SHAFT : COL.FOAM); continue; }
+    const steps = Math.ceil(TAU * rp * 1.5);
+    for (let s = 0; s < steps; s++) {
+      const a = s / steps * TAU, x = Math.round(cx + Math.cos(a) * rp), y = Math.round(cy + Math.sin(a) * rp);
+      if (x >= 0 && y >= 0 && x < W && y < H) put(x, y, a > Math.PI ? COL.FOAM : COL.SHAFT);   // brighter on top
+    }
+    const gx = Math.round(cx - rp * 0.4), gy = Math.round(cy - rp * 0.4);
+    if (gx >= 0 && gy >= 0 && gx < W && gy < H) put(gx, gy, COL.GLOW);
   }
 }
 
@@ -3623,6 +3817,8 @@ function composeFrame(w, now) {
   drawFlashes(w);
   drawSongs(w);
   drawVisitors(w, ta);
+  updateBubbles(w, ta);
+  drawBubbles();
   drawParticles(P.near, 3000, ta, true);
   drawHud(w, now);
   drawListenHint();
@@ -3864,6 +4060,7 @@ function frame(now) {
   if (ticks > 0 || needsRender) {
     const overlayMs = render(world, now);
     audioWeather(world, now);
+    audioAmbience(world);
     needsRender = false;
     recordFrame(performance.now() - t0 - overlayMs);
   }

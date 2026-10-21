@@ -54,8 +54,8 @@ vertical migration.
 
 - **Tap** the water: nearby cells startle, flash and dart away.
 - **Swipe** through the water (zoomed out): every cell you pass plucks its own note, like strumming a harp.
-  Moving toward the surface brightens the sound, toward the deep darkens it; moving sideways adds an octave
-  above or below.
+  Moving toward the surface brightens the sound, toward the deep darkens it; moving sideways makes the filter
+  ring, its peak following your finger from low on the left to high on the right.
 - **Pinch** or scroll to zoom in up to 8× and see the cells in detail; drag to pan.
 - The small **book** at the top right opens a field notebook: the day, a census of the forms, their daily
   migration, and a ledger of deaths and visitors. The **note** beside it turns the music off and on.

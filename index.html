@@ -32,7 +32,9 @@ const PARAMS = {
   hash: { cell: 12 },                   // must be >= the largest interaction distance
   cell: { rMin: 1.25, rMax: 4, drawScale: 0.5 },   // body radius at size 0.6 .. 1.6; cells are drawn at half of it
 
-  light: { surface: 1.0, atten: 4.0 },  // e-folding depth = a quarter of the column
+  light: { surface: 1.0, atten: 4.0, shade: 0.06 },  // e-folding depth = a quarter of the column
+  // shade (approved local rule, self-shading): light below also fades by e^(-shade x living biomass above it in the
+  // column), cells and cyanobacteria, so a dense surface bloom dims the water beneath it and limits its own depth
   // Diel cycle. Phase 0 is sunrise; the sun is up for dayFrac of the cycle, light = sqrt(sin) (sharp twilights).
   // ?day=5|10|30 picks the day length in minutes.
   // At night cells rest (circadian clock): upkeep and ageing slow to `rest` as the sun goes down.
@@ -65,7 +67,7 @@ const PARAMS = {
   // own. A cell's risk of lysis rises steeply with the biomass of its own kind around it (per grid node; half: where
   // the risk is half its top rate), so whatever crowds the water is hit hardest: kill the winner. A lysed cell bursts
   // quietly; recycled of its nutrients go straight back where it burst (the viral shunt), the rest sinks.
-  virus: { rate: 0.007, half: 0.8, recycled: 0.9 },
+  virus: { rate: 0.007, half: 0.8, recycled: 0.9, cocco: 2.5 },   // cocco: their own virus is fiercer (EhV ends Emiliania blooms)
   // Cyanobacteria (approved local rule, author): far too small and many to be cells, so they live as two fields of
   // biomass per grid node (units like a cell's biomass; nutrient content q per unit). Synechococcus-type (syn: pink-orange
   // phycoerythrin, bright surface water) and Prochlorococcus-type (pro: blue-green, a dim-light specialist: light felt as
@@ -730,11 +732,15 @@ function dayPhase(w) {
 }
 
 function updateLight(w) {
-  const { cols, rows } = PARAMS.grid, f = w.fields;
+  const { cols, rows } = PARAMS.grid, f = w.fields, ks = PARAMS.light.shade;
   w.surfaceLight = surfaceLightAt(dayPhase(w));
-  for (let j = 0; j < rows; j++) {
-    const v = f.profile[j] * w.surfaceLight;
-    for (let i = 0; i < cols; i++) f.light[j * cols + i] = v;
+  for (let i = 0; i < cols; i++) {   // self-shading: the biomass above (last tick's) dims the water below
+    let above = 0;
+    for (let j = 0; j < rows; j++) {
+      const k = j * cols + i, b = f.bio[k];
+      f.light[k] = f.profile[j] * w.surfaceLight * (ks > 0 ? dexp(-ks * (above + 0.5 * b)) : 1);
+      above += b;
+    }
   }
 }
 
@@ -1557,7 +1563,7 @@ function lyse(w, dt) {
     const c = cells[i];
     if (c.dying) continue;
     const B = sampleField(kinds[c.kind], c.x, c.y);
-    if (w.rng.chance(V.rate * B * B / (B * B + h2) * dt)) burst(w, c);
+    if (w.rng.chance(V.rate * (c.kind === 7 ? V.cocco : 1) * B * B / (B * B + h2) * dt)) burst(w, c);
   }
 }
 

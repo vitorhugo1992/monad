@@ -53,6 +53,8 @@ short list of local rules, and everything else comes out of how they interact:
   - **Dinophysis steals its chloroplasts:** it hunts the cells it meets and keeps one of their chloroplasts,
     so it slowly becomes a patchwork of its prey's colours. Stolen chloroplasts wear out, so it must keep
     hunting, and it meets the commonest prey most.
+  - **Shade:** a dense bloom near the surface dims the water beneath it, so dim-light specialists live below.
+  - **Coccolithophores' own virus** ends their blooms, as it does in the real ocean.
   - **Immigration:** "everything is everywhere, but the environment selects." Now and then a single newcomer
     drifts in from the open ocean. Most vanish; when the water turns their way, their kind is already there.
 - **Synchrony.** Each cell pulses with its own rhythm and nudges its phase toward its neighbours'

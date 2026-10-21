@@ -260,6 +260,16 @@ const PARAMS = {
     // peak: the resonant peak sideways travel builds (Hz at the left and right edges, Q, dB at full travel)
     bend: { open: 20000, closeOctaves: 6, shelfHz: 2500, openDb: 9, glide: 0.06, back: 2,
             peakLo: 220, peakHi: 3500, peakQ: 5, peakDb: 12 },   // sideways: a resonant peak that follows the finger, left low, right high
+    // Visitors' voices (author): a sardine school on screen holds a soft, airy chord in the water's key (root, fifth and
+    // ninth, each a detuned pair for shimmer), made of overlapping long swells (every s apart, dur long, attack in)
+    // so it breathes while the school stays and fades after it leaves. The sunfish calls now and then while on screen:
+    // a slow, warm low note gliding up a fifth (everyMin..everyMax s apart); basking at the surface it calls softer and
+    // an octave higher. Both go through the music bus (the music button silences them).
+    visitorVoices: {
+      school: { every: 4.5, dur: 10, attack: 3, gain: 0.018, octave: 4, cut: 2400, detune: 7, wet: 0.55, pan: 0.6 },
+      sunfish: { everyMin: 12, everyMax: 20, dur: 4.2, attack: 0.5, glideAt: 1.3, glide: 0.6, gain: 0.06, octave: 3,
+                 cut: 760, sub: 0.5, wet: 0.45, pan: 0.5, baskGain: 0.55 },
+    },
     ambience: {
       gain: 0.55, wet: 0.25, noiseSeconds: 3,
       swell: { everyCalm: 6, everyStorm: 2.2, durCalm: 10, durStorm: 5, gainCalm: 0.012, gainStorm: 0.09, freqCalm: 320, freqStorm: 1300 },
@@ -2720,6 +2730,94 @@ function audioAmbience(w) {
     noiseEvent(S.dur, S.gain, 'bandpass', up ? S.freq : S.freqEnd, S.q, school.x / W * 2 - 1, up ? S.freqEnd : S.freq);
     ambNext.school = t + S.every * (0.7 + 0.6 * r());
   }
+}
+
+// The pitch nearest to semis above the root that the scale allows, in the given octave (MIDI)
+function scaleNote(m, octave, semis) {
+  let best = 0;
+  for (const d of m.scale) if (Math.abs(d - semis % 12) < Math.abs(best - semis % 12)) best = d;
+  return 12 * (octave + 1) + m.root + best + 12 * Math.floor(semis / 12);
+}
+
+const visitorNext = { school: 0, sunfish: 0 };
+
+// Visitors' voices: the school's chord while it is on screen, the sunfish's call now and then
+function audioVisitors(w) {
+  if (!audio.started) return;
+  const V = PARAMS.audio.visitorVoices, t = audio.ctx.currentTime, onScreen = (v, r) => v.x > -r && v.x < W + r;
+  const school = w.visitors.find((v) => v.kind === 'sardines' && onScreen(v, 20));
+  if (school && t >= visitorNext.school) {
+    const S = V.school, m = w.music;
+    schoolChord([scaleNote(m, S.octave, 0), scaleNote(m, S.octave, 7), scaleNote(m, S.octave, 14)], school.x / W * 2 - 1);
+    visitorNext.school = t + S.every;
+  }
+  const fish = w.visitors.find((v) => v.kind === 'sunfish' && onScreen(v, 10));
+  if (fish && t >= visitorNext.sunfish) {
+    const F = V.sunfish, m = w.music;
+    if (visitorNext.sunfish > 0) sunfishCall(scaleNote(m, F.octave + (fish.leaving ? 1 : 0), 0), scaleNote(m, F.octave + (fish.leaving ? 1 : 0), 7),
+                                             fish.leaving ? F.baskGain : 1, fish.x / W * 2 - 1);
+    visitorNext.sunfish = t + F.everyMin + (F.everyMax - F.everyMin) * ambRng.next();
+  } else if (!fish) visitorNext.sunfish = 0;   // a sunfish arriving calls soon after it appears, not at once
+}
+
+// One long swell of the school's chord: soft pad pairs, slightly detuned, under a gentle lowpass
+function schoolChord(midis, panX) {
+  const S = PARAMS.audio.visitorVoices.school, ctx = audio.ctx, t0 = ctx.currentTime + PARAMS.audio.lookahead, end = t0 + S.dur;
+  const env = ctx.createGain(), filt = ctx.createBiquadFilter(), dry = ctx.createGain(), wet = ctx.createGain();
+  const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+  filt.type = 'lowpass'; filt.frequency.value = S.cut; filt.Q.value = 0.4;
+  env.gain.setValueAtTime(0.0001, t0);
+  env.gain.linearRampToValueAtTime(S.gain, t0 + S.attack);
+  env.gain.setValueAtTime(S.gain, t0 + S.dur * 0.45);
+  env.gain.exponentialRampToValueAtTime(0.0001, end);
+  dry.gain.value = 1 - S.wet; wet.gain.value = S.wet;
+  const oscs = [];
+  for (const midi of midis) {
+    for (const cents of [-S.detune, S.detune]) {
+      const o = ctx.createOscillator();
+      o.setPeriodicWave(audio.waves[0]);
+      o.frequency.value = 440 * Math.pow(2, (midi - 69) / 12);
+      o.detune.value = cents;
+      o.connect(filt);
+      oscs.push(o);
+    }
+  }
+  filt.connect(env);
+  let out = env;
+  if (pan) { pan.pan.value = clamp(panX, -1, 1) * S.pan; env.connect(pan); out = pan; }
+  out.connect(dry); out.connect(wet);
+  dry.connect(audio.bus); wet.connect(audio.wet);
+  for (const o of oscs) { o.start(t0); o.stop(end + 0.05); }
+  oscs[0].onended = () => { for (const node of [...oscs, filt, env, pan, dry, wet]) if (node) node.disconnect(); };
+}
+
+// The sunfish's call: a warm low tone (a filtered saw over a sine) that glides up a fifth
+function sunfishCall(fromMidi, toMidi, level, panX) {
+  const F = PARAMS.audio.visitorVoices.sunfish, ctx = audio.ctx, t0 = ctx.currentTime + PARAMS.audio.lookahead, end = t0 + F.dur;
+  const f1 = 440 * Math.pow(2, (fromMidi - 69) / 12), f2 = 440 * Math.pow(2, (toMidi - 69) / 12);
+  const body = ctx.createOscillator(), sub = ctx.createOscillator(), subG = ctx.createGain();
+  body.type = 'sawtooth'; body.frequency.value = f1;
+  sub.frequency.value = f1;
+  for (const o of [body, sub]) {
+    o.frequency.setValueAtTime(f1, t0 + F.glideAt);
+    o.frequency.exponentialRampToValueAtTime(f2, t0 + F.glideAt + F.glide);
+  }
+  subG.gain.value = F.sub;
+  const filt = ctx.createBiquadFilter(), env = ctx.createGain(), dry = ctx.createGain(), wet = ctx.createGain();
+  const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+  filt.type = 'lowpass'; filt.frequency.value = F.cut; filt.Q.value = 0.9;
+  env.gain.setValueAtTime(0.0001, t0);
+  env.gain.linearRampToValueAtTime(F.gain * level, t0 + F.attack);
+  env.gain.setValueAtTime(F.gain * level, t0 + F.glideAt + F.glide);
+  env.gain.exponentialRampToValueAtTime(0.0001, end);
+  dry.gain.value = 1 - F.wet; wet.gain.value = F.wet;
+  body.connect(filt); sub.connect(subG); subG.connect(filt); filt.connect(env);
+  let out = env;
+  if (pan) { pan.pan.value = clamp(panX, -1, 1) * F.pan; env.connect(pan); out = pan; }
+  out.connect(dry); out.connect(wet);
+  dry.connect(audio.bus); wet.connect(audio.wet);
+  for (const o of [body, sub]) { o.start(t0); o.stop(end + 0.05); }
+  body.onended = () => { for (const node of [body, sub, subG, filt, env, pan, dry, wet]) if (node) node.disconnect(); };
 }
 
 // The hand bends the master filter: b < 0 closes the lowpass, b > 0 lifts the high shelf; secs to get there
@@ -5514,6 +5612,7 @@ function frame(now) {
     const overlayMs = render(world, now);
     audioWeather(world, now);
     audioAmbience(world);
+    audioVisitors(world);
     needsRender = false;
     recordFrame(performance.now() - t0 - overlayMs);
   }

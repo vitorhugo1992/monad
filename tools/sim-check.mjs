@@ -3,23 +3,27 @@
 //
 //   node tools/sim-check.mjs [seeds=30] [minutes=30] [firstSeed=1] [param.path=value ...]
 //
-// Also checks that a world saved and restored twice on the way ends exactly where an unbroken run ends.
+// Also checks that a world saved and restored twice on the way ends exactly where an unbroken run ends, and that
+// every old saved world in tools/fixtures still loads and lives on in this version (an update must never break
+// a kept world on opening).
+//
+//   node tools/sim-check.mjs --save-fixture     saves a real world from this version into tools/fixtures
 //
 // Reports per seed: population sparkline, min/max, cap pressure, extinctions, the bloom arc,
 // diel migration, nutrient pulses, deaths by cause, nutrient conservation, phase sync and chains,
 // and the music the voice budget lets through: onsets/s, silences, chords and how consonant it is.
 // Run with phase.K=0 to see that the sync comes from rule 6.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, mkdirSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
-import { serialize } from 'node:v8';
+import { serialize, deserialize } from 'node:v8';
 
 const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const start = html.indexOf('// ===== PARAMS =====');
 const end = html.indexOf('// ===== Audio =====');
 if (start < 0 || end < 0) throw new Error('section markers not found');
 const sim = new Function(html.slice(start, end) +
-  '\nreturn { PARAMS, createWorld, stepWorld, aliveCount, nutrientInventory, worldChecksum, dayPhase, syncStats, dinoWeight, GENES, HUE_WHEEL, intervalClass, keyName, snapshotWorld, restoreWorld };')();
+  '\nreturn { PARAMS, createWorld, stepWorld, aliveCount, nutrientInventory, worldChecksum, dayPhase, syncStats, dinoWeight, GENES, HUE_WHEEL, intervalClass, keyName, snapshotWorld, restoreWorld, aliveCount: aliveCount };')();
 
 // Positional numbers, plus PARAMS overrides like metabolism.efficiency=0.2 or diel.dayLength=600
 const args = process.argv.slice(2);
@@ -29,7 +33,28 @@ for (const a of args.filter((s) => s.includes('='))) {
   for (const k of keys.slice(0, -1)) o = o[k];
   o[keys.at(-1)] = Number(value);
 }
-const [seeds = 30, minutes = 30, firstSeed = 1] = args.filter((s) => !s.includes('=')).map(Number);
+const [seeds = 30, minutes = 30, firstSeed = 1] = args.filter((s) => !s.includes('=') && !s.startsWith('--')).map(Number);
+const FIXTURES = new URL('./fixtures/', import.meta.url), FIXTURE_MINUTES = 5;
+
+// A fixture: a lived-in world (chains, elders, cysts, visitors in the water) saved as this version saves it, with
+// the checksum it reached FIXTURE_MINUTES later, so a later version can tell whether its rules still grow the same world
+if (args.includes('--save-fixture')) {
+  const rate = sim.PARAMS.time.tickRate;
+  const rich = (w) => w.visitors.length && w.cysts.length && w.cells.some((c) => c.chainLen > 1) && w.cells.some((c) => c.elder >= 1);
+  let w;
+  for (let seed = 1; seed <= 20; seed++) {
+    w = sim.createWorld(seed);
+    for (let t = 0; t < 3600 * rate && !(t > 1200 * rate && rich(w)); t++) { sim.stepWorld(w); w.music.notes.length = 0; }
+    if (rich(w)) break;
+  }
+  const snap = sim.snapshotWorld(w), after = sim.restoreWorld(structuredClone(snap));
+  for (let t = 0; t < FIXTURE_MINUTES * 60 * rate; t++) { sim.stepWorld(after); after.music.notes.length = 0; }
+  const name = `world-v${snap.v}.bin`;
+  mkdirSync(FIXTURES, { recursive: true });
+  writeFileSync(new URL(name, FIXTURES), serialize({ snap, minutes: FIXTURE_MINUTES, checksum: sim.worldChecksum(after), savedAt: new Date().toISOString() }));
+  console.log(`saved tools/fixtures/${name}: seed ${w.seed}, tick ${w.tick}, ${sim.aliveCount(w)} cells, ${w.cysts.length} cysts, visitors ${w.visitors.map((v) => v.kind).join(',')}`);
+  process.exit(0);
+}
 const rate = sim.PARAMS.time.tickRate, cap = sim.PARAMS.division.maxCells;
 const sampleTicks = 10 * rate;               // one sample every 10 s
 const BARS = ' .:-=+*#%@';
@@ -182,5 +207,24 @@ console.log('\n' + [
   `deterministic rerun: ${again.checksum === results[0].checksum ? 'yes' : 'NO'} (${results[0].checksum.toString(16)})`,
   `save/restore round trip: ${trip.same && trip.sum ? 'identical' : 'DIFFERENT'} (snapshot ~${(trip.bytes / 1024).toFixed(0)} KB, save+restore ${trip.saveMs} ms)`,
 ].join('\n'));
+
+// Every saved world from an earlier version must still load and live on: no crash, no NaN, the water's
+// nutrients still finite. Whether it grows exactly the same world tells if the rules changed since (allowed).
+let fixturesOk = true;
+const fixtureLines = [];
+for (const f of (() => { try { return readdirSync(FIXTURES).filter((n) => n.endsWith('.bin')).sort(); } catch (e) { return []; } })()) {
+  try {
+    const fx = deserialize(readFileSync(new URL(f, FIXTURES))), w = sim.restoreWorld(fx.snap), rate = sim.PARAMS.time.tickRate;
+    for (let t = 0; t < fx.minutes * 60 * rate; t++) { sim.stepWorld(w); w.music.notes.length = 0; }
+    const bad = w.cells.find((c) => ![c.x, c.y, c.vx, c.vy, c.energy, c.held, c.theta, c.age, c.elder].every(Number.isFinite));
+    if (bad || !Number.isFinite(sim.nutrientInventory(w)) || !Number.isFinite(w.wind)) throw new Error(bad ? 'cell ' + bad.id + ' has a non-finite field' : 'non-finite world');
+    fixtureLines.push(`${f}: loads and lives on (${sim.aliveCount(w)} cells after ${fx.minutes} min, ${sim.worldChecksum(w) === fx.checksum ? 'the same world as when saved' : 'the rules have changed since it was saved'})`);
+  } catch (e) {
+    fixturesOk = false;
+    fixtureLines.push(`${f}: BROKEN: ${e.message}`);
+  }
+}
+console.log(fixtureLines.length ? 'old saves: ' + (fixturesOk ? 'all load' : 'SOME FAIL') + '\n  ' + fixtureLines.join('\n  ') : 'old saves: none in tools/fixtures');
+if (!fixturesOk) process.exitCode = 1;
 
 function median(a) { const s = [...a].sort((p, q) => p - q); return s[Math.floor(s.length / 2)]; }

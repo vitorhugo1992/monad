@@ -56,8 +56,23 @@ const PARAMS = {
   // flagellates and dinoflagellates: the seasonal succession. ratio: silica taken per unit of nutrient.
   // Deep water, the nutricline, diffusion and upwelling plumes carry it like nutrients.
   silica: { deep: 1.0, surface: 0.2, half: 0.12, ratio: 0.6, dissolve: 0.3, upwelling: 1.0 },
+  // Dinophysis steals its chloroplasts (approved local rule, kleptoplasty): a Dinophysis-form cell strikes a cell it
+  // meets (rate per s while one is within its reach, in units beyond both radii), keeps assimilate of its nutrients
+  // (the rest is excreted in place) and energy of its energy, and keeps one of its chloroplasts (the last plastids
+  // prey colours are remembered). Stolen plastids fade (fade: s to 1/e; refill: what one meal restores); without them
+  // it photosynthesises at dark of its rate, so it must keep hunting. It meets the commonest prey most: it eats the winner.
+  // Viruses (approved local rule): host-specific, so each kind of cell (its form, as the notebook counts them) has its
+  // own. A cell's risk of lysis rises steeply with the biomass of its own kind around it (per grid node; half: where
+  // the risk is half its top rate), so whatever crowds the water is hit hardest: kill the winner. A lysed cell bursts
+  // quietly; recycled of its nutrients go straight back where it burst (the viral shunt), the rest sinks.
+  virus: { rate: 0.007, half: 0.8, recycled: 0.9 },
+  hunt: { rate: 0.15, reach: 2, assimilate: 0.7, energy: 0.5, refill: 0.5, fade: 240, dark: 0.15, plastids: 4 },
 
   founders: { count: 6, lineages: 2, spread: 12, energyMin: 0.4, energyMax: 0.7, maxAge: 30, depthMax: 0.65 },   // the water starts nearly empty, inoculated in the lit layer
+  // Immigration (approved local rule): everything is everywhere, the environment selects. Now and then (chance per s)
+  // a single cell of a new lineage drifts in from the open ocean at one side of the column, with random genes and
+  // form, at the depth it prefers. Most vanish; when the water turns their way, their kind is already there.
+  immigration: { rate: 1 / 75, energyMin: 0.3, energyMax: 0.6, depthMax: 0.8 },
 
   // Rule 1: drift
   drift: {
@@ -108,7 +123,7 @@ const PARAMS = {
   //   per-cell mortality = rate * Z * K*B/(B^2+K^2)      dZ/dt = Z*(growth*f - decay) + diffusion
   // The lag between food and grazers ends blooms and lets the water recover.
   grazing: {
-    rate: 0.05, halfB: 0.5, growth: 0.03, decay: 0.0025,   // 1/s; halfB in biomass per grid node
+    rate: 0.035, halfB: 0.5, growth: 0.03, decay: 0.0025,   // 1/s; halfB in biomass per grid node (rate eased from 0.05 with viruses and hunting, author)
     floor: 0.05, diffusion: 0.05, max: 6,
     recycled: 0.7,                      // excreted in place; the rest sinks as fecal pellets
   },
@@ -117,7 +132,7 @@ const PARAMS = {
   // What they eat is partly excreted in place, partly sinks as pellets, and partly leaves the column with them.
   visitors: {
     attractLo: 30, attractHi: 120,   // retuned to the populations the later phases grow (biomass peaks ~170): ~8 schools/h
-    sardines: { rate: 1 / 120, speedMin: 10, speedMax: 15, rx: 38, ry: 20, eat: 0.8, steer: 8, drag: 1.5, wave: 6,
+    sardines: { rate: 1 / 120, speedMin: 10, speedMax: 15, rx: 38, ry: 20, eat: 0.6, steer: 8, drag: 1.5, wave: 6,
                 fishMin: 28, fishMax: 42, excreted: 0.3, pellets: 0.2,     // the rest is carried away
                 turnIfAte: 25, passes: 3 },                                 // a rich pass makes the school turn back for more
     salps: { rate: 1 / 160, speedMin: 1.5, speedMax: 2.6, barrelsMin: 4, barrelsMax: 8, spacing: 6.5, tilt: 0.3,
@@ -446,7 +461,7 @@ const PARAMS = {
   // One world that lives on between visits (unless the URL picks a seed or another start: a scratch world, never saved).
   // every: real s between autosaves (also on hiding the page); chunkRows: notebook rows per stored chunk, so a save
   // writes only the rows that changed.
-  persist: { db: 'monad', every: 30, chunkRows: 1024, version: 2,
+  persist: { db: 'monad', every: 30, chunkRows: 1024, version: 3,
     // Catching up: the time away is lived again, exactly, up to maxAway (s); beyond it the water rests. A worker runs
     // it out of sight and shows a frame every show s (a silent time-lapse); the last tail simulated s play on the page,
     // from tailSpeed x slowing to real time, so the recap glides into the live world. bench: s measured by ?bench.
@@ -604,6 +619,7 @@ for (const name of Object.keys(TIME_PALETTES)) {
 }
 
 // ===== Fields =====
+const KINDS = 7;   // green algae, the four dinoflagellate forms, centric and pennate diatoms
 const GRID_W = W / PARAMS.grid.cols, GRID_H = H / PARAMS.grid.rows;
 
 function createFields() {
@@ -612,6 +628,7 @@ function createFields() {
     light: new Float64Array(n), profile: new Float64Array(rows), nut: new Float64Array(n), scratch: new Float64Array(n),
     bio: new Float64Array(n), graz: new Float64Array(n), grazScratch: new Float64Array(n),
     si: new Float64Array(n), siScratch: new Float64Array(n),
+    kinds: Array.from({ length: KINDS }, () => new Float64Array(n)),   // biomass per kind, for the viruses
   };
   const Si = PARAMS.silica;
   for (let j = 0; j < rows; j++) {
@@ -796,6 +813,8 @@ function deriveTraits(c) {
   c.targetLight = PARAMS.light.surface * dexp(-PARAMS.light.atten * c.g.depthPref);
   c.dinoW = dinoWeight(c.g.timbre);
   c.glassW = smoothstep(PARAMS.dino.fade, PARAMS.dino.gone, c.g.timbre);   // how much of a diatom it is: its need for silica
+  c.hunter = c.dinoW > 0.5 && lineageDinoForm(c.spriteSeed) === 'dinophysis';   // steals chloroplasts
+  c.kind = kindOf(c);
   c.rvBase = c.r * PARAMS.cell.drawScale * (1 + (PARAMS.dino.scale - 1) * c.dinoW);   // drawn radius (and register)
   c.rv = c.rvBase * (1 + PARAMS.elder.size * c.elder);                                  // elders grow
   if (!c.la && !c.lb) chainHabit(c);   // a colony keeps the habit it was founded with
@@ -838,6 +857,14 @@ function chainHabit(c) {
   c.tanHalf = dsin(c.turn / 2) / dsin(c.turn / 2 + Math.PI / 2);
   c.restK = c.habit === 2 ? Hb.starRest : PARAMS.chain.rest;
   c.along = null;                                       // render cache of the chain orientation
+}
+
+// The form a cell is (as the sprite draws it): 0 green algae, 1-4 the dinoflagellates, 5 centric, 6 pennate diatom
+function kindOf(c) {
+  const Dn = PARAMS.dino, tb = c.g.timbre;
+  if (dinoWeight(tb) > 0.5) return 1 + Dn.forms.indexOf(lineageDinoForm(c.spriteSeed));
+  if (tb < Dn.full) return 0;
+  return lineagePennate(c.spriteSeed) ? 6 : 5;
 }
 
 // How much of a dinoflagellate a cell is (the middle of the timbre range): 0..1
@@ -883,6 +910,7 @@ function createCell(w, x, y, g, energy, parentId, spriteSeed) {
   deriveTraits(c);
   c.lifespan = lifespanFor(c, w.rng);
   c.held = PARAMS.metabolism.uptake * c.biomass * energy;
+  if (c.hunter) { c.klepto = 1; c.plastids = [hueRamp(g)]; }   // a founder or a germinating cyst starts with a full set
   return c;
 }
 
@@ -896,6 +924,7 @@ function cellObject(id, parentId, x, y, g, energy, theta, spriteSeed) {
     deg: 0, noteTick: -1000, startleTick: -1000, motif: null, bout: 0,
     elder: 0, elderAge: 0, droneNext: 0, droneEnd: 0, rvBase: 0, arpTick: -1e9,   // elder (0..1), time as a full elder; drones     // scale degree (rule 7); last phrase began; lineage tune; flashes left to sing
     lum: false,                                        // bioluminescent (Alexandrium only; inherited)
+    hunter: false, klepto: 0, plastids: null, pv: 0, kind: 0,   // Dinophysis: stolen chloroplasts (0..1), their prey colours, a version for the sprite
     la: null, lb: null, chainLen: 1, chainId: 0,       // chain links toward the head (la) and the tail (lb)
     head: null, kickScale: 1, kx: 0, ky: 0,            // the colony's head and its shared Brownian kick
     habit: 0, turn: 0, tanHalf: 0, restK: 0, along: null,   // colony habit (0 straight, 1 coil, 2 star): from the lineage and form
@@ -939,10 +968,11 @@ function createWorld(seed, founderCount, dayLength) {
     pulses: [], lastPulse: -1e9,
     wind: PARAMS.wind.start, windTarget: PARAMS.wind.start, nextWind: 0,
     fallen: new Float64Array(PARAMS.grid.cols),   // detritus exported per column, ever (observed only, never read by the rules)
-    deaths: { starved: 0, old: 0, grazed: 0, sardines: 0, salps: 0 },   // observed only
+    deaths: { starved: 0, old: 0, grazed: 0, sardines: 0, salps: 0, hunted: 0, lysed: 0 },   // observed only
     inputs: [], disturb: [],                        // the hand: queued gestures, active disturbances
     visitors: [], nextVisitorId: 1, carried: 0,     // carried: nutrients that left the column inside visitors
     siUpwelled: 0, initialSilica: 0,                // silica in from the deep; at the start (observed only)
+    immigrants: 0, imported: 0,                     // newcomers from the open ocean, and the nutrients they brought (observed only)
     extinctTick: -1,                                // observed only: when the last cell and the last cyst were gone
     music: createMusic(seed),                       // harmonic field and voice budget; never feeds back into the biology
   };
@@ -976,7 +1006,7 @@ function aliveCount(w) {
   return n;
 }
 
-// Field + nutrients bound in cells + cyst reserves. Changes only by upwelling (in) and visitors (carried out).
+// Field + nutrients bound in cells + cyst reserves. Changes only by upwelling and newcomers (in) and visitors (carried out).
 function nutrientInventory(w) {
   let s = 0;
   const nut = w.fields.nut;
@@ -1060,9 +1090,12 @@ function stepWorld(w) {
   singAndListen(w);
   updateChains(w, dt);
   graze(w, dt);
+  lyse(w, dt);
+  hunt(w, dt);
   updateVisitors(w, dt);
   lifeAndDeath(w);
   updateCysts(w, dt);
+  immigrate(w, dt);
   // Extinction is an ending, not a reset: the water goes on, empty and silent
   if (w.extinctTick < 0 && !w.cysts.length && aliveCount(w) === 0) w.extinctTick = w.tick;
 }
@@ -1204,12 +1237,16 @@ function ageElder(w, c, dt) {
 
 // Rule 2: energy += light x nutrients x efficiency - maintenance. Uptake removes nutrients locally.
 // Upkeep slows with the night rest (pace).
+const KLEPTO_K = dexp(-TICK_DT / PARAMS.hunt.fade);   // stolen plastids fade, per tick
+
 function metabolise(w, c, dt, pace) {
   const f = w.fields;
   const L = sampleField(f.light, c.x, c.y), N = sampleField(f.nut, c.x, c.y), T = PARAMS.turbulence;
   const calm = c.dinoW > 0 ? Math.max(0, 1 - T.inhibit * c.dinoW * w.wind * dexp(-c.y / (H * T.mixDepth))) : 1;   // Margalef
   const Si = PARAMS.silica, glass = c.glassW, S = glass > 0 ? sampleField(f.si, c.x, c.y) : 0;
-  const siLim = 1 - glass + glass * S / (S + Si.half);   // diatoms slow as silica runs low
+  const siLim = (1 - glass + glass * S / (S + Si.half))   // diatoms slow as silica runs low
+    * (c.hunter ? PARAMS.hunt.dark + (1 - PARAMS.hunt.dark) * c.klepto : 1);   // Dinophysis photosynthesises with stolen plastids
+  if (c.hunter) c.klepto *= KLEPTO_K;
   const gain = c.gainK * L * N / (N + c.halfSat) * calm * siLim * (1 - PARAMS.elder.slowUpkeep * c.elder) * dt;   // elders: slow metabolism
   const want = gain * PARAMS.metabolism.uptake * c.biomass;
   const got = want > 0 ? takeField(f.nut, c.x, c.y, want) : 0;
@@ -1345,6 +1382,74 @@ function graze(w, dt) {
     const m = G.rate * Z * K * B / (B * B + K * K) / (1 + PARAMS.chain.refuge * (c.chainLen - 1));   // chains: a size refuge
     if (w.rng.chance(m * dt)) eaten(w, c);
   }
+}
+
+// Viruses: each kind has its own, and a cell's risk rises with the biomass of its own kind around it
+function lyse(w, dt) {
+  const V = PARAMS.virus, cells = w.cells, kinds = w.fields.kinds, h2 = V.half * V.half;
+  for (let k = 0; k < KINDS; k++) kinds[k].fill(0);
+  for (let i = 0; i < cells.length; i++) if (!cells[i].dying) addField(kinds[cells[i].kind], cells[i].x, cells[i].y, cells[i].biomass);
+  for (let i = 0; i < cells.length; i++) {
+    const c = cells[i];
+    if (c.dying) continue;
+    const B = sampleField(kinds[c.kind], c.x, c.y);
+    if (w.rng.chance(V.rate * B * B / (B * B + h2) * dt)) burst(w, c);
+  }
+}
+
+function burst(w, c) {
+  c.dying = 1;
+  unlink(c);
+  c.lysed = true;
+  w.deaths.lysed++;
+  const here = c.held * PARAMS.virus.recycled;
+  addField(w.fields.nut, c.x, c.y, here);
+  exportDetritus(w, c.x, c.held - here);
+  c.held = 0;
+  releaseSilica(w, c);
+}
+
+// Dinophysis hunts: each strikes now and then if a cell is within reach (the first it finds), so it meets the
+// commonest prey most. The prey vanishes quietly, like a grazed cell.
+function hunt(w, dt) {
+  const Hn = PARAMS.hunt, hs = w.hash, cells = w.cells, p = Hn.rate * dt;
+  for (let i = 0; i < cells.length; i++) {
+    const c = cells[i];
+    if (!c.hunter || c.dying || !w.rng.chance(p)) continue;
+    const ci = clamp(Math.floor(c.x / hs.s), 0, hs.cols - 1), cj = clamp(Math.floor(c.y / hs.s), 0, hs.rows - 1);
+    let prey = null;
+    for (let j = cj - 1; j <= cj + 1 && !prey; j++) {
+      if (j < 0 || j >= hs.rows) continue;
+      for (let i2 = ci - 1; i2 <= ci + 1 && !prey; i2++) {
+        if (i2 < 0 || i2 >= hs.cols) continue;
+        const b = j * hs.cols + i2;
+        for (let n = hs.start[b], end = hs.start[b + 1]; n < end; n++) {
+          const o = hs.items[n];
+          if (o === c || o.dying || o.hunter) continue;
+          const dx = o.x - c.x, dy = o.y - c.y, reach = c.r + o.r + Hn.reach;
+          if (dx * dx + dy * dy < reach * reach) { prey = o; break; }
+        }
+      }
+    }
+    if (prey) devour(w, c, prey);
+  }
+}
+
+function devour(w, c, o) {
+  const Hn = PARAMS.hunt, kept = o.held * Hn.assimilate;
+  o.dying = 1;
+  unlink(o);
+  o.grazed = true;
+  w.deaths.hunted++;
+  c.held += kept;
+  addField(w.fields.nut, o.x, o.y, o.held - kept);
+  o.held = 0;
+  c.energy += Math.max(0, o.energy) * Hn.energy;
+  releaseSilica(w, o);
+  c.klepto = Math.min(1, c.klepto + Hn.refill);
+  (c.plastids || (c.plastids = [])).push(hueRamp(o.g));
+  if (c.plastids.length > Hn.plastids) c.plastids.shift();
+  c.pv++;
 }
 
 // A grazed cell vanishes quietly: no cyst; most of its nutrients are excreted in place, the rest sink as pellets.
@@ -1553,6 +1658,7 @@ function divide(w, c) {
   }
   b.held = c.held * 0.5;
   b.si = c.si * 0.5;
+  b.klepto = c.klepto; b.plastids = c.plastids ? c.plastids.slice() : null;
   b.vx = c.vx; b.vy = c.vy;
   b.theta = c.theta;
   b.vigor = c.vigor;
@@ -1600,6 +1706,21 @@ function die(w, c, starved) {
   c.held = 0;
   releaseSilica(w, c);
   if (starved) w.deaths.starved++; else w.deaths.old++;
+}
+
+// A newcomer from the open ocean: one cell of a new lineage drifts in at a side of the column
+function immigrate(w, dt) {
+  const Im = PARAMS.immigration, rng = w.rng;
+  if (!rng.chance(Im.rate * dt) || aliveCount(w) >= PARAMS.division.maxCells) return;
+  const g = randomGenome(rng), spriteSeed = rng.int(0x7fffffff), left = rng.chance(0.5);
+  g.depthPref *= Im.depthMax;
+  const x = left ? 3 : W - 3, y = clamp(g.depthPref * H + gauss(rng) * 10, 8, H - PARAMS.world.floor - 8);
+  const c = createCell(w, x, y, g, rng.range(Im.energyMin, Im.energyMax), null, spriteSeed);
+  c.deg = w.music.rng.int(w.music.scale.length);
+  c.motif = randomMotif(w.music.rng);
+  w.cells.push(c);
+  w.immigrants++;
+  w.imported += c.held;   // it brings its nutrients from outside
 }
 
 // Cysts sink, rest, then germinate where nutrients are rich, or lose viability.
@@ -2063,7 +2184,7 @@ const keyName = (m) => NOTE_NAMES[m.root] + ' ' + m.scaleName.toUpperCase();
 // world steps on exactly as if it had never stopped. Shared objects and cycles (chains, the cells notes point at)
 // survive; references into PARAMS are kept as paths, so a restored world reads the very same constants. Render
 // caches are left out and rebuilt. The snapshot is structured-cloneable (IndexedDB, and later a worker).
-const SNAP_SKIP = new Set(['hash', 'spr', 'along', 'songAt', 'songAtk', 'songRel', 'songLast', 'songDrone', 'pluckAt']);
+const SNAP_SKIP = new Set(['hash', 'kinds', 'scratch', 'grazScratch', 'siScratch', 'spr', 'along', 'songAt', 'songAtk', 'songRel', 'songLast', 'songDrone', 'pluckAt']);
 let paramPaths = null;
 
 function paramPathMap() {
@@ -2140,6 +2261,11 @@ function reshape(w) {
       const n = cellObject(v.id, v.parentId, v.x, v.y, genome(v.g), v.energy, v.theta, v.spriteSeed);
       for (const k of Object.keys(v)) if (k !== 'g') n[k] = v[k];
       if (v.glassW === undefined) n.glassW = smoothstep(PARAMS.dino.fade, PARAMS.dino.gone, n.g.timbre);   // saved before silica
+      if (v.kind === undefined) n.kind = kindOf(n);
+      if (v.hunter === undefined) {   // saved before Dinophysis hunted
+        n.hunter = n.dinoW > 0.5 && lineageDinoForm(n.spriteSeed) === 'dinophysis';
+        if (n.hunter) { n.klepto = 1; n.plastids = [hueRamp(n.g)]; }
+      }
       swap.set(v, n);
     }
     for (const k of Object.keys(v)) visit(v[k], seen);
@@ -2163,10 +2289,11 @@ function reshape(w) {
 function restoreWorld(snap) {
   const w = decodeSnap(snap.world), fresh = createWorld(w.seed, 1, w.dayLength);
   reshape(w);
-  const fields = Object.assign(fresh.fields, w.fields), music = Object.assign(fresh.music, w.music);
+  const fields = Object.assign(fresh.fields, w.fields), music = Object.assign(fresh.music, w.music), deaths = Object.assign(fresh.deaths, w.deaths);
   Object.assign(fresh, w);
   fresh.fields = fields;
   fresh.music = music;
+  fresh.deaths = deaths;
   return fresh;
 }
 
@@ -3247,7 +3374,9 @@ function buildSprite(c, rpx, angle, z, key) {
     plastids.push({
       u: Math.cos(ang) * rad * a, v: Math.sin(ang) * rad * b,
       r: Math.max(S.plastidMinR, (nPl === 1 ? S.cupR : S.plastidR) * rpx * own.range(0.85, 1.15)),
-      ph: linPl.next() * TAU, alt: hash01(seed + k * 977) < pMix ? ALT : 0,
+      ph: linPl.next() * TAU,
+      alt: c.hunter && c.plastids && c.plastids.length && k < Math.ceil(c.klepto * nPl) ? ALT * (2 + k % c.plastids.length)   // stolen
+        : hash01(seed + k * 977) < pMix ? ALT : 0,
     });
   }
 
@@ -3392,7 +3521,7 @@ function buildSprite(c, rpx, angle, z, key) {
 
 // Rebuilds are rationed per frame; past the budget a cell keeps its previous sprite for a moment.
 function spriteFor(c, rpx, step) {
-  const key = ((c.gen * 9 + Math.round(c.elder * 8)) * ZOOMS.length + cam.level) * PARAMS.sprite.tumbleSteps + step;   // elders grow: rebuild
+  const key = (((c.pv * 5 + Math.ceil(c.klepto * 4)) * 4096 + c.gen * 9 + Math.round(c.elder * 8)) * ZOOMS.length + cam.level) * PARAMS.sprite.tumbleSteps + step;   // elders grow, plastids are stolen and fade: rebuild
   const s = c.spr;
   if (s && (s.key === key || performance.now() > buildDeadline)) return s;
   return (c.spr = buildSprite(c, rpx, step * TAU / PARAMS.sprite.tumbleSteps, cam.zoom, key));
@@ -3493,7 +3622,7 @@ function drawCell(c, tick, t) {
   const sung = songLevel(c);
   const spr = rpx < S.dotR && sung < PARAMS.song.swell ? DOT : rpx < S.speckR ? SPECK : spriteFor(c, rpx, step);   // a singing dot swells
   const irPhase = step + c.id + Math.floor(t * S.iridSpeed);
-  const base = rampBase(hueRamp(c.g)), base2 = rampBase(hueNeighbour(c.g));
+  const base = rampBase(hueRamp(c.g)), base2 = rampBase(hueNeighbour(c.g)), stolen = c.plastids;
   if (!c.dying && spr.key >= 0) drawFlagella(c, cx, cy, step * TAU / steps, rpx, spr, base);
 
   const frame = (Math.floor(tick * S.wobbleFps / PARAMS.time.tickRate) + c.id) % S.frames;
@@ -3520,11 +3649,11 @@ function drawCell(c, tick, t) {
       if (t0 === IRIDESCENT) {
         idx = muted ? base + BASE : IRID_SET[mod(irPhase + ((bx + 2 * by) >> 1), IRID_SET.length)];
       } else {
-        const alt = t0 >= ALT;
-        let tt = alt ? t0 - ALT : t0;
+        const slot = t0 >= ALT ? Math.floor(t0 / ALT) : 0;   // 0 own, 1 the neighbouring colour, 2.. stolen plastids
+        let tt = t0 - slot * ALT;
         if (muted && tt > 0) tt--;
         if (old > 0 && tt > 0 && BAYER[(((by + 1) & 3) << 2) | ((bx + 2) & 3)] < old) tt--;   // elders darken
-        idx = (alt ? base2 : base) + tt;
+        idx = (slot === 0 ? base : slot === 1 ? base2 : stolen && stolen[slot - 2] !== undefined ? rampBase(stolen[slot - 2]) : base) + tt;
       }
       if (pulse > 0) {
         const pb = BAYER[(((by + 1) & 3) << 2) | ((bx + 3) & 3)];
@@ -4453,13 +4582,14 @@ const FORMS = [
 const CAUSES = [
   { key: 'starved', name: 'STARVED', ramp: GOLD }, { key: 'old', name: 'OLD AGE', ramp: VIOLET },
   { key: 'grazed', name: 'GRAZED', ramp: ROSE }, { key: 'sardines', name: 'SARDINES', ramp: LIGHTBLUE },
-  { key: 'salps', name: 'SALPS', ramp: EMERALD },
+  { key: 'salps', name: 'SALPS', ramp: EMERALD }, { key: 'hunted', name: 'HUNTED', ramp: BLUE },
+  { key: 'lysed', name: 'LYSED', ramp: VIOLET },
 ];
 const VISITOR_INK = [
   { kind: 'sardines', name: 'SARDINES', ramp: LIGHTBLUE }, { kind: 'salps', name: 'SALPS', ramp: VIOLET },
   { kind: 'sunfish', name: 'SUNFISH', ramp: GOLD },
 ];
-const PAGES = ['THE DAY', 'CENSUS', 'MIGRATION', 'LEDGER'];
+const PAGES = ['THE DAY', 'CENSUS', 'THE WATER', 'MIGRATION', 'LEDGER'];
 const SEA_STATES = ['CALM', 'BREEZE', 'WINDY', 'STORM'];
 // The notebook glyph, an open book: o page, - a line of writing; the spine is the gap between the pages
 const GLYPH = ['ooooo...ooooo', 'oooooo.oooooo', 'o----o.o----o', 'oooooo.oooooo', 'o----o.o----o', 'oooooo.oooooo', 'o---oo.oo---o', 'oooooo.oooooo', '..oooo.oooo..'];
@@ -4467,23 +4597,18 @@ const PAGE_INK = 1;   // the page: one step above the darkest water
 
 // One row of the record: offsets into the flat Float32Array (N, DEPTH and SD hold one value per form).
 // TICK holds simulated seconds (whole numbers, exact in a Float32 for ~194 days of life); rowTick turns it back.
-const NB = { TICK: 0, LIGHT: 1, WIND: 2, NUT: 3, GRAZ: 4, POP: 5, CYSTS: 6, CHAINED: 7, GLOW: 8, N: 9, DEPTH: 16, SD: 23, DEATHS: 30, STRIDE: 35 };
+const NB = { TICK: 0, LIGHT: 1, WIND: 2, NUT: 3, GRAZ: 4, POP: 5, CYSTS: 6, CHAINED: 7, GLOW: 8, N: 9, DEPTH: 16, SD: 23, DEATHS: 30, SILICA: 37, STRIDE: 38 };
 
 const notebook = {
   open: false, page: 0, span: PARAMS.notebook.startSpan, solo: -1, hits: [],
   rows: new Float32Array(4096 * NB.STRIDE), count: 0, every: PARAMS.notebook.sampleEvery * PARAMS.time.tickRate, next: 0,
-  visits: [], seenVisitor: 1, cols: null, colsKey: '',
+  visits: [], seenVisitor: 1, cols: null, colsKey: '', confirm: false,   // confirm: NEW WATER asked, waiting for YES or NO
   rests: [],   // the kept world resting while away beyond the catch-up limit: { tick, s }
 };
 const rowTick = (r, i) => r[i * NB.STRIDE + NB.TICK] * PARAMS.time.tickRate;
 
 // The form a cell is drawn as: soft flagellate, one of the four dinoflagellates, centric or pennate diatom
-function formOf(c) {
-  const Dn = PARAMS.dino, tb = c.g.timbre;
-  if (dinoWeight(tb) > 0.5) return 1 + Dn.forms.indexOf(lineageDinoForm(c.spriteSeed));
-  if (tb < Dn.full) return 0;
-  return lineagePennate(c.spriteSeed) ? 6 : 5;
-}
+const formOf = (c) => c.kind;
 
 // Called after every tick: visitors are logged as they arrive, the rest every sampleEvery s
 function notebookSample(w) {
@@ -4501,6 +4626,7 @@ function notebookSample(w) {
   r[o + NB.LIGHT] = w.surfaceLight;
   r[o + NB.WIND] = w.wind;
   r[o + NB.NUT] = meanNutrient(w);
+  r[o + NB.SILICA] = meanSilica(w);
   let z = 0;
   for (let i = 0; i < graz.length; i++) z += graz[i];
   r[o + NB.GRAZ] = z / graz.length;
@@ -4581,13 +4707,13 @@ function notebookColumns() {
   const t0 = s && s < t1 ? t1 - s : 0;
   const cols = {
     t0, t1, first: rowAt(t0), has: new Uint8Array(CW), k: new Float32Array(CW),
-    light: new Float32Array(CW), nut: new Float32Array(CW), graz: new Float32Array(CW), pop: new Float32Array(CW),
+    light: new Float32Array(CW), nut: new Float32Array(CW), graz: new Float32Array(CW), pop: new Float32Array(CW), si: new Float32Array(CW),
     n: new Float32Array(CW * F), depth: new Float32Array(CW * F), sd: new Float32Array(CW * F),
   };
   for (let i = cols.first; i < n; i++) {
     const o = i * S, c = t1 > t0 ? Math.min(CW - 1, Math.floor((rowTick(r, i) - t0) / (t1 - t0) * CW)) : CW - 1;
     cols.k[c]++;
-    cols.light[c] += r[o + NB.LIGHT]; cols.nut[c] += r[o + NB.NUT]; cols.graz[c] += r[o + NB.GRAZ]; cols.pop[c] += r[o + NB.POP];
+    cols.light[c] += r[o + NB.LIGHT]; cols.nut[c] += r[o + NB.NUT]; cols.graz[c] += r[o + NB.GRAZ]; cols.pop[c] += r[o + NB.POP]; cols.si[c] += r[o + NB.SILICA];
     for (let f = 0; f < F; f++) {
       const m = r[o + NB.N + f], d = r[o + NB.DEPTH + f], sd = r[o + NB.SD + f];
       cols.n[c * F + f] += m;
@@ -4595,7 +4721,7 @@ function notebookColumns() {
       cols.sd[c * F + f] += m * (sd * sd + d * d);
     }
   }
-  const scalars = [cols.light, cols.nut, cols.graz, cols.pop], perForm = [cols.n, cols.depth, cols.sd];
+  const scalars = [cols.light, cols.nut, cols.graz, cols.pop, cols.si], perForm = [cols.n, cols.depth, cols.sd];
   for (let c = 0; c < CW; c++) {
     const k = cols.k[c];
     if (k) {
@@ -4793,7 +4919,8 @@ function drawNotebook(w) {
     fillRect(dx0 + i * 6 + 2, fy + 2, 2, 2, i === notebook.page ? COL.FOAM : COL.SLATE);
     hit(dx0 + i * 6, fy - 3, 6, 11, () => { notebook.page = i; });
   }
-  [drawDayPage, drawCensusPage, drawMigrationPage, drawLedgerPage][notebook.page](w, P.y + 19);
+  if (notebook.page !== PAGES.length - 1 || !notebook.open) notebook.confirm = false;   // a question left unanswered is withdrawn
+  [drawDayPage, drawCensusPage, drawWaterPage, drawMigrationPage, drawLedgerPage][notebook.page](w, P.y + 19);
 }
 
 // The notebook keeps day colours at every hour, so it reads the same at night
@@ -4904,7 +5031,14 @@ function drawCensusPage(w, y) {
   dotted(P.x + 6, x1 - 7, y + 89, COL.SLATE);
   drawSpanRow(y + 95);
 
-  const cols = notebookColumns(), cy0 = y + 107, ch = 129, CX = N.chart.x;
+  const cols = notebookColumns(), cy0 = y + 107, ch = 129;
+  drawStack(cols, cy0, ch);
+  drawTimeAxis(cols, cy0 + ch + 3);
+}
+
+// The population over the window, stacked by form (green algae at the bottom), nights dark behind
+function drawStack(cols, cy0, ch) {
+  const N = PARAMS.notebook, F = FORMS.length, CX = N.chart.x;
   chartBackground(cols, cy0, ch);
   let top = 1;
   for (let c = 0; c < N.chart.w; c++) {
@@ -4913,7 +5047,7 @@ function drawCensusPage(w, y) {
     top = Math.max(top, tot);
   }
   const scale = niceCeil(top);
-  for (let c = 0; c < N.chart.w; c++) {   // stacked by form, soft flagellates at the bottom
+  for (let c = 0; c < N.chart.w; c++) {
     if (!cols.has[c]) continue;
     let acc = 0;
     for (let f = 0; f < F; f++) {
@@ -4926,7 +5060,35 @@ function drawCensusPage(w, y) {
   }
   inkRight(CX - 3, cy0, String(scale), COL.SLATE);
   inkRight(CX - 3, cy0 + ch - 5, '0', COL.SLATE);
-  drawTimeAxis(cols, cy0 + ch + 3);
+}
+
+// III. The water: its chemistry over the window (nutrients and silica on one scale, grazers to their own peak),
+// and the population by form underneath on the same time axis, so a silica crash lines up with the diatoms' fall
+function drawWaterPage(w, y) {
+  const N = PARAMS.notebook, P = N.page, F = FORMS.length, CX = N.chart.x, CW = N.chart.w;
+  drawSpanRow(y);
+  const cols = notebookColumns();
+  const series = [
+    { name: 'NUTRIENTS', a: cols.nut, idx: rampBase(GOLD) + HIGHLIGHT },
+    { name: 'SILICA', a: cols.si, idx: rampBase(LIGHTBLUE) + BRIGHT },
+    { name: 'GRAZERS', a: cols.graz, idx: rampBase(ROSE) + HIGHLIGHT, own: true },
+  ];
+  let lx = P.x + 6;
+  for (const sr of series) { ink(lx, y + 11, sr.name, sr.idx); lx += textWidth(sr.name) + 8; }
+  const cy0 = y + 20, ch = 88;
+  chartBackground(cols, cy0, ch);
+  let shared = 0;   // nutrients and silica share one scale, so the two can be compared
+  for (let c = 0; c < CW; c++) if (cols.has[c]) shared = Math.max(shared, cols.nut[c], cols.si[c]);
+  for (const sr of series) {
+    let top = sr.own ? 0 : shared;
+    if (sr.own) for (let c = 0; c < CW; c++) if (cols.has[c]) top = Math.max(top, sr.a[c]);
+    if (top <= 0) continue;
+    chartLine(cy0, (c) => (cols.has[c] ? ch - 1 - Math.round(sr.a[c] / top * (ch - 1)) : -1), sr.idx);
+  }
+  const sy0 = cy0 + ch + 6, sh = 100;
+  drawStack(cols, sy0, sh);
+  drawTimeAxis(cols, sy0 + sh + 3);
+  for (let f = 0; f < F; f++) drawIcon(CX + Math.round(f * (CW - 7) / (F - 1)), sy0 + sh + 14, f, false);   // the forms, bottom to top of the stack
 }
 
 // III. Migration: each form's mean depth over the window, nights dark behind (the diel vertical migration figure).
@@ -5005,8 +5167,8 @@ function drawLedgerPage(w, y) {
     { name: 'CELLS', a: cols.pop, idx: COL.FOAM },
   ];
   let lx = P.x + 6;
-  for (const s of [...series].reverse()) { ink(lx, y + 69, s.name, s.idx); lx += textWidth(s.name) + 8; }
-  const cy0 = y + 78, ch = 110;
+  for (const s of [...series].reverse()) { ink(lx, y + 87, s.name, s.idx); lx += textWidth(s.name) + 8; }
+  const cy0 = y + 96, ch = 104;
   chartBackground(cols, cy0, ch);
   for (const s of series) {   // each scaled to its own peak in the window
     let top = 0;
@@ -5032,6 +5194,26 @@ function drawLedgerPage(w, y) {
     ink(lx, vy + 11, text, rampBase(k.ramp) + HIGHLIGHT);
     lx += textWidth(text) + 9;
   });
+  drawNewWater(vy + 30);
+}
+
+// NEW WATER: ends this world and seeds a new one, but only after a YES (kept world only)
+function drawNewWater(y) {
+  if (!keeper.db) return;
+  const P = PARAMS.notebook.page, x1 = P.x + P.w, cx = P.x + (P.w >> 1);
+  dotted(P.x + 6, x1 - 7, y - 6, COL.SLATE);
+  if (!notebook.confirm) {
+    const text = 'NEW WATER', tw = textWidth(text);
+    ink(cx - (tw >> 1), y + 2, text, rampBase(ROSE) + HIGHLIGHT);
+    hit(cx - (tw >> 1) - 6, y - 3, tw + 12, 14, () => { notebook.confirm = true; });
+    return;
+  }
+  inkCentre(y - 1, 'END THIS WORLD FOR NEW WATER?', COL.FOAM);
+  const yes = 'YES', no = 'NO';
+  ink(cx - 22, y + 9, yes, rampBase(ROSE) + HIGHLIGHT);
+  hit(cx - 28, y + 4, textWidth(yes) + 12, 14, () => { notebook.confirm = false; seedNewWater(); });
+  ink(cx + 12, y + 9, no, COL.FOAM);
+  hit(cx + 6, y + 4, textWidth(no) + 12, 14, () => { notebook.confirm = false; });
 }
 
 // ===== Input =====
@@ -5343,7 +5525,7 @@ function hashString(s) {
 // any of them starts a scratch world that is never saved, so trying a seed never overwrites the kept one.
 // ?seed= (number or word), ?debug, ?stress (start at the cell cap), ?ff=seconds (fast-forward),
 // ?zoom=1..4 with ?at=x,y (world point to centre on), ?speed=1|2|4|8 (time-lapse), ?day=5|10|30 (minutes),
-// ?notebook=1..4 (open the field notebook on that page), ?bench (how fast this device lives a world out of sight).
+// ?notebook=1..5 (open the field notebook on that page), ?bench (how fast this device lives a world out of sight).
 // M turns the music off, N opens the notebook.
 function readOptions() {
   const q = new URLSearchParams(location.search);
@@ -5395,6 +5577,14 @@ async function loadWorld(db) {
   for (let i = 0; i < rec.chunks; i++) keys.push('rows:' + i);
   const rows = await storeGet(db, keys);
   const chunks = keys.map((k) => rows[k] || new Float32Array(0));
+  if (rec.v < 3) {   // rows before v3 had 35 columns (no hunted, no lysed, no silica)
+    const was = 35;
+    for (let k = 0; k < chunks.length; k++) {
+      const old = chunks[k], n = old.length / was, wide = new Float32Array(n * NB.STRIDE);
+      for (let i = 0; i < n; i++) wide.set(old.subarray(i * was, (i + 1) * was), i * NB.STRIDE);
+      chunks[k] = wide;
+    }
+  }
   if (rec.v < 2) for (const c of chunks) for (let o = 0; o < c.length; o += NB.STRIDE) c[o + NB.TICK] /= PARAMS.time.tickRate;   // rows kept ticks before v2
   return { rec, world: restoreWorld(rec.snap), rows: chunks };
 }

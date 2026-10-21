@@ -36,6 +36,16 @@ short list of local rules, and everything else comes out of how they interact:
 - **Grazers and visitors.** An invisible field of grazers grows where cells are dense and starves away
   slowly, which ends blooms and lets the water recover. Big blooms draw in sardine schools and salp chains,
   and the salps draw in an ocean sunfish.
+- **Succession.** As in the real ocean, no group keeps the water for long:
+  - **Silicate:** diatoms need silica for their glass. It stays in the shell until the cell dies, then mostly
+    sinks, so a diatom bloom strips the surface of silica and opens the water to the others.
+  - **Viruses:** each kind of cell has its own, and its risk rises with how crowded its kind is, so whatever
+    dominates gets hit hardest ("kill the winner"). Burst cells feed their neighbours.
+  - **Dinophysis steals its chloroplasts:** it hunts the cells it meets and keeps one of their chloroplasts,
+    so it slowly becomes a patchwork of its prey's colours. Stolen chloroplasts wear out, so it must keep
+    hunting, and it meets the commonest prey most.
+  - **Immigration:** "everything is everywhere, but the environment selects." Now and then a single newcomer
+    drifts in from the open ocean. Most vanish; when the water turns their way, their kind is already there.
 - **Synchrony.** Each cell pulses with its own rhythm and nudges its phase toward its neighbours'
   (a Kuramoto model). Related cells lock together and flash as one; colonies and chains appear without any
   colony code.
@@ -50,7 +60,8 @@ when it dies, the whole water may modulate.
 
 The author studies phytoplankton, so the biology is meant to carry weight: size allometry, Margalef's mandala
 (turbulence against dinoflagellates), a lagged grazer response, the biological pump, resting cysts, diel
-vertical migration.
+vertical migration, silica limitation, viral lysis and the viral shunt, kleptoplasty, and a seed bank of
+newcomers.
 
 ## Playing
 
@@ -59,8 +70,10 @@ vertical migration.
   Moving toward the surface brightens the sound, toward the deep darkens it; moving sideways makes the filter
   ring, its peak following your finger from low on the left to high on the right.
 - **Pinch** or scroll to zoom in up to 8× and see the cells in detail; drag to pan.
-- The small **book** at the top right opens a field notebook: the day, a census of the forms, their daily
-  migration, and a ledger of deaths and visitors. The **note** beside it turns the music off and on.
+- The small **book** at the top right opens a field notebook: the day, a census of the forms, the water
+  (nutrients, silica and grazers over time, lined up with the population of each form, so you can watch the
+  succession happen), their daily migration, and a ledger of deaths (grazed, eaten by fish, hunted, lysed by
+  viruses...) and visitors. The **note** beside it turns the music off and on.
 
 ## A world that keeps living
 
@@ -69,7 +82,8 @@ away: the missed hours are simulated exactly, shown as a silent time-lapse that 
 Up to 12 hours are lived; beyond that the water rests, and the notebook marks the gap.
 
 Worlds can die. Crashes run deep, and now and then the last cell and the last cyst are gone. The water goes
-on, empty and silent, with an epitaph. A tap seeds new water. On average a world lives a few days.
+on, empty and silent, with an epitaph. A tap seeds new water. You can also end a living world yourself: the
+notebook's last page ends with **NEW WATER**, which asks before it lets the old world go.
 
 ## Install it on your phone
 

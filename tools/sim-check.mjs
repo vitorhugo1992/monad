@@ -132,7 +132,7 @@ function run(seed) {
   for (const o of [...onsetTicks, total]) { const g = (o - prev) / rate; longest = Math.max(longest, g); if (g >= 6) quiet += g; prev = o; }
   const music = { ons: onsetTicks.length / (total / rate), longest, quiet: quiet / (total / rate), chords2: chords2 / minutes, chords3: chords3 / minutes,
                   harsh: pairs ? harsh / pairs : 0, seconds: pairs ? seconds / pairs : 0, lastNotes, maxVox, key: sim.keyName(w.music) };
-  const drift = sim.nutrientInventory(w) - (w.initialInventory + w.upwelled - w.carried);
+  const drift = sim.nutrientInventory(w) - (w.initialInventory + w.upwelled - w.carried + w.imported);
   const siDrift = sim.silicaInventory(w) - (w.initialSilica + w.siUpwelled);
   const mean = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : NaN);
   const alive = w.cells.filter((c) => !c.dying);
@@ -165,13 +165,13 @@ const results = [];
 for (let s = firstSeed; s < firstSeed + seeds; s++) {
   const r = run(s);
   results.push(r);
-  const f = (v) => v.toFixed(2), d = r.deaths, dt = d.starved + d.old + d.grazed + d.sardines + d.salps || 1;
+  const f = (v) => v.toFixed(2), d = r.deaths, dt = d.starved + d.old + d.grazed + d.sardines + d.salps + (d.hunted || 0) + (d.lysed || 0) || 1;
   process.stdout.write(
     `seed ${String(s).padStart(4)} |${spark(r.pops)}| min ${String(r.minPop).padStart(3)} max ${String(r.maxPop).padStart(3)}` +
     ` late min ${String(r.lateCellMin).padStart(3)} (+cysts ${String(r.lateMin).padStart(3)})` +
     ` cap ${(r.capFrac * 100).toFixed(1).padStart(4)}% ${r.extinct ? `EXTINCT at ${r.extinctAt.toFixed(0)} min` : '       '} arcs ${r.arc.n} falls ${r.arc.dieoffs}` +
     ` | depth noon ${f(r.noon)} night ${f(r.night)} | pulses ${r.pulses}` +
-    ` | deaths S/O/G/F/Sp ${[d.starved, d.old, d.grazed, d.sardines, d.salps].map((x) => Math.round(100 * x / dt)).join('/')}%` +
+    ` | deaths S/O/G/F/Sp/H/V ${[d.starved, d.old, d.grazed, d.sardines, d.salps, d.hunted, d.lysed].map((x) => Math.round(100 * x / dt)).join('/')}%` +
     ` | size ${f(r.size)} ramps ${r.ramps.join('/')} drift ${r.drift.toExponential(1)}` +
     ` | sync loc ${f(r.sync.local)} lock ${f(r.sync.locked)} glob ${f(r.sync.global)}` +
     ` | chains ${r.sync.chains.toFixed(1)} in ${Math.round(r.sync.chained * 100)}% max ${r.longest} rings ${r.sync.coils.toFixed(1)} stars ${r.sync.stars.toFixed(1)}` +
@@ -216,6 +216,7 @@ console.log('\n' + [
   `dinoflagellates: median share ${Math.round(100 * median(results.map((r) => r.dino.share)))}%, seeds with a bloom of >=50: ${results.filter((r) => r.dino.peak >= 50).length}/${n}, median time spent >=50: ${Math.round(100 * median(results.map((r) => r.dino.over50)))}%`,
   `music (median): onsets ${median(results.map((r) => r.music.ons)).toFixed(2)}/s, near-silence ${Math.round(100 * median(results.map((r) => r.music.quiet)))}% of the time, chords ${median(results.map((r) => r.music.chords2)).toFixed(1)}/min (3+ ${median(results.map((r) => r.music.chords3)).toFixed(1)}), m2/tritone clashes ${(100 * median(results.map((r) => r.music.harsh))).toFixed(1)}%, seconds ${Math.round(100 * median(results.map((r) => r.music.seconds)))}%`,
   `diversity, second half (median): diatoms ${Math.round(100 * median(results.map((r) => r.groups.glass)))}%, dinoflagellates ${Math.round(100 * median(results.map((r) => r.groups.dino)))}%, flagellates ${Math.round(100 * median(results.map((r) => r.groups.soft)))}%; monoculture (one group >= 90%) ${Math.round(100 * median(results.map((r) => r.groups.mono)))}% of the time, worst seed ${Math.round(100 * Math.max(...results.map((r) => r.groups.mono)))}%; leading the water (mean share of time) diatoms ${Math.round(100 * results.reduce((s, r) => s + r.groups.lead[0], 0) / results.length)}%, dinoflagellates ${Math.round(100 * results.reduce((s, r) => s + r.groups.lead[1], 0) / results.length)}%, flagellates ${Math.round(100 * results.reduce((s, r) => s + r.groups.lead[2], 0) / results.length)}%`,
+  `causes of death (median share): ${['starved', 'old', 'grazed', 'sardines', 'salps', 'hunted', 'lysed'].map((k) => k + ' ' + Math.round(100 * median(results.map((r) => { const d = r.deaths, t = Object.values(d).reduce((s, v) => s + v, 0) || 1; return (d[k] || 0) / t; }))) + '%').join(', ')}`,
   `max |nutrient drift|: ${Math.max(...results.map((r) => Math.abs(r.drift))).toExponential(2)}, |silica drift|: ${Math.max(...results.map((r) => Math.abs(r.siDrift))).toExponential(2)}`,
   `deterministic rerun: ${again.checksum === results[0].checksum ? 'yes' : 'NO'} (${results[0].checksum.toString(16)})`,
   `save/restore round trip: ${trip.same && trip.sum ? 'identical' : 'DIFFERENT'} (snapshot ~${(trip.bytes / 1024).toFixed(0)} KB, save+restore ${trip.saveMs} ms)`,

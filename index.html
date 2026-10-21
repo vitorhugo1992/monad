@@ -4708,12 +4708,15 @@ function notebookColumns() {
   const cols = {
     t0, t1, first: rowAt(t0), has: new Uint8Array(CW), k: new Float32Array(CW),
     light: new Float32Array(CW), nut: new Float32Array(CW), graz: new Float32Array(CW), pop: new Float32Array(CW), si: new Float32Array(CW),
+    lys: new Float32Array(CW),   // cells burst by viruses per minute (from the ledger's running count)
     n: new Float32Array(CW * F), depth: new Float32Array(CW * F), sd: new Float32Array(CW * F),
   };
   for (let i = cols.first; i < n; i++) {
     const o = i * S, c = t1 > t0 ? Math.min(CW - 1, Math.floor((rowTick(r, i) - t0) / (t1 - t0) * CW)) : CW - 1;
     cols.k[c]++;
     cols.light[c] += r[o + NB.LIGHT]; cols.nut[c] += r[o + NB.NUT]; cols.graz[c] += r[o + NB.GRAZ]; cols.pop[c] += r[o + NB.POP]; cols.si[c] += r[o + NB.SILICA];
+    const LY = NB.DEATHS + CAUSES.findIndex((k) => k.key === 'lysed'), dtRow = i > 0 ? r[o + NB.TICK] - r[o - S + NB.TICK] : 0;
+    if (dtRow > 0) cols.lys[c] += Math.max(0, r[o + LY] - r[o - S + LY]) / dtRow * 60;
     for (let f = 0; f < F; f++) {
       const m = r[o + NB.N + f], d = r[o + NB.DEPTH + f], sd = r[o + NB.SD + f];
       cols.n[c * F + f] += m;
@@ -4721,7 +4724,7 @@ function notebookColumns() {
       cols.sd[c * F + f] += m * (sd * sd + d * d);
     }
   }
-  const scalars = [cols.light, cols.nut, cols.graz, cols.pop, cols.si], perForm = [cols.n, cols.depth, cols.sd];
+  const scalars = [cols.light, cols.nut, cols.graz, cols.pop, cols.si, cols.lys], perForm = [cols.n, cols.depth, cols.sd];
   for (let c = 0; c < CW; c++) {
     const k = cols.k[c];
     if (k) {
@@ -5062,7 +5065,8 @@ function drawStack(cols, cy0, ch) {
   inkRight(CX - 3, cy0 + ch - 5, '0', COL.SLATE);
 }
 
-// III. The water: its chemistry over the window (nutrients and silica on one scale, grazers to their own peak),
+// III. The water: its chemistry over the window (nutrients and silica on one scale; grazers, and viruses as the cells
+// they burst per minute, each to their own peak),
 // and the population by form underneath on the same time axis, so a silica crash lines up with the diatoms' fall
 function drawWaterPage(w, y) {
   const N = PARAMS.notebook, P = N.page, F = FORMS.length, CX = N.chart.x, CW = N.chart.w;
@@ -5072,6 +5076,7 @@ function drawWaterPage(w, y) {
     { name: 'NUTRIENTS', a: cols.nut, idx: rampBase(GOLD) + HIGHLIGHT },
     { name: 'SILICA', a: cols.si, idx: rampBase(LIGHTBLUE) + BRIGHT },
     { name: 'GRAZERS', a: cols.graz, idx: rampBase(ROSE) + HIGHLIGHT, own: true },
+    { name: 'VIRUSES', a: cols.lys, idx: rampBase(VIOLET) + HIGHLIGHT, own: true },   // cells they burst per minute
   ];
   let lx = P.x + 6;
   for (const sr of series) { ink(lx, y + 11, sr.name, sr.idx); lx += textWidth(sr.name) + 8; }

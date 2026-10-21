@@ -49,6 +49,13 @@ const PARAMS = {
     diffusion: 0.3,                     // grid nodes^2 per second
     upwelling: 1.0,                     // coupling of the bottom row to deep water
   },
+  // Silicate (approved local rule): diatoms need silica for their glass. Only glass cells take it, in proportion to how
+  // much glass they have; their growth slows as it runs low (half: half-saturation). It stays in the frustule until the
+  // cell dies, then mostly sinks (dissolve: share that dissolves where it dies; the rest falls to the floor), so it
+  // returns far more slowly than nutrients. A diatom bloom strips the surface of silica and opens the water to
+  // flagellates and dinoflagellates: the seasonal succession. ratio: silica taken per unit of nutrient.
+  // Deep water, the nutricline, diffusion and upwelling plumes carry it like nutrients.
+  silica: { deep: 1.0, surface: 0.2, half: 0.12, ratio: 0.6, dissolve: 0.3, upwelling: 1.0 },
 
   founders: { count: 6, lineages: 2, spread: 12, energyMin: 0.4, energyMax: 0.7, maxAge: 30, depthMax: 0.65 },   // the water starts nearly empty, inoculated in the lit layer
 
@@ -604,12 +611,15 @@ function createFields() {
   const f = {
     light: new Float64Array(n), profile: new Float64Array(rows), nut: new Float64Array(n), scratch: new Float64Array(n),
     bio: new Float64Array(n), graz: new Float64Array(n), grazScratch: new Float64Array(n),
+    si: new Float64Array(n), siScratch: new Float64Array(n),
   };
+  const Si = PARAMS.silica;
   for (let j = 0; j < rows; j++) {
     const depth = (j + 0.5) / rows;
     f.profile[j] = PARAMS.light.surface * dexp(-PARAMS.light.atten * depth);
     const nut = N.surface + (N.deep - N.surface) * smoothstep(N.clineTop, N.clineBottom, depth);
-    for (let i = 0; i < cols; i++) f.nut[j * cols + i] = nut;
+    const si = Si.surface + (Si.deep - Si.surface) * smoothstep(N.clineTop, N.clineBottom, depth);
+    for (let i = 0; i < cols; i++) { f.nut[j * cols + i] = nut; f.si[j * cols + i] = si; }
   }
   f.graz.fill(PARAMS.grazing.floor);
   return f;
@@ -677,9 +687,25 @@ function takeField(a, x, y, amount) {
 // Explicit diffusion; closed sides and top, bottom row exchanges with deep water (upwelling).
 // Returns the net amount that entered from below this tick.
 function diffuseNutrients(f, dt) {
-  const { cols, rows } = PARAMS.grid, N = PARAMS.nutrients;
-  const k = N.diffusion * dt, kb = k * N.upwelling;
-  const a = f.nut, b = f.scratch;
+  const N = PARAMS.nutrients, k = N.diffusion * dt;
+  const inflow = diffuseGrid(f.nut, f.scratch, k, k * N.upwelling, N.deep);
+  const a = f.nut;
+  f.nut = f.scratch; f.scratch = a;
+  return inflow;
+}
+
+// Silicate diffuses and wells up the same way, toward its own deep concentration
+function diffuseSilica(f, dt) {
+  const Si = PARAMS.silica, k = PARAMS.nutrients.diffusion * dt;
+  const inflow = diffuseGrid(f.si, f.siScratch, k, k * Si.upwelling, Si.deep);
+  const a = f.si;
+  f.si = f.siScratch; f.siScratch = a;
+  return inflow;
+}
+
+// One explicit diffusion step from a into b; the bottom row exchanges with deep water of concentration deep
+function diffuseGrid(a, b, k, kb, deep) {
+  const { cols, rows } = PARAMS.grid;
   let inflow = 0;
   for (let j = 0; j < rows; j++) {
     for (let i = 0; i < cols; i++) {
@@ -687,11 +713,10 @@ function diffuseNutrients(f, dt) {
       const l = i > 0 ? a[idx - 1] : c, r = i < cols - 1 ? a[idx + 1] : c;
       const u = j > 0 ? a[idx - cols] : c, d = j < rows - 1 ? a[idx + cols] : c;
       let v = c + k * (l + r + u + d - 4 * c);
-      if (j === rows - 1) { const q = kb * (N.deep - c); v += q; inflow += q; }
+      if (j === rows - 1) { const q = kb * (deep - c); v += q; inflow += q; }
       b[idx] = v;
     }
   }
-  f.nut = b; f.scratch = a;
   return inflow;
 }
 
@@ -770,6 +795,7 @@ function deriveTraits(c) {
   c.maintK = M.maintenance / rs;             // per-biomass upkeep ~ size^-1/2: big cells endure the dark
   c.targetLight = PARAMS.light.surface * dexp(-PARAMS.light.atten * c.g.depthPref);
   c.dinoW = dinoWeight(c.g.timbre);
+  c.glassW = smoothstep(PARAMS.dino.fade, PARAMS.dino.gone, c.g.timbre);   // how much of a diatom it is: its need for silica
   c.rvBase = c.r * PARAMS.cell.drawScale * (1 + (PARAMS.dino.scale - 1) * c.dinoW);   // drawn radius (and register)
   c.rv = c.rvBase * (1 + PARAMS.elder.size * c.elder);                                  // elders grow
   if (!c.la && !c.lb) chainHabit(c);   // a colony keeps the habit it was founded with
@@ -864,7 +890,7 @@ function createCell(w, x, y, g, energy, parentId, spriteSeed) {
 function cellObject(id, parentId, x, y, g, energy, theta, spriteSeed) {
   return {
     id, parentId, x, y, vx: 0, vy: 0,
-    energy, held: 0, age: 0, lifespan: 0, vigor: 0,   // vigor: smoothed growth conditions, observed only
+    energy, held: 0, si: 0, age: 0, lifespan: 0, vigor: 0,   // si: silica in the frustule; vigor: smoothed growth conditions, observed only
     theta, flashTick: -1000, dying: 0, grazed: false, eaten: null,
     pull: 0, nbrs: 0, locked: 0,                       // Kuramoto: sum of sin(theta_j - theta_i), neighbours, those in phase
     deg: 0, noteTick: -1000, startleTick: -1000, motif: null, bout: 0,
@@ -874,7 +900,7 @@ function cellObject(id, parentId, x, y, g, energy, theta, spriteSeed) {
     head: null, kickScale: 1, kx: 0, ky: 0,            // the colony's head and its shared Brownian kick
     habit: 0, turn: 0, tanHalf: 0, restK: 0, along: null,   // colony habit (0 straight, 1 coil, 2 star): from the lineage and form
     g, spriteSeed, gen: 0,
-    r: 0, rv: 0, dinoW: 0, biomass: 0, gainK: 0, halfSat: 0, maintK: 0, targetLight: 0,
+    r: 0, rv: 0, dinoW: 0, glassW: 0, biomass: 0, gainK: 0, halfSat: 0, maintK: 0, targetLight: 0,
     spr: null, ox: 0, oy: 0, swimPh: 0, vt: 0, tempo: 1,   // sprite cache and swimming (own clock, tempo): render only
     glowTick: -1000,                                       // render only: last disturbance flash
     songAt: -1e9, songAtk: 0, songRel: 0, songLast: false, songDrone: false,  // render only: the note it is sounding (real-time ms, s)
@@ -916,6 +942,7 @@ function createWorld(seed, founderCount, dayLength) {
     deaths: { starved: 0, old: 0, grazed: 0, sardines: 0, salps: 0 },   // observed only
     inputs: [], disturb: [],                        // the hand: queued gestures, active disturbances
     visitors: [], nextVisitorId: 1, carried: 0,     // carried: nutrients that left the column inside visitors
+    siUpwelled: 0, initialSilica: 0,                // silica in from the deep; at the start (observed only)
     extinctTick: -1,                                // observed only: when the last cell and the last cyst were gone
     music: createMusic(seed),                       // harmonic field and voice budget; never feeds back into the biology
   };
@@ -939,6 +966,7 @@ function createWorld(seed, founderCount, dayLength) {
     }
   }
   w.initialInventory = nutrientInventory(w);
+  w.initialSilica = silicaInventory(w);
   return w;
 }
 
@@ -969,6 +997,22 @@ function meanNutrient(w) {
 // dinoflagellate range keeps the flag but no longer shows it
 const isLuminous = (c) => c.lum && dinoWeight(c.g.timbre) > 0.5;
 
+// Silica in the water and in the frustules. Changes only by upwelling (in).
+function silicaInventory(w) {
+  let s = 0;
+  const si = w.fields.si;
+  for (let i = 0; i < si.length; i++) s += si[i];
+  for (let i = 0; i < w.cells.length; i++) s += w.cells[i].si;
+  return s;
+}
+
+function meanSilica(w) {
+  const si = w.fields.si;
+  let s = 0;
+  for (let i = 0; i < si.length; i++) s += si[i];
+  return s / si.length;
+}
+
 const CK_VIEW = new DataView(new ArrayBuffer(8));
 function worldChecksum(w) {
   let h = 0x811c9dc5;
@@ -992,6 +1036,7 @@ function stepWorld(w) {
   w.tick++;
   updateLight(w);
   w.upwelled += diffuseNutrients(w.fields, dt);
+  w.siUpwelled += diffuseSilica(w.fields, dt);
   updateWind(w, dt);
   updatePulses(w, dt);
   applyHand(w);
@@ -1163,10 +1208,18 @@ function metabolise(w, c, dt, pace) {
   const f = w.fields;
   const L = sampleField(f.light, c.x, c.y), N = sampleField(f.nut, c.x, c.y), T = PARAMS.turbulence;
   const calm = c.dinoW > 0 ? Math.max(0, 1 - T.inhibit * c.dinoW * w.wind * dexp(-c.y / (H * T.mixDepth))) : 1;   // Margalef
-  const gain = c.gainK * L * N / (N + c.halfSat) * calm * (1 - PARAMS.elder.slowUpkeep * c.elder) * dt;   // elders: slow metabolism
+  const Si = PARAMS.silica, glass = c.glassW, S = glass > 0 ? sampleField(f.si, c.x, c.y) : 0;
+  const siLim = 1 - glass + glass * S / (S + Si.half);   // diatoms slow as silica runs low
+  const gain = c.gainK * L * N / (N + c.halfSat) * calm * siLim * (1 - PARAMS.elder.slowUpkeep * c.elder) * dt;   // elders: slow metabolism
   const want = gain * PARAMS.metabolism.uptake * c.biomass;
   const got = want > 0 ? takeField(f.nut, c.x, c.y, want) : 0;
-  c.energy += (want > 0 ? gain * got / want : 0) - c.maintK * pace * (1 - PARAMS.elder.slowUpkeep * c.elder) * dt;
+  let share = want > 0 ? got / want : 0;
+  if (glass > 0 && got > 0) {   // the glass is built from silica, in step with the growth
+    const siWant = got * Si.ratio * glass, siGot = takeField(f.si, c.x, c.y, siWant);
+    c.si += siGot;
+    if (siGot < siWant) share *= siGot / siWant;
+  }
+  c.energy += gain * share - c.maintK * pace * (1 - PARAMS.elder.slowUpkeep * c.elder) * dt;
   c.vigor += (L * N / (N + c.halfSat) - c.vigor) * dt / PARAMS.metabolism.vigorTau;   // recorded, never read by the rules (swimming, singing)
   c.held += got;
 }
@@ -1267,8 +1320,13 @@ function updatePulses(w, dt) {
     p.age += dt;
     p.y -= P.rise * dt;
     if (p.y <= p.top) continue;
-    for (let i = 0; i < cols; i++) addField(w.fields.nut, (i + 0.5) * GRID_W, p.y, p.perTick * p.weights[i]);
+    const siShare = PARAMS.silica.deep / PARAMS.nutrients.deep;   // deep water brings silica too
+    for (let i = 0; i < cols; i++) {
+      addField(w.fields.nut, (i + 0.5) * GRID_W, p.y, p.perTick * p.weights[i]);
+      addField(w.fields.si, (i + 0.5) * GRID_W, p.y, p.perTick * siShare * p.weights[i]);
+    }
     w.upwelled += p.perTick;
+    w.siUpwelled += p.perTick * siShare;
     w.pulses[k++] = p;
   }
   w.pulses.length = k;
@@ -1299,6 +1357,7 @@ function eaten(w, c) {
   addField(w.fields.nut, c.x, c.y, recycled);
   exportDetritus(w, c.x, c.held - recycled);
   c.held = 0;
+  releaseSilica(w, c);
 }
 
 // ---- Visitors: sardine schools and salp chains come to blooms; an ocean sunfish comes for the salps ----
@@ -1432,6 +1491,16 @@ function swallow(w, c, kind, S) {
   exportDetritus(w, c.x, pel);
   w.carried += c.held - ex - pel;
   c.held = 0;
+  releaseSilica(w, c);
+}
+
+// A dead cell's frustule: a little dissolves where it dies, the rest sinks to the floor (and comes back only slowly)
+function releaseSilica(w, c) {
+  if (!c.si) return;
+  const here = c.si * PARAMS.silica.dissolve;
+  addField(w.fields.si, c.x, c.y, here);
+  addField(w.fields.si, c.x, H - 1, c.si - here);
+  c.si = 0;
 }
 
 function exportDetritus(w, x, amount) {
@@ -1483,6 +1552,7 @@ function divide(w, c) {
     c.lb = b;
   }
   b.held = c.held * 0.5;
+  b.si = c.si * 0.5;
   b.vx = c.vx; b.vy = c.vy;
   b.theta = c.theta;
   b.vigor = c.vigor;
@@ -1494,6 +1564,7 @@ function divide(w, c) {
   c.g = gA;
   c.energy *= 0.5;
   c.held *= 0.5;
+  c.si *= 0.5;
   c.age = 0;
   c.parentId = null;
   c.elder *= 0.5;
@@ -1527,6 +1598,7 @@ function die(w, c, starved) {
   addField(nut, c.x, c.y, recycled);
   exportDetritus(w, c.x, give - recycled);
   c.held = 0;
+  releaseSilica(w, c);
   if (starved) w.deaths.starved++; else w.deaths.old++;
 }
 
@@ -2067,6 +2139,7 @@ function reshape(w) {
     if (v.spriteSeed !== undefined && v.g && !swap.has(v)) {   // a cell, living or still referred to
       const n = cellObject(v.id, v.parentId, v.x, v.y, genome(v.g), v.energy, v.theta, v.spriteSeed);
       for (const k of Object.keys(v)) if (k !== 'g') n[k] = v[k];
+      if (v.glassW === undefined) n.glassW = smoothstep(PARAMS.dino.fade, PARAMS.dino.gone, n.g.timbre);   // saved before silica
       swap.set(v, n);
     }
     for (const k of Object.keys(v)) visit(v[k], seen);
@@ -4369,7 +4442,7 @@ function render(w, now) {
 
 // The seven forms as drawn. Icons are 7x7 masks in the form's ramp: h bright, b highlight, o base.
 const FORMS = [
-  { name: 'FLAGELLATE', ramp: GREEN, icon: ['......o', '.....o.', '..bbo..', '.bhhbb.', '.bhbbb.', '.bbbbb.', '..bbb..'] },
+  { name: 'GREEN ALGAE', ramp: GREEN, icon: ['......o', '.....o.', '..bbo..', '.bhhbb.', '.bhbbb.', '.bbbbb.', '..bbb..'] },
   { name: 'ALEXANDRIUM', ramp: GOLD, icon: ['..bbb..', '.bhhbb.', 'bhbbbbb', 'ooooooo', 'bbbbbbb', '.bbbbb.', '..bbb..'] },
   { name: 'DINOPHYSIS', ramp: ROSE, icon: ['.o...o.', '..ooo..', '..bhb..', '.bhbbbo', '.bbbbo.', '..bbbo.', '...b...'] },
   { name: 'TRIPOS', ramp: VIOLET, icon: ['o.....o', '.o...o.', '..bhb..', '..bbb..', '...b...', '...b...', '...o...'] },

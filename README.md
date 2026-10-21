@@ -8,13 +8,13 @@
   <img src="docs/sardines.png" width="150" alt="The whole water column by day: a sardine school sweeps through a bloom near the surface">
   <img src="docs/ring-colony.png" width="150" alt="Close-up at 6x: spiny diatoms linked in a curving colony, crossing a beam of light">
   <img src="docs/sunfish.png" width="150" alt="The whole column: an ocean sunfish drifts through a bloom, cells singing in rings near the surface">
-  <img src="docs/elder.png" width="150" alt="Close-up at 8x: a green flagellate with its chloroplasts and beating flagellum in the dark water below">
+  <img src="docs/elder.png" width="150" alt="Close-up at 8x: a green alga with its chloroplasts and beating flagellum in the dark water below">
   <img src="docs/chain.png" width="150" alt="The whole column: cells singing in rings of their own colour in the lit water">
 </p>
 
 Pixel-art phytoplankton drift, grow, divide, synchronise and die in a dark water column, and every note you hear
 comes from one of them. Diatoms sing like glockenspiels and vibraphones, dinoflagellates like wood and plucked
-strings, soft flagellates like a felt piano. Blooms swell into chords; die-offs fall silent. You can just watch
+strings, green algae like a felt piano. Blooms swell into chords; die-offs fall silent. You can just watch
 it, like a tide pool, or put your hand in the water.
 
 ## The idea: emergence, not authorship

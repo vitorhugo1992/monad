@@ -23,7 +23,7 @@ const start = html.indexOf('// ===== PARAMS =====');
 const end = html.indexOf('// ===== Audio =====');
 if (start < 0 || end < 0) throw new Error('section markers not found');
 const sim = new Function(html.slice(start, end) +
-  '\nreturn { PARAMS, createWorld, stepWorld, aliveCount, nutrientInventory, worldChecksum, dayPhase, syncStats, dinoWeight, GENES, HUE_WHEEL, intervalClass, keyName, snapshotWorld, restoreWorld, aliveCount: aliveCount };')();
+  '\nreturn { PARAMS, createWorld, stepWorld, aliveCount, nutrientInventory, worldChecksum, dayPhase, syncStats, dinoWeight, GENES, HUE_WHEEL, intervalClass, keyName, snapshotWorld, restoreWorld, aliveCount: aliveCount, silicaInventory, meanSilica };')();
 
 // Positional numbers, plus PARAMS overrides like metabolism.efficiency=0.2 or diel.dayLength=600
 const args = process.argv.slice(2);
@@ -76,7 +76,7 @@ function run(seed) {
   const pops = [];
   let lateMin = Infinity, lateCellMin = Infinity, extinctAt = null;
   let capTicks = 0, extinct = false, minPop = Infinity, maxPop = 0, pulses = 0, lastPhase = sim.dayPhase(w);
-  const noon = [], night = [], syncs = [], dinos = [];
+  const noon = [], night = [], syncs = [], dinos = [], groups = [];
   // Music: onset times, chords (2+ onsets within chordWin), clashes against the notes still sounding
   const chordWin = 0.3 * rate, sounding = [], onsetTicks = [];
   let chords2 = 0, chords3 = 0, group = 0, groupStart = -1e9, pairs = 0, harsh = 0, seconds = 0, lastNotes = 0, maxVox = 0;
@@ -105,9 +105,15 @@ function run(seed) {
       if (t > 600 * rate) { lateMin = Math.min(lateMin, pop + w.cysts.length); lateCellMin = Math.min(lateCellMin, pop); }   // after the inoculum has grown
       if (pop >= 20 && t % (3 * sampleTicks) === 0) syncs.push(sim.syncStats(w));
       // Dinoflagellates: their share of the living cells, and how many there are (Margalef: blooms only in calm water)
-      let nd = 0;
-      for (const c of w.cells) if (!c.dying && sim.dinoWeight(c.g.timbre) > 0.5) nd++;
+      let nd = 0, ng = 0;
+      for (const c of w.cells) {
+        if (c.dying) continue;
+        if (sim.dinoWeight(c.g.timbre) > 0.5) nd++;
+        else if (c.g.timbre >= sim.PARAMS.dino.full) ng++;   // glass: diatoms, as the notebook counts them
+      }
       dinos.push({ n: nd, share: pop ? nd / pop : 0, wind: w.wind });
+      // Diversity, late in the run: diatoms vs dinoflagellates vs flagellates; one group >= 90% counts as a monoculture
+      if (t > total / 2 && pop >= 10) groups.push({ glass: ng / pop, dino: nd / pop, soft: (pop - ng - nd) / pop });
     }
     // Mean depth at mid-day and late night: diel vertical migration
     const ph = sim.dayPhase(w), D = sim.PARAMS.diel;
@@ -127,18 +133,23 @@ function run(seed) {
   const music = { ons: onsetTicks.length / (total / rate), longest, quiet: quiet / (total / rate), chords2: chords2 / minutes, chords3: chords3 / minutes,
                   harsh: pairs ? harsh / pairs : 0, seconds: pairs ? seconds / pairs : 0, lastNotes, maxVox, key: sim.keyName(w.music) };
   const drift = sim.nutrientInventory(w) - (w.initialInventory + w.upwelled - w.carried);
+  const siDrift = sim.silicaInventory(w) - (w.initialSilica + w.siUpwelled);
   const mean = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : NaN);
   const alive = w.cells.filter((c) => !c.dying);
   const ramps = new Array(sim.HUE_WHEEL.length).fill(0);
   for (const c of alive) ramps[Math.floor(c.g.hue)]++;
   return {
-    seed, music, pops, minPop, maxPop, lateMin, lateCellMin, extinctAt, capFrac: capTicks / total, extinct, drift, arc: arcs(pops), pulses,
+    seed, music, pops, minPop, maxPop, lateMin, lateCellMin, extinctAt, capFrac: capTicks / total, extinct, drift, siDrift, arc: arcs(pops), pulses,
     noon: mean(noon), night: mean(night), deaths: w.deaths, ramps,
     size: mean(alive.map((c) => c.g.size)), checksum: sim.worldChecksum(w),
     sync: Object.fromEntries(['local', 'locked', 'global', 'chained', 'chains', 'longest', 'coils', 'stars'].map((k) => [k, mean(syncs.map((q) => q[k]))])),
     longest: Math.max(1, ...syncs.map((q) => q.longest)),
     dino: { share: mean(dinos.map((q) => q.share)), peak: Math.max(0, ...dinos.map((q) => q.n)),
             over50: dinos.filter((q) => q.n >= 50).length / (dinos.length || 1) },
+    groups: { glass: mean(groups.map((q) => q.glass)), dino: mean(groups.map((q) => q.dino)), soft: mean(groups.map((q) => q.soft)),
+              mono: groups.filter((q) => Math.max(q.glass, q.dino, q.soft) >= 0.9).length / (groups.length || 1),
+              // who leads the water, and for what share of the time: a succession gives every group its turn
+              lead: ['glass', 'dino', 'soft'].map((k) => groups.filter((q) => q[k] >= q.glass && q[k] >= q.dino && q[k] >= q.soft).length / (groups.length || 1)) },
   };
 }
 
@@ -165,6 +176,7 @@ for (let s = firstSeed; s < firstSeed + seeds; s++) {
     ` | sync loc ${f(r.sync.local)} lock ${f(r.sync.locked)} glob ${f(r.sync.global)}` +
     ` | chains ${r.sync.chains.toFixed(1)} in ${Math.round(r.sync.chained * 100)}% max ${r.longest} rings ${r.sync.coils.toFixed(1)} stars ${r.sync.stars.toFixed(1)}` +
     ` | dino ${Math.round(r.dino.share * 100)}% peak ${r.dino.peak} >=50 ${Math.round(r.dino.over50 * 100)}%` +
+    ` | late diatom/dino/flag ${[r.groups.glass, r.groups.dino, r.groups.soft].map((x) => Math.round(x * 100)).join('/')}% mono ${Math.round(r.groups.mono * 100)}% lead ${r.groups.lead.map((x) => Math.round(x * 100)).join('/')}%` +
     ` | music ${r.music.key} ons ${r.music.ons.toFixed(2)}/s vox<=${r.music.maxVox} quiet ${Math.round(r.music.quiet * 100)}% longest ${r.music.longest.toFixed(0)} s` +
     ` chords/min ${r.music.chords2.toFixed(1)} (3+ ${r.music.chords3.toFixed(1)}) clash ${(r.music.harsh * 100).toFixed(1)}% 2nds ${(r.music.seconds * 100).toFixed(0)}% last ${r.music.lastNotes}\n`);
 }
@@ -203,7 +215,8 @@ console.log('\n' + [
   `chains: median count ${median(results.map((r) => r.sync.chains)).toFixed(1)}, cells chained ${Math.round(100 * median(results.map((r) => r.sync.chained)))}%, longest ${Math.max(...results.map((r) => r.longest))}`,
   `dinoflagellates: median share ${Math.round(100 * median(results.map((r) => r.dino.share)))}%, seeds with a bloom of >=50: ${results.filter((r) => r.dino.peak >= 50).length}/${n}, median time spent >=50: ${Math.round(100 * median(results.map((r) => r.dino.over50)))}%`,
   `music (median): onsets ${median(results.map((r) => r.music.ons)).toFixed(2)}/s, near-silence ${Math.round(100 * median(results.map((r) => r.music.quiet)))}% of the time, chords ${median(results.map((r) => r.music.chords2)).toFixed(1)}/min (3+ ${median(results.map((r) => r.music.chords3)).toFixed(1)}), m2/tritone clashes ${(100 * median(results.map((r) => r.music.harsh))).toFixed(1)}%, seconds ${Math.round(100 * median(results.map((r) => r.music.seconds)))}%`,
-  `max |nutrient drift|: ${Math.max(...results.map((r) => Math.abs(r.drift))).toExponential(2)}`,
+  `diversity, second half (median): diatoms ${Math.round(100 * median(results.map((r) => r.groups.glass)))}%, dinoflagellates ${Math.round(100 * median(results.map((r) => r.groups.dino)))}%, flagellates ${Math.round(100 * median(results.map((r) => r.groups.soft)))}%; monoculture (one group >= 90%) ${Math.round(100 * median(results.map((r) => r.groups.mono)))}% of the time, worst seed ${Math.round(100 * Math.max(...results.map((r) => r.groups.mono)))}%; leading the water (mean share of time) diatoms ${Math.round(100 * results.reduce((s, r) => s + r.groups.lead[0], 0) / results.length)}%, dinoflagellates ${Math.round(100 * results.reduce((s, r) => s + r.groups.lead[1], 0) / results.length)}%, flagellates ${Math.round(100 * results.reduce((s, r) => s + r.groups.lead[2], 0) / results.length)}%`,
+  `max |nutrient drift|: ${Math.max(...results.map((r) => Math.abs(r.drift))).toExponential(2)}, |silica drift|: ${Math.max(...results.map((r) => Math.abs(r.siDrift))).toExponential(2)}`,
   `deterministic rerun: ${again.checksum === results[0].checksum ? 'yes' : 'NO'} (${results[0].checksum.toString(16)})`,
   `save/restore round trip: ${trip.same && trip.sum ? 'identical' : 'DIFFERENT'} (snapshot ~${(trip.bytes / 1024).toFixed(0)} KB, save+restore ${trip.saveMs} ms)`,
 ].join('\n'));

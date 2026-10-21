@@ -47,11 +47,16 @@ short list of local rules, and everything else comes out of how they interact:
 - **The water's physics.** Sunlight warms the surface, the air cools it, and the wind and the tide stir it. In
   calm weather the column stratifies into a warm mixed layer, a thermocline and a cold bottom layer, as shelf
   seas do in summer; storms deepen the mixed layer and bring nutrients up. Storms also wash muddy runoff in from
-  the coast. Oxygen is made in the light and used wherever dead matter rots: dead cells fall as marine snow and
-  settle on the floor, and under calm, stratified water after a bloom the bottom can run out of oxygen and become
-  a dead zone.
+  the coast, a lens of fresh water that floats on the salt sea. The tide ebbs and floods and swings with the moon:
+  spring tides at new and full moon stir the bottom water and lift the seabed's mud and cysts, neap tides leave it
+  still. Oxygen is made in the light and used wherever dead matter rots: dead cells fall as marine snow and settle
+  on the floor, and under calm, stratified water after a bloom, often at neap tides, the bottom can run out of
+  oxygen and become a dead zone.
 - **Death and recycling.** Cells die of starvation, old age or lack of oxygen, and their nutrients return to the
-  water or sink as marine snow. Some leave dormant cysts in the sediment that can bring the water back to life later.
+  water or sink as marine snow.
+- **Resting cysts.** When the nutrients run out at the end of a bloom, some kinds (green algae, *Alexandrium* and
+  *Tripos*, centric diatoms) turn into dormant cysts that sink to the seabed. After days of rest, a spring tide
+  lifting them into the water wakes them, and the bloom's lineages come back.
 - **Grazers and visitors.** An invisible field of grazers grows where cells are dense and starves away
   slowly, which ends blooms and lets the water recover. Big blooms draw in sardine schools and salp chains,
   and the salps draw in an ocean sunfish. The school hums a soft chord, the salps play a gentle sequenced tune

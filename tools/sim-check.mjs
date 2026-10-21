@@ -84,7 +84,7 @@ function run(seed) {
   const noon = [], night = [], syncs = [], dinos = [], groups = [];
   // The water: surface temperature, oxygen in the bottom water (hypoxic: its lowest node below the threshold),
   // Trichodesmium and its scum (biomass in the surface row), runoff events
-  const water = { tMin: Infinity, tMax: -Infinity, tSum: 0, n: 0, oMin: Infinity, oSum: 0, hypoxic: 0, triMax: 0, scumMax: 0, scum: 0, runoffs: 0 };
+  const water = { tMin: Infinity, tMax: -Infinity, tSum: 0, n: 0, oMin: Infinity, oSum: 0, hypoxic: 0, triMax: 0, scumMax: 0, scum: 0, runoffs: 0, sMin: Infinity, bank: [] };
   // Music: onset times, chords (2+ onsets within chordWin), clashes against the notes still sounding
   const chordWin = 0.3 * rate, sounding = [], onsetTicks = [];
   let chords2 = 0, chords3 = 0, group = 0, groupStart = -1e9, pairs = 0, harsh = 0, seconds = 0, lastNotes = 0, maxVox = 0;
@@ -124,6 +124,8 @@ function run(seed) {
       for (let i = 0; i < cols; i++) scum += w.fields.tri[i];
       water.tMin = Math.min(water.tMin, st); water.tMax = Math.max(water.tMax, st); water.tSum += st; water.n++;
       water.oMin = Math.min(water.oMin, ox.min); water.oSum += ox.mean;
+      for (let i = 0; i < cols; i++) water.sMin = Math.min(water.sMin, w.fields.sal[i]);   // the freshest the surface got
+      water.bank.push(w.cysts.length);
       if (ox.min < sim.PARAMS.oxygen.hypoxic) water.hypoxic++;
       water.triMax = Math.max(water.triMax, cy.tri); water.scumMax = Math.max(water.scumMax, scum / cols);
       if (scum / cols > 0.3) water.scum++;   // a scum: the surface row holds a third of a cell per node, or more
@@ -153,7 +155,8 @@ function run(seed) {
   const drift = sim.nutrientInventory(w) - (w.initialInventory + w.upwelled - w.carried + w.imported);
   const siDrift = sim.silicaInventory(w) - (w.initialSilica + w.siUpwelled + w.siWashed);
   Object.assign(water, { tMean: water.tSum / (water.n || 1), oMean: water.oSum / (water.n || 1), hypoxic: water.hypoxic / (water.n || 1),
-                         scum: water.scum / (water.n || 1), fixed: w.fixed, washed: w.washed });
+                         scum: water.scum / (water.n || 1), fixed: w.fixed, washed: w.washed,
+                         encysted: w.encysted / (minutes / 60), germinated: w.germinated / (minutes / 60), bank: median(water.bank) });
   const mean = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : NaN);
   const alive = w.cells.filter((c) => !c.dying);
   const ramps = new Array(sim.HUE_WHEEL.length).fill(0);
@@ -193,6 +196,7 @@ for (let s = firstSeed; s < firstSeed + seeds; s++) {
     ` | depth noon ${f(r.noon)} night ${f(r.night)} | pulses ${r.pulses}` +
     ` | deaths S/O/G/F/Sp/H/V/X ${CAUSES.map((k) => Math.round(100 * (d[k] || 0) / dt)).join('/')}%` +
     ` | temp ${wa.tMin.toFixed(1)}..${wa.tMax.toFixed(1)} (${wa.tMean.toFixed(1)}) O2 bottom ${f(wa.oMean)} min ${f(wa.oMin)} hypoxic ${Math.round(wa.hypoxic * 100)}%` +
+    ` | salt min ${wa.sMin.toFixed(1)} | cysts made ${wa.encysted.toFixed(1)}/h germinated ${wa.germinated.toFixed(1)}/h bank ${wa.bank}` +
     ` | tricho max ${wa.triMax.toFixed(0)} scum ${f(wa.scumMax)} (${Math.round(wa.scum * 100)}%) fixed ${wa.fixed.toFixed(0)} | runoffs ${wa.runoffs} washed ${wa.washed.toFixed(0)}` +
     ` | size ${f(r.size)} ramps ${r.ramps.join('/')} drift ${r.drift.toExponential(1)}` +
     ` | sync loc ${f(r.sync.local)} lock ${f(r.sync.locked)} glob ${f(r.sync.global)}` +
@@ -240,6 +244,7 @@ console.log('\n' + [
   `diversity, second half (median share): ${GROUP_NAMES.map((name, i) => name + ' ' + Math.round(100 * median(results.map((r) => r.groups.share[i] || 0))) + '%').join(', ')}; monoculture (one group >= 90%) ${Math.round(100 * median(results.map((r) => r.groups.mono)))}% of the time, worst seed ${Math.round(100 * Math.max(...results.map((r) => r.groups.mono)))}%`,
   `leading the water (mean share of time): ${GROUP_NAMES.map((name, i) => name + ' ' + Math.round(100 * results.reduce((s, r) => s + r.groups.lead[i], 0) / results.length) + '%').join(', ')}`,
   `the water (median): surface ${median(results.map((r) => r.water.tMin)).toFixed(1)}..${median(results.map((r) => r.water.tMax)).toFixed(1)} degrees, bottom oxygen ${median(results.map((r) => r.water.oMean)).toFixed(2)} (lowest ${median(results.map((r) => r.water.oMin)).toFixed(2)}), hypoxic ${Math.round(100 * median(results.map((r) => r.water.hypoxic)))}% of the time (worst ${Math.round(100 * Math.max(...results.map((r) => r.water.hypoxic)))}%); filamentous cyanobacteria peak ${median(results.map((r) => r.water.triMax)).toFixed(0)}, a scum ${Math.round(100 * median(results.map((r) => r.water.scum)))}% of the time (seeds with one: ${results.filter((r) => r.water.scum > 0).length}/${n}); runoffs ${median(results.map((r) => r.water.runoffs))}`,
+  `cysts (median): made ${median(results.map((r) => r.water.encysted)).toFixed(1)}/h, germinated ${median(results.map((r) => r.water.germinated)).toFixed(1)}/h, bank ${median(results.map((r) => r.water.bank))} cysts; surface salinity down to ${median(results.map((r) => r.water.sMin)).toFixed(1)} psu after runoff (freshest ${Math.min(...results.map((r) => r.water.sMin)).toFixed(1)})`,
   `causes of death (median share): ${CAUSES.map((k) => k + ' ' + Math.round(100 * median(results.map((r) => { const d = r.deaths, t = Object.values(d).reduce((s, v) => s + v, 0) || 1; return (d[k] || 0) / t; }))) + '%').join(', ')}`,
   `max |nutrient drift|: ${Math.max(...results.map((r) => Math.abs(r.drift))).toExponential(2)}, |silica drift|: ${Math.max(...results.map((r) => Math.abs(r.siDrift))).toExponential(2)}`,
   `deterministic rerun: ${again.checksum === results[0].checksum ? 'yes' : 'NO'} (${results[0].checksum.toString(16)})`,

@@ -36,6 +36,10 @@ short list of local rules, and everything else comes out of how they interact:
   Dinophysis's favourite prey); four dinoflagellates (*Alexandrium*, *Dinophysis*, *Tripos*, *Prorocentrum*);
   centric and pennate diatoms. Their colours follow their real pigments: golden-brown diatoms, rust-brown
   dinoflagellates, green algae, yellow-to-green coccolithophores, red-to-blue cryptophytes.
+- **Cyanobacteria.** The most abundant photosynthesisers on Earth, far too small to see one by one: they live as
+  a drifting cloud in the water, carried by slow currents, and show only when they bloom, as plumes of tiny
+  pink-orange and blue-green specks with a faint, sparkling shimmer of sound. They win in poor, calm water, feed
+  the grazers, and have their own viruses.
 - **Death and recycling.** Cells die of starvation or old age, and their nutrients return to the water or
   sink to the floor. Some leave dormant cysts in the sediment that can bring the water back to life later.
 - **Grazers and visitors.** An invisible field of grazers grows where cells are dense and starves away

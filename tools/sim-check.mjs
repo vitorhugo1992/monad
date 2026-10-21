@@ -23,7 +23,7 @@ const start = html.indexOf('// ===== PARAMS =====');
 const end = html.indexOf('// ===== Audio =====');
 if (start < 0 || end < 0) throw new Error('section markers not found');
 const sim = new Function(html.slice(start, end) +
-  '\nreturn { PARAMS, createWorld, stepWorld, aliveCount, nutrientInventory, worldChecksum, dayPhase, syncStats, dinoWeight, GENES, HUE_WHEEL, intervalClass, keyName, snapshotWorld, restoreWorld, aliveCount: aliveCount, silicaInventory, meanSilica };')();
+  '\nreturn { PARAMS, createWorld, stepWorld, aliveCount, nutrientInventory, worldChecksum, dayPhase, syncStats, dinoWeight, GENES, HUE_WHEEL, intervalClass, keyName, snapshotWorld, restoreWorld, aliveCount: aliveCount, silicaInventory, meanSilica, cyanoTotal };')();
 
 // Positional numbers, plus PARAMS overrides like metabolism.efficiency=0.2 or diel.dayLength=600
 const args = process.argv.slice(2);
@@ -71,8 +71,8 @@ function arcs(pops) {
   return { n, dieoffs, bloom: state > 0 || n > 0 };
 }
 
-const GROUPS = ['glass', 'dino', 'green', 'cocco', 'crypto'];
-const GROUP_NAMES = ['diatoms', 'dinoflagellates', 'green algae', 'coccolithophores', 'cryptophytes'];
+const GROUPS = ['glass', 'dino', 'green', 'cocco', 'crypto', 'cyano'];
+const GROUP_NAMES = ['diatoms', 'dinoflagellates', 'green algae', 'coccolithophores', 'cryptophytes', 'cyanobacteria'];
 const GROUP_OF = ['green', 'dino', 'dino', 'dino', 'dino', 'glass', 'glass', 'cocco', 'crypto'];   // by kind
 
 function run(seed) {
@@ -110,12 +110,14 @@ function run(seed) {
       if (pop >= 20 && t % (3 * sampleTicks) === 0) syncs.push(sim.syncStats(w));
       // Dinoflagellates: their share of the living cells, and how many there are (Margalef: blooms only in calm water)
       // Five groups by form: diatoms, dinoflagellates, green algae, coccolithophores, cryptophytes
-      const gc = { glass: 0, dino: 0, green: 0, cocco: 0, crypto: 0 };
+      const gc = { glass: 0, dino: 0, green: 0, cocco: 0, crypto: 0, cyano: 0 }, cy = sim.cyanoTotal(w);
       for (const c of w.cells) if (!c.dying) gc[GROUP_OF[c.kind]]++;
+      gc.cyano = cy.syn + cy.pro;   // biomass, about a cell's worth per unit
+      const all = pop + gc.cyano;
       const nd = gc.dino;
       dinos.push({ n: nd, share: pop ? nd / pop : 0, wind: w.wind });
       // Diversity, late in the run; one group >= 90% counts as a monoculture
-      if (t > total / 2 && pop >= 10) groups.push(Object.fromEntries(GROUPS.map((k) => [k, gc[k] / pop])));
+      if (t > total / 2 && all >= 10) groups.push(Object.fromEntries(GROUPS.map((k) => [k, gc[k] / all])));
     }
     // Mean depth at mid-day and late night: diel vertical migration
     const ph = sim.dayPhase(w), D = sim.PARAMS.diel;
@@ -178,7 +180,7 @@ for (let s = firstSeed; s < firstSeed + seeds; s++) {
     ` | sync loc ${f(r.sync.local)} lock ${f(r.sync.locked)} glob ${f(r.sync.global)}` +
     ` | chains ${r.sync.chains.toFixed(1)} in ${Math.round(r.sync.chained * 100)}% max ${r.longest} rings ${r.sync.coils.toFixed(1)} stars ${r.sync.stars.toFixed(1)}` +
     ` | dino ${Math.round(r.dino.share * 100)}% peak ${r.dino.peak} >=50 ${Math.round(r.dino.over50 * 100)}%` +
-    ` | late diat/dino/green/cocco/crypto ${r.groups.share.map((x) => Math.round(x * 100)).join('/')}% mono ${Math.round(r.groups.mono * 100)}% lead ${r.groups.lead.map((x) => Math.round(x * 100)).join('/')}%` +
+    ` | late diat/dino/green/cocco/crypto/cyano ${r.groups.share.map((x) => Math.round(x * 100)).join('/')}% mono ${Math.round(r.groups.mono * 100)}% lead ${r.groups.lead.map((x) => Math.round(x * 100)).join('/')}%` +
     ` | music ${r.music.key} ons ${r.music.ons.toFixed(2)}/s vox<=${r.music.maxVox} quiet ${Math.round(r.music.quiet * 100)}% longest ${r.music.longest.toFixed(0)} s` +
     ` chords/min ${r.music.chords2.toFixed(1)} (3+ ${r.music.chords3.toFixed(1)}) clash ${(r.music.harsh * 100).toFixed(1)}% 2nds ${(r.music.seconds * 100).toFixed(0)}% last ${r.music.lastNotes}\n`);
 }

@@ -66,6 +66,21 @@ const PARAMS = {
   // the risk is half its top rate), so whatever crowds the water is hit hardest: kill the winner. A lysed cell bursts
   // quietly; recycled of its nutrients go straight back where it burst (the viral shunt), the rest sinks.
   virus: { rate: 0.007, half: 0.8, recycled: 0.9 },
+  // Cyanobacteria (approved local rule, author): far too small and many to be cells, so they live as two fields of
+  // biomass per grid node (units like a cell's biomass; nutrient content q per unit). Synechococcus-type (syn: pink-orange
+  // phycoerythrin, bright surface water) and Prochlorococcus-type (pro: blue-green, a dim-light specialist: light felt as
+  // L(1 + dim)/(L + dim)). Each grows at growth x light x N/(N + half) (the best uptake of all: they win in poor, calm
+  // water), toward max per node; respires (back to the water); is eaten by the grazers (who grow on it too); and is
+  // lysed by its own phages, hardest where dense (phage x C^2/(C^2 + phageHalf^2)). Never quite gone: a trace drifts in
+  // from the open ocean (floor, counted as imported). Slow swirling currents (speed units/s, stronger in wind; wave:
+  // their size in units; turn: how fast the pattern changes) carry the fields every advectEvery ticks, so blooms drift
+  // as plumes; diffusion spreads them.
+  cyano: {
+    growth: 0.025, half: 0.04, max: 1.5, respire: 0.004, q: 0.65, phage: 0.04, phageHalf: 0.8, floor: 0.002, diffusion: 0.15,
+    syn: { dim: 0 }, pro: { dim: 1.5 },
+    speed: 1.2, windSpeed: 2.5, wave: 70, turn: 0.004, advectEvery: 15,
+    grazedRecycled: 0.7, lysedRecycled: 0.9,
+  },
   // The soft cells' lineage forms (approved, author): share of soft lineages that are coccolithophores and
   // cryptophytes (the rest green algae). cocco: top growth x slow (calcifiers grow slowly, so they win only where water
   // is poor), half-saturation x affinity (efficient uptake in stripped water), upkeep
@@ -279,6 +294,10 @@ const PARAMS = {
       sunfish: { everyMin: 12, everyMax: 20, dur: 4.2, attack: 0.5, glideAt: 1.3, glide: 0.6, gain: 0.06, octave: 3,
                  cut: 760, sub: 0.5, wet: 0.45, pan: 0.5, baskGain: 0.55 },
     },
+    // Cyanobacteria's shimmer (author): faint, sparkling grains (a sine, attack/release s), tiny high notes from the scale
+    // in octave (and one up now and then), at up to rate per s, rising with the cyanobacteria on screen (mean biomass
+    // from .. from + full); through the music bus.
+    cyanoGrains: { rate: 7, from: 0.02, full: 0.1, gain: 0.006, octave: 6, attack: 0.004, release: 0.2, wet: 0.65, pan: 0.7 },
     ambience: {
       gain: 0.55, wet: 0.25, noiseSeconds: 3,
       swell: { everyCalm: 6, everyStorm: 2.2, durCalm: 10, durStorm: 5, gainCalm: 0.012, gainStorm: 0.09, freqCalm: 320, freqStorm: 1300 },
@@ -467,6 +486,11 @@ const PARAMS = {
     // Krill are the grazer field made visible: giants next to the cells, so only a sparse share of the swarm is drawn
     // hungry: share still drawn where there is no food (swarms move off empty water); foodFull: biomass per node
     // for a feeding swarm; fedTau: s to follow the food
+    // Cyanobacteria as drawn: a speck chance per pixel rising from biomass from (none) over full more, up to density,
+    // thinned by zoom (they are tiny); the specks twinkle (a new pattern twinkle times per s). Plume texture (render
+    // only): a streaky noise grainX x grainY units (fine: share of a finer layer), drifting with the current, lets specks
+    // show only between patchFrom and patchTo of it, so a bloom breaks into drifting filaments and patches.
+    cyano: { from: 0.02, full: 0.12, density: 0.28, twinkle: 0.7, grainX: 16, grainY: 7, fine: 0.35, patchFrom: 0.42, patchTo: 0.78 },
     krill: { hungry: 0, foodFull: 0.8, fedTau: 2.5, zFrom: 0.3, zSpan: 0.6, coverage: 0.25, len: 8, thick: 0.15, curl: 0.12, flick: 0.35,
              feelers: 0.95, legBeat: 3, swimBeat: 9, glide: 0.45, wander: 8, dartEvery: 4.5, dartDist: 7, dartTime: 0.6 },
   },
@@ -678,6 +702,8 @@ function createFields() {
     bio: new Float64Array(n), graz: new Float64Array(n), grazScratch: new Float64Array(n),
     si: new Float64Array(n), siScratch: new Float64Array(n),
     kinds: Array.from({ length: KINDS }, () => new Float64Array(n)),   // biomass per kind, for the viruses
+    syn: new Float64Array(n).fill(PARAMS.cyano.floor), pro: new Float64Array(n).fill(PARAMS.cyano.floor),   // cyanobacteria
+    cyScratch: new Float64Array(n),
   };
   const Si = PARAMS.silica;
   for (let j = 0; j < rows; j++) {
@@ -1083,7 +1109,17 @@ function nutrientInventory(w) {
   for (let i = 0; i < nut.length; i++) s += nut[i];
   for (let i = 0; i < w.cells.length; i++) s += w.cells[i].held;
   for (let i = 0; i < w.cysts.length; i++) s += w.cysts[i].reserve;
+  const syn = w.fields.syn, pro = w.fields.pro;
+  for (let i = 0; i < syn.length; i++) s += (syn[i] + pro[i]) * PARAMS.cyano.q;   // bound in cyanobacteria
   return s;
+}
+
+// Cyanobacteria in the whole column (biomass, about a cell's worth per unit)
+function cyanoTotal(w) {
+  const syn = w.fields.syn, pro = w.fields.pro;
+  let a = 0, b = 0;
+  for (let i = 0; i < syn.length; i++) { a += syn[i]; b += pro[i]; }
+  return { syn: a, pro: b };
 }
 
 function meanNutrient(w) {
@@ -1160,6 +1196,7 @@ function stepWorld(w) {
   singAndListen(w);
   updateChains(w, dt);
   graze(w, dt);
+  cyanobacteria(w, dt);
   lyse(w, dt);
   hunt(w, dt);
   updateVisitors(w, dt);
@@ -1446,6 +1483,7 @@ function graze(w, dt) {
   const G = PARAMS.grazing, f = w.fields, cells = w.cells, K = G.halfB;
   f.bio.fill(0);
   for (let i = 0; i < cells.length; i++) if (!cells[i].dying) addField(f.bio, cells[i].x, cells[i].y, cells[i].biomass);
+  for (let k = 0; k < f.bio.length; k++) f.bio[k] += f.syn[k] + f.pro[k];   // grazers eat cyanobacteria too
   updateGrazers(f, dt);
   for (let i = 0; i < cells.length; i++) {
     const c = cells[i];
@@ -1454,6 +1492,60 @@ function graze(w, dt) {
     const m = G.rate * Z * K * B / (B * B + K * K) / (1 + PARAMS.chain.refuge * (c.chainLen - 1)) * c.grazeK;   // chains: a size refuge; plates shield
     if (w.rng.chance(m * dt)) eaten(w, c);
   }
+}
+
+// Cyanobacteria: two living fields, node by node; then the currents carry them
+function cyanobacteria(w, dt) {
+  const Cy = PARAMS.cyano, G = PARAMS.grazing, f = w.fields, { cols, rows } = PARAMS.grid, K = G.halfB, h2 = Cy.phageHalf * Cy.phageHalf;
+  for (const type of ['syn', 'pro']) {
+    const C = f[type], dim = Cy[type].dim;
+    for (let k = 0; k < C.length; k++) {
+      let c = C[k];
+      if (c < Cy.floor) { w.imported += (Cy.floor - c) * Cy.q; c = Cy.floor; }   // a trace drifts in from the open ocean
+      const L0 = f.light[k], L = dim ? L0 * (1 + dim) / (L0 + dim) : L0, N = f.nut[k];
+      const want = Cy.growth * L * N / (N + Cy.half) * c * (1 - c / Cy.max) * dt;
+      const grow = want > 0 ? takeNode(f.nut, k, want * Cy.q) / Cy.q : 0;
+      const B = f.bio[k], Z = f.graz[k];
+      const resp = Cy.respire * c * dt;
+      const eaten = G.rate * Z * K * B / (B * B + K * K) * c * dt;
+      const lysed = Cy.phage * c * c / (c * c + h2) * c * dt;
+      const x = ((k % cols) + 0.5) * GRID_W;
+      f.nut[k] += (resp + eaten * Cy.grazedRecycled + lysed * Cy.lysedRecycled) * Cy.q;
+      exportDetritus(w, x, (eaten * (1 - Cy.grazedRecycled) + lysed * (1 - Cy.lysedRecycled)) * Cy.q);
+      C[k] = Math.max(0, c + grow - resp - eaten - lysed);
+    }
+    const k2 = Cy.diffusion * dt;
+    diffuseGrid(C, f.cyScratch, k2, 0, 0);
+    C.set(f.cyScratch);
+  }
+  if (w.tick % Cy.advectEvery === 0) { advect(w, f.syn); advect(w, f.pro); }
+}
+
+// The currents: a slowly turning pattern of eddies (a stream function), faster in wind
+function currentAt(w, x, y, out) {
+  const Cy = PARAMS.cyano, k = TAU / Cy.wave, t = w.tick * TICK_DT * Cy.turn * TAU, sp = (Cy.speed + Cy.windSpeed * w.wind) / k;
+  const a1 = k * x + t, b1 = k * 0.8 * y - t * 0.7, a2 = k * 0.6 * x - t * 1.3, b2 = k * 1.3 * y + t * 0.5;
+  // psi = sp (sin a1 sin b1 + 0.6 sin a2 sin b2); u = dpsi/dy, v = -dpsi/dx
+  out.u = sp * (dsin(a1) * dsin(b1 + HALF_PI) * k * 0.8 + 0.6 * dsin(a2) * dsin(b2 + HALF_PI) * k * 1.3);
+  out.v = -sp * (dsin(a1 + HALF_PI) * dsin(b1) * k + 0.6 * dsin(a2 + HALF_PI) * dsin(b2) * k * 0.6);
+}
+
+// Semi-Lagrangian: each node takes what the current brought from upstream; rescaled so nothing is made or lost
+const CUR = { u: 0, v: 0 };
+function advect(w, C) {
+  const Cy = PARAMS.cyano, { cols, rows } = PARAMS.grid, b = w.fields.cyScratch, step = Cy.advectEvery * TICK_DT;
+  let before = 0, after = 0;
+  for (let k = 0; k < C.length; k++) before += C[k];
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      const x = (i + 0.5) * GRID_W, y = (j + 0.5) * GRID_H;
+      currentAt(w, x, y, CUR);
+      b[j * cols + i] = sampleField(C, x - CUR.u * step, y - CUR.v * step);
+    }
+  }
+  for (let k = 0; k < C.length; k++) after += b[k];
+  const keep = after > 0 ? before / after : 1;
+  for (let k = 0; k < C.length; k++) C[k] = b[k] * keep;
 }
 
 // Viruses: each kind has its own, and a cell's risk rises with the biomass of its own kind around it
@@ -2259,7 +2351,7 @@ const keyName = (m) => NOTE_NAMES[m.root] + ' ' + m.scaleName.toUpperCase();
 // world steps on exactly as if it had never stopped. Shared objects and cycles (chains, the cells notes point at)
 // survive; references into PARAMS are kept as paths, so a restored world reads the very same constants. Render
 // caches are left out and rebuilt. The snapshot is structured-cloneable (IndexedDB, and later a worker).
-const SNAP_SKIP = new Set(['hash', 'kinds', 'scratch', 'grazScratch', 'siScratch', 'spr', 'along', 'songAt', 'songAtk', 'songRel', 'songLast', 'songDrone', 'pluckAt']);
+const SNAP_SKIP = new Set(['hash', 'kinds', 'scratch', 'grazScratch', 'siScratch', 'cyScratch', 'spr', 'along', 'songAt', 'songAtk', 'songRel', 'songLast', 'songDrone', 'pluckAt']);
 let paramPaths = null;
 
 function paramPathMap() {
@@ -2805,7 +2897,39 @@ function scaleNote(m, octave, semis) {
   return 12 * (octave + 1) + m.root + best + 12 * Math.floor(semis / 12);
 }
 
-const visitorNext = { school: 0, sunfish: 0 };
+const visitorNext = { school: 0, sunfish: 0, grain: 0 };
+
+// Cyanobacteria's shimmer: grains scheduled at random, thicker where more is on screen
+function audioCyano(w) {
+  if (!audio.started) return;
+  const C = PARAMS.audio.cyanoGrains, t = audio.ctx.currentTime, mean = cyanoSeen / (TINT_W * TINT_H);
+  const rate = C.rate * clamp((mean - C.from) / C.full, 0, 1);
+  if (rate <= 0) { visitorNext.grain = t; return; }
+  while (visitorNext.grain <= t + 0.05) {
+    const m = w.music, semis = m.scale[ambRng.int(m.scale.length)], up = ambRng.next() < 0.3 ? 12 : 0;
+    const x = cyanoSeen > 0 ? cyanoSeenX / cyanoSeen / W * 2 - 1 : 0;
+    grain(scaleNote(m, C.octave, semis + up), Math.max(visitorNext.grain, t) + PARAMS.audio.lookahead, x + (ambRng.next() - 0.5) * 0.6);
+    visitorNext.grain = Math.max(visitorNext.grain, t) + (-Math.log(1 - ambRng.next() * 0.999)) / rate;
+  }
+}
+
+function grain(midi, t0, panX) {
+  const C = PARAMS.audio.cyanoGrains, ctx = audio.ctx, end = t0 + C.attack + C.release;
+  const o = ctx.createOscillator(), env = ctx.createGain(), dry = ctx.createGain(), wet = ctx.createGain();
+  const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+  o.frequency.value = 440 * Math.pow(2, (midi - 69) / 12);
+  env.gain.setValueAtTime(0.0001, t0);
+  env.gain.linearRampToValueAtTime(C.gain, t0 + C.attack);
+  env.gain.exponentialRampToValueAtTime(0.0001, end);
+  dry.gain.value = 1 - C.wet; wet.gain.value = C.wet;
+  o.connect(env);
+  let out = env;
+  if (pan) { pan.pan.value = clamp(panX, -1, 1) * C.pan; env.connect(pan); out = pan; }
+  out.connect(dry); out.connect(wet);
+  dry.connect(audio.bus); wet.connect(audio.wet);
+  o.start(t0); o.stop(end + 0.02);
+  o.onended = () => { for (const node of [o, env, pan, dry, wet]) if (node) node.disconnect(); };
+}
 
 // Visitors' voices: the school's chord while it is on screen, the sunfish's call now and then
 function audioVisitors(w) {
@@ -2960,6 +3084,8 @@ let chlTick = -1;
 const TINT_W = W >> 2, TINT_H = H >> 2;
 const bloomTint = new Float64Array(TINT_W * TINT_H);              // per 4x4 screen block
 const milkyTint = new Float64Array(TINT_W * TINT_H);              // coccolithophore water, per 4x4 screen block
+const synTint = new Float64Array(TINT_W * TINT_H), proTint = new Float64Array(TINT_W * TINT_H);   // cyanobacteria, per block
+let cyanoSeen = 0, cyanoSeenX = 0;                                  // how much is on screen, and where (for the shimmer)
 const pebbles = [];
 let buildDeadline = 0;
 
@@ -3247,11 +3373,15 @@ function updateBloom(w) {
     for (let i = 0; i < chl.length; i++) { chl[i] += (chlNow[i] - chl[i]) * k; milk[i] += (milkNow[i] - milk[i]) * km; }
   }
   const z = cam.zoom;
+  cyanoSeen = 0; cyanoSeenX = 0;
   for (let j = 0; j < TINT_H; j++) {
     for (let i = 0; i < TINT_W; i++) {
       const v = sampleField(chl, (view.bx0 + i * 4 + 2) / z, (view.by0 + j * 4 + 2) / z);
       bloomTint[j * TINT_W + i] = clamp(v / B.full, 0, 1) * B.max;
       milkyTint[j * TINT_W + i] = clamp(sampleField(milk, (view.bx0 + i * 4 + 2) / z, (view.by0 + j * 4 + 2) / z) / B.milkyFull, 0, 1) * B.milkyMax;
+      const wx = (view.bx0 + i * 4 + 2) / z, wy = (view.by0 + j * 4 + 2) / z, sy = sampleField(w.fields.syn, wx, wy), pr = sampleField(w.fields.pro, wx, wy);
+      synTint[j * TINT_W + i] = sy; proTint[j * TINT_W + i] = pr;
+      cyanoSeen += sy + pr; cyanoSeenX += (sy + pr) * (i * 4 + 2);
     }
   }
 }
@@ -3298,6 +3428,40 @@ function drawBackground(t) {
         if (milky > 0 && BAYER[brow | ((bx + 1) & 3)] < milky) i = COL.MILKY + i - COL.MILKY_FROM;
       }
       ib[row + px] = i;
+    }
+  }
+}
+
+// ---- Cyanobacteria: single-pixel specks where they are dense, twinkling slowly; the plumes drift with the fields ----
+// Smooth value noise on a lattice (render only): the plumes' texture
+function valueNoise(x, y) {
+  const i = Math.floor(x), j = Math.floor(y), fx = x - i, fy = y - j, sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+  const h = (a, b) => hash01((a * 374761393) ^ (b * 668265263));
+  return (h(i, j) * (1 - sx) + h(i + 1, j) * sx) * (1 - sy) + (h(i, j + 1) * (1 - sx) + h(i + 1, j + 1) * sx) * sy;
+}
+const cyDrift = { x: 0, y: 0, t: -1 }, CUR_R = { u: 0, v: 0 };
+
+function drawCyano(w, t) {
+  const L = PARAMS.look.cyano, ib = view.ibuf, z = cam.zoom, syn = rampBase(ROSE), pro = rampBase(EMERALD), slot = Math.floor(t * L.twinkle);
+  currentAt(w, W / 2, H / 3, CUR_R);   // the texture drifts with the current
+  if (cyDrift.t >= 0) { const d = Math.min(1, t - cyDrift.t); cyDrift.x += CUR_R.u * d; cyDrift.y += CUR_R.v * d; }
+  cyDrift.t = t;
+  for (let py = 0; py < H; py++) {
+    const by = view.by0 + py, tintRow = (py >> 2) * TINT_W, row = py * W;
+    for (let px = 0; px < W; px++) {
+      const i = ib[row + px];
+      if (i > COL.SHAFT && !(i >= COL.BLOOM && i < COL.BLOOM + 6) && !(i >= COL.MILKY && i < COL.MILKY + 4)) continue;   // water only
+      const k = tintRow + (px >> 2), a = synTint[k], b = proTint[k];
+      if (a + b < L.from) continue;
+      const bx = view.bx0 + px, h = hash01((bx * 73856093) ^ (by * 19349663) ^ (slot + (bx & 7)) * 83492791);
+      const wx = (bx + 0.5) / z - cyDrift.x, wy = (by + 0.5) / z - cyDrift.y;
+      const n = (1 - L.fine) * valueNoise(wx / L.grainX, wy / L.grainY) + L.fine * valueNoise(wx / (L.grainX * 0.4), wy / (L.grainY * 0.5));
+      const patch = smoothstep(L.patchFrom, L.patchTo, n);
+      if (patch <= 0) continue;
+      const ka = clamp((a - L.from) / L.full, 0, 1), kb = clamp((b - L.from) / L.full, 0, 1);
+      const pa = ka * ka * patch * L.density / z, pb = kb * kb * patch * L.density / z;   // dense water shows far more than thin
+      if (h < pa) ib[row + px] = syn + (h < pa * 0.4 ? BRIGHT : HIGHLIGHT);
+      else if (h < pa + pb) ib[row + px] = pro + (h < pa + pb * 0.4 ? BRIGHT : HIGHLIGHT);
     }
   }
 }
@@ -4755,6 +4919,7 @@ function composeFrame(w, now) {
   drawParticles(P.far, 1000, ta, false);
   drawParticles(P.mid, 2000, ta, false);
   drawPlumes(w);
+  drawCyano(w, waterT);
   drawPebbles();
   drawCysts(w);
   updateCrawlers(w);
@@ -4856,6 +5021,8 @@ function notebookSample(w) {
   r[o + NB.WIND] = w.wind;
   r[o + NB.NUT] = meanNutrient(w);
   r[o + NB.SILICA] = meanSilica(w);
+  const cy = cyanoTotal(w);
+  r[o + NB.SYN] = cy.syn; r[o + NB.PRO] = cy.pro;
   let z = 0;
   for (let i = 0; i < graz.length; i++) z += graz[i];
   r[o + NB.GRAZ] = z / graz.length;
@@ -4938,12 +5105,14 @@ function notebookColumns() {
     t0, t1, first: rowAt(t0), has: new Uint8Array(CW), k: new Float32Array(CW),
     light: new Float32Array(CW), nut: new Float32Array(CW), graz: new Float32Array(CW), pop: new Float32Array(CW), si: new Float32Array(CW),
     lys: new Float32Array(CW),   // cells burst by viruses per minute (from the ledger's running count)
+    cyano: new Float32Array(CW),   // cyanobacteria biomass
     n: new Float32Array(CW * F), depth: new Float32Array(CW * F), sd: new Float32Array(CW * F),
   };
   for (let i = cols.first; i < n; i++) {
     const o = i * S, c = t1 > t0 ? Math.min(CW - 1, Math.floor((rowTick(r, i) - t0) / (t1 - t0) * CW)) : CW - 1;
     cols.k[c]++;
     cols.light[c] += r[o + NB.LIGHT]; cols.nut[c] += r[o + NB.NUT]; cols.graz[c] += r[o + NB.GRAZ]; cols.pop[c] += r[o + NB.POP]; cols.si[c] += r[o + NB.SILICA];
+    cols.cyano[c] += r[o + NB.SYN] + r[o + NB.PRO];
     const LY = NB.DEATHS + CAUSES.findIndex((k) => k.key === 'lysed'), dtRow = i > 0 ? r[o + NB.TICK] - r[o - S + NB.TICK] : 0;
     if (dtRow > 0) cols.lys[c] += Math.max(0, r[o + LY] - r[o - S + LY]) / dtRow * 60;
     for (let f = 0; f < F; f++) {
@@ -4953,7 +5122,7 @@ function notebookColumns() {
       cols.sd[c * F + f] += m * (sd * sd + d * d);
     }
   }
-  const scalars = [cols.light, cols.nut, cols.graz, cols.pop, cols.si, cols.lys], perForm = [cols.n, cols.depth, cols.sd];
+  const scalars = [cols.light, cols.nut, cols.graz, cols.pop, cols.si, cols.lys, cols.cyano], perForm = [cols.n, cols.depth, cols.sd];
   for (let c = 0; c < CW; c++) {
     const k = cols.k[c];
     if (k) {
@@ -5259,13 +5428,24 @@ function drawCensusPage(w, y) {
     bar(BX, ry + 2, BW, counts[f] / most, FORMS[f].ramp);
     inkRight(x1 - 7, ry + 1, String(counts[f]), counts[f] ? COL.FOAM : COL.SLATE);
   }
-  ink(P.x + 6, y + 92, 'IN CHAINS ' + chained + '   CYSTS ' + w.cysts.length + '   GLOWING ' + glow, COL.SHAFT);
-  dotted(P.x + 6, x1 - 7, y + 101, COL.SLATE);
-  drawSpanRow(y + 107);
+  const cyT = cyanoTotal(w), cyN = Math.round(cyT.syn + cyT.pro), ry = y + F * 10;   // cyanobacteria: biomass, about a cell's worth per unit
+  drawCyanoIcon(P.x + 6, ry, !cyN);
+  ink(P.x + 16, ry + 1, 'CYANOBACTERIA', cyN ? COL.FOAM : COL.SLATE);
+  bar(BX, ry + 2, BW, Math.min(1, cyN / Math.max(most, 1)), ROSE);
+  inkRight(x1 - 7, ry + 1, String(cyN), cyN ? COL.FOAM : COL.SLATE);
+  ink(P.x + 6, y + 102, 'IN CHAINS ' + chained + '   CYSTS ' + w.cysts.length + '   GLOWING ' + glow, COL.SHAFT);
+  dotted(P.x + 6, x1 - 7, y + 111, COL.SLATE);
+  drawSpanRow(y + 117);
 
-  const cols = notebookColumns(), cy0 = y + 119, ch = 117;
+  const cols = notebookColumns(), cy0 = y + 129, ch = 107;
   drawStack(cols, cy0, ch);
   drawTimeAxis(cols, cy0 + ch + 3);
+}
+
+// Cyanobacteria's icon: a haze of tiny specks, pink and blue-green
+function drawCyanoIcon(x, y, faint) {
+  const dots = [[1, 1, ROSE], [4, 0, EMERALD], [2, 3, EMERALD], [5, 3, ROSE], [0, 5, ROSE], [3, 6, EMERALD], [6, 5, ROSE], [4, 4, ROSE]];
+  for (const [dx, dy, r] of dots) put(x + dx, y + dy, faint ? COL.SLATE : rampBase(r) + (faint ? SHADOW : BRIGHT));
 }
 
 // The population over the window, stacked by form (green algae at the bottom), nights dark behind
@@ -5306,10 +5486,11 @@ function drawWaterPage(w, y) {
     { name: 'SILICA', a: cols.si, idx: rampBase(LIGHTBLUE) + BRIGHT },
     { name: 'GRAZERS', a: cols.graz, idx: rampBase(ROSE) + HIGHLIGHT, own: true },
     { name: 'VIRUSES', a: cols.lys, idx: rampBase(VIOLET) + HIGHLIGHT, own: true },   // cells they burst per minute
+    { name: 'CYANO', a: cols.cyano, idx: rampBase(EMERALD) + BRIGHT, own: true },     // cyanobacteria biomass
   ];
   let lx = P.x + 6;
-  for (const sr of series) { ink(lx, y + 11, sr.name, sr.idx); lx += textWidth(sr.name) + 8; }
-  const cy0 = y + 20, ch = 88;
+  for (const sr of series) { if (lx + textWidth(sr.name) > P.x + P.w - 6) { lx = P.x + 6; y += 7; } ink(lx, y + 11, sr.name, sr.idx); lx += textWidth(sr.name) + 8; }
+  const cy0 = y + 20, ch = 81;
   chartBackground(cols, cy0, ch);
   let shared = 0;   // nutrients and silica share one scale, so the two can be compared
   for (let c = 0; c < CW; c++) if (cols.has[c]) shared = Math.max(shared, cols.nut[c], cols.si[c]);
@@ -5744,6 +5925,7 @@ function frame(now) {
     audioWeather(world, now);
     audioAmbience(world);
     audioVisitors(world);
+    audioCyano(world);
     needsRender = false;
     recordFrame(performance.now() - t0 - overlayMs);
   }

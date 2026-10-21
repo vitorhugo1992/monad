@@ -424,7 +424,7 @@ const PARAMS = {
              feelers: 0.95, legBeat: 3, swimBeat: 9, glide: 0.45, wander: 8, dartEvery: 4.5, dartDist: 7, dartTime: 0.6 },
   },
   murk: { from: 0.8, full: 3 },         // bloom biomass summed down the upper column: rays fade in murky water
-  hud: { x: 4, y: 290, line: 7, visibleMs: 6000, fadeMs: 2000, epitaphFade: 20, listenY: 200, listenVis: 1, music: { x: 150, y: 5 } },   // music: the music button, left of the notebook glyph   // epitaph fades in over 20 simulated s; listen: the solid TAP TO LISTEN hint
+  hud: { x: 4, y: 290, line: 7, visibleMs: 6000, fadeMs: 2000, epitaphFade: 20, listenY: 200, listenVis: 1, music: { x: 150, y: 5 }, bar: { w: 80, h: 3 } },   // music: the music button, left of the notebook glyph; bar: the catch-up progress bar   // epitaph fades in over 20 simulated s; listen: the solid TAP TO LISTEN hint
   debug: { syncEvery: 15, sampleEvery: 100, historyLength: 180, frameSamples: 120, graphY: 172, graphH: 48, mapX: 126, mapY: 6, mapCell: 2 },
   // Field notebook: the world's records behind one small glyph (top right, fades with the HUD). Observation only:
   // a row every sampleEvery simulated s for the whole life (when maxSamples fill up, every other row is dropped and
@@ -4256,7 +4256,16 @@ function drawHud(w, now) {
   } else if (catchup.phase) {   // the recap: how long it was away, the days going by
     const day = Math.floor(w.tick * TICK_DT / w.dayLength + PARAMS.diel.start) + 1;
     drawText(Hd.x, Hd.y - Hd.line, 'AWAY ' + duration(catchup.lived + catchup.rested) + '  DAY ' + day, rampBase(1) + HIGHLIGHT, vis);
-    if (catchup.rested > 0) drawText(Hd.x, Hd.y - Hd.line * 2, 'RESTED ' + duration(catchup.rested), rampBase(ROSE) + HIGHLIGHT, vis);
+    // How much of the time away has been lived: a gold bar filling a dotted track
+    const B = Hd.bar, by = Hd.y - Hd.line * 2 + 1, span = catchupTarget() - catchup.base;
+    const fill = Math.round(B.w * clamp(span > 0 ? (w.tick - catchup.base) / span : 1, 0, 1));
+    for (let x = 0; x < B.w; x++) {
+      for (let y = 0; y < B.h; y++) {
+        if (x < fill) put(Hd.x + x, by + y, rampBase(1) + (y ? BASE : HIGHLIGHT));
+        else if (y === B.h >> 1 && !(x & 1)) put(Hd.x + x, by + y, COL.SLATE);
+      }
+    }
+    if (catchup.rested > 0) drawText(Hd.x, Hd.y - Hd.line * 3, 'RESTED ' + duration(catchup.rested), rampBase(ROSE) + HIGHLIGHT, vis);
   }
   drawText(Hd.x, Hd.y, 'SEED ' + seedLabel, COL.FOAM, vis);
   drawText(Hd.x, Hd.y + Hd.line, 'T ' + clock(w.tick * TICK_DT), COL.FOAM, vis);

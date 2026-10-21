@@ -14,7 +14,7 @@
 
 Pixel-art phytoplankton drift, grow, divide, synchronise and die in a dark water column, and every note you hear
 comes from one of them. Diatoms sing like glockenspiels and vibraphones, dinoflagellates like wood and plucked
-strings, green algae like a felt piano. Blooms swell into chords; die-offs fall silent. You can just watch
+strings, green algae like a felt piano, coccolithophores like a celesta and cryptophytes like a kalimba. Blooms swell into chords; die-offs fall silent. You can just watch
 it, like a tide pool, or put your hand in the water.
 
 ## The idea: emergence, not authorship
@@ -31,6 +31,11 @@ short list of local rules, and everything else comes out of how they interact:
 - **Division and inheritance.** A well-fed cell divides into two daughters with slightly mutated genes. Every
   gene is something you can see or hear: colour, size, preferred depth, pulse rate, how strongly it syncs
   with its neighbours, and its form (and with it its instrument).
+- **Nine forms, each with its niche.** Green algae; coccolithophores, wrapped in chalk plates (slow growers that
+  win in poor, calm water and turn it milky when they bloom); cryptophytes (masters of dim light, and
+  Dinophysis's favourite prey); four dinoflagellates (*Alexandrium*, *Dinophysis*, *Tripos*, *Prorocentrum*);
+  centric and pennate diatoms. Their colours follow their real pigments: golden-brown diatoms, rust-brown
+  dinoflagellates, green algae, yellow-to-green coccolithophores, red-to-blue cryptophytes.
 - **Death and recycling.** Cells die of starvation or old age, and their nutrients return to the water or
   sink to the floor. Some leave dormant cysts in the sediment that can bring the water back to life later.
 - **Grazers and visitors.** An invisible field of grazers grows where cells are dense and starves away

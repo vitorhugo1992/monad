@@ -71,6 +71,10 @@ function arcs(pops) {
   return { n, dieoffs, bloom: state > 0 || n > 0 };
 }
 
+const GROUPS = ['glass', 'dino', 'green', 'cocco', 'crypto'];
+const GROUP_NAMES = ['diatoms', 'dinoflagellates', 'green algae', 'coccolithophores', 'cryptophytes'];
+const GROUP_OF = ['green', 'dino', 'dino', 'dino', 'dino', 'glass', 'glass', 'cocco', 'crypto'];   // by kind
+
 function run(seed) {
   const w = sim.createWorld(seed);
   const pops = [];
@@ -105,15 +109,13 @@ function run(seed) {
       if (t > 600 * rate) { lateMin = Math.min(lateMin, pop + w.cysts.length); lateCellMin = Math.min(lateCellMin, pop); }   // after the inoculum has grown
       if (pop >= 20 && t % (3 * sampleTicks) === 0) syncs.push(sim.syncStats(w));
       // Dinoflagellates: their share of the living cells, and how many there are (Margalef: blooms only in calm water)
-      let nd = 0, ng = 0;
-      for (const c of w.cells) {
-        if (c.dying) continue;
-        if (sim.dinoWeight(c.g.timbre) > 0.5) nd++;
-        else if (c.g.timbre >= sim.PARAMS.dino.full) ng++;   // glass: diatoms, as the notebook counts them
-      }
+      // Five groups by form: diatoms, dinoflagellates, green algae, coccolithophores, cryptophytes
+      const gc = { glass: 0, dino: 0, green: 0, cocco: 0, crypto: 0 };
+      for (const c of w.cells) if (!c.dying) gc[GROUP_OF[c.kind]]++;
+      const nd = gc.dino;
       dinos.push({ n: nd, share: pop ? nd / pop : 0, wind: w.wind });
-      // Diversity, late in the run: diatoms vs dinoflagellates vs flagellates; one group >= 90% counts as a monoculture
-      if (t > total / 2 && pop >= 10) groups.push({ glass: ng / pop, dino: nd / pop, soft: (pop - ng - nd) / pop });
+      // Diversity, late in the run; one group >= 90% counts as a monoculture
+      if (t > total / 2 && pop >= 10) groups.push(Object.fromEntries(GROUPS.map((k) => [k, gc[k] / pop])));
     }
     // Mean depth at mid-day and late night: diel vertical migration
     const ph = sim.dayPhase(w), D = sim.PARAMS.diel;
@@ -146,10 +148,10 @@ function run(seed) {
     longest: Math.max(1, ...syncs.map((q) => q.longest)),
     dino: { share: mean(dinos.map((q) => q.share)), peak: Math.max(0, ...dinos.map((q) => q.n)),
             over50: dinos.filter((q) => q.n >= 50).length / (dinos.length || 1) },
-    groups: { glass: mean(groups.map((q) => q.glass)), dino: mean(groups.map((q) => q.dino)), soft: mean(groups.map((q) => q.soft)),
-              mono: groups.filter((q) => Math.max(q.glass, q.dino, q.soft) >= 0.9).length / (groups.length || 1),
+    groups: { share: GROUPS.map((k) => mean(groups.map((q) => q[k]))),
+              mono: groups.filter((q) => Math.max(...GROUPS.map((k) => q[k])) >= 0.9).length / (groups.length || 1),
               // who leads the water, and for what share of the time: a succession gives every group its turn
-              lead: ['glass', 'dino', 'soft'].map((k) => groups.filter((q) => q[k] >= q.glass && q[k] >= q.dino && q[k] >= q.soft).length / (groups.length || 1)) },
+              lead: GROUPS.map((k) => groups.filter((q) => GROUPS.every((o) => q[k] >= q[o])).length / (groups.length || 1)) },
   };
 }
 
@@ -176,7 +178,7 @@ for (let s = firstSeed; s < firstSeed + seeds; s++) {
     ` | sync loc ${f(r.sync.local)} lock ${f(r.sync.locked)} glob ${f(r.sync.global)}` +
     ` | chains ${r.sync.chains.toFixed(1)} in ${Math.round(r.sync.chained * 100)}% max ${r.longest} rings ${r.sync.coils.toFixed(1)} stars ${r.sync.stars.toFixed(1)}` +
     ` | dino ${Math.round(r.dino.share * 100)}% peak ${r.dino.peak} >=50 ${Math.round(r.dino.over50 * 100)}%` +
-    ` | late diatom/dino/flag ${[r.groups.glass, r.groups.dino, r.groups.soft].map((x) => Math.round(x * 100)).join('/')}% mono ${Math.round(r.groups.mono * 100)}% lead ${r.groups.lead.map((x) => Math.round(x * 100)).join('/')}%` +
+    ` | late diat/dino/green/cocco/crypto ${r.groups.share.map((x) => Math.round(x * 100)).join('/')}% mono ${Math.round(r.groups.mono * 100)}% lead ${r.groups.lead.map((x) => Math.round(x * 100)).join('/')}%` +
     ` | music ${r.music.key} ons ${r.music.ons.toFixed(2)}/s vox<=${r.music.maxVox} quiet ${Math.round(r.music.quiet * 100)}% longest ${r.music.longest.toFixed(0)} s` +
     ` chords/min ${r.music.chords2.toFixed(1)} (3+ ${r.music.chords3.toFixed(1)}) clash ${(r.music.harsh * 100).toFixed(1)}% 2nds ${(r.music.seconds * 100).toFixed(0)}% last ${r.music.lastNotes}\n`);
 }
@@ -215,7 +217,8 @@ console.log('\n' + [
   `chains: median count ${median(results.map((r) => r.sync.chains)).toFixed(1)}, cells chained ${Math.round(100 * median(results.map((r) => r.sync.chained)))}%, longest ${Math.max(...results.map((r) => r.longest))}`,
   `dinoflagellates: median share ${Math.round(100 * median(results.map((r) => r.dino.share)))}%, seeds with a bloom of >=50: ${results.filter((r) => r.dino.peak >= 50).length}/${n}, median time spent >=50: ${Math.round(100 * median(results.map((r) => r.dino.over50)))}%`,
   `music (median): onsets ${median(results.map((r) => r.music.ons)).toFixed(2)}/s, near-silence ${Math.round(100 * median(results.map((r) => r.music.quiet)))}% of the time, chords ${median(results.map((r) => r.music.chords2)).toFixed(1)}/min (3+ ${median(results.map((r) => r.music.chords3)).toFixed(1)}), m2/tritone clashes ${(100 * median(results.map((r) => r.music.harsh))).toFixed(1)}%, seconds ${Math.round(100 * median(results.map((r) => r.music.seconds)))}%`,
-  `diversity, second half (median): diatoms ${Math.round(100 * median(results.map((r) => r.groups.glass)))}%, dinoflagellates ${Math.round(100 * median(results.map((r) => r.groups.dino)))}%, flagellates ${Math.round(100 * median(results.map((r) => r.groups.soft)))}%; monoculture (one group >= 90%) ${Math.round(100 * median(results.map((r) => r.groups.mono)))}% of the time, worst seed ${Math.round(100 * Math.max(...results.map((r) => r.groups.mono)))}%; leading the water (mean share of time) diatoms ${Math.round(100 * results.reduce((s, r) => s + r.groups.lead[0], 0) / results.length)}%, dinoflagellates ${Math.round(100 * results.reduce((s, r) => s + r.groups.lead[1], 0) / results.length)}%, flagellates ${Math.round(100 * results.reduce((s, r) => s + r.groups.lead[2], 0) / results.length)}%`,
+  `diversity, second half (median share): ${GROUP_NAMES.map((name, i) => name + ' ' + Math.round(100 * median(results.map((r) => r.groups.share[i] || 0))) + '%').join(', ')}; monoculture (one group >= 90%) ${Math.round(100 * median(results.map((r) => r.groups.mono)))}% of the time, worst seed ${Math.round(100 * Math.max(...results.map((r) => r.groups.mono)))}%`,
+  `leading the water (mean share of time): ${GROUP_NAMES.map((name, i) => name + ' ' + Math.round(100 * results.reduce((s, r) => s + r.groups.lead[i], 0) / results.length) + '%').join(', ')}`,
   `causes of death (median share): ${['starved', 'old', 'grazed', 'sardines', 'salps', 'hunted', 'lysed'].map((k) => k + ' ' + Math.round(100 * median(results.map((r) => { const d = r.deaths, t = Object.values(d).reduce((s, v) => s + v, 0) || 1; return (d[k] || 0) / t; }))) + '%').join(', ')}`,
   `max |nutrient drift|: ${Math.max(...results.map((r) => Math.abs(r.drift))).toExponential(2)}, |silica drift|: ${Math.max(...results.map((r) => Math.abs(r.siDrift))).toExponential(2)}`,
   `deterministic rerun: ${again.checksum === results[0].checksum ? 'yes' : 'NO'} (${results[0].checksum.toString(16)})`,

@@ -40,11 +40,22 @@ short list of local rules, and everything else comes out of how they interact:
   a drifting cloud in the water, carried by slow currents, and show only when they bloom, as plumes of tiny
   pink-orange and blue-green specks with a faint, sparkling shimmer of sound. They win in poor, calm water, feed
   the grazers, and have their own viruses.
-- **Death and recycling.** Cells die of starvation or old age, and their nutrients return to the water or
-  sink to the floor. Some leave dormant cysts in the sediment that can bring the water back to life later.
+- **Filamentous cyanobacteria** (like *Trichodesmium*, "sea sawdust"): golden-brown tufts and puffs of
+  filaments that fix their own nitrogen from the air, so they thrive in warm, nutrient-poor water and fertilise it
+  when they die. Gas vesicles float them up, so in calm, warm spells they gather into a scum at the surface that
+  shades everything below; the wind breaks it up.
+- **The water's physics.** Sunlight warms the surface, the air cools it, and the wind and the tide stir it. In
+  calm weather the column stratifies into a warm mixed layer, a thermocline and a cold bottom layer, as shelf
+  seas do in summer; storms deepen the mixed layer and bring nutrients up. Storms also wash muddy runoff in from
+  the coast. Oxygen is made in the light and used wherever dead matter rots: dead cells fall as marine snow and
+  settle on the floor, and under calm, stratified water after a bloom the bottom can run out of oxygen and become
+  a dead zone.
+- **Death and recycling.** Cells die of starvation, old age or lack of oxygen, and their nutrients return to the
+  water or sink as marine snow. Some leave dormant cysts in the sediment that can bring the water back to life later.
 - **Grazers and visitors.** An invisible field of grazers grows where cells are dense and starves away
   slowly, which ends blooms and lets the water recover. Big blooms draw in sardine schools and salp chains,
-  and the salps draw in an ocean sunfish.
+  and the salps draw in an ocean sunfish. The school hums a soft chord, the salps play a gentle sequenced tune
+  (one note per barrel), and the sunfish calls.
 - **Succession.** As in the real ocean, no group keeps the water for long:
   - **Silicate:** diatoms need silica for their glass. It stays in the shell until the cell dies, then mostly
     sinks, so a diatom bloom strips the surface of silica and opens the water to the others.
@@ -71,8 +82,8 @@ when it dies, the whole water may modulate.
 
 The author studies phytoplankton, so the biology is meant to carry weight: size allometry, Margalef's mandala
 (turbulence against dinoflagellates), a lagged grazer response, the biological pump, resting cysts, diel
-vertical migration, silica limitation, viral lysis and the viral shunt, kleptoplasty, and a seed bank of
-newcomers.
+vertical migration, silica limitation, viral lysis and the viral shunt, kleptoplasty, a seed bank of
+newcomers, nitrogen fixation, stratification and tidal mixing, and hypoxia.
 
 ## Playing
 
@@ -82,9 +93,11 @@ newcomers.
   ring, its peak following your finger from low on the left to high on the right.
 - **Pinch** or scroll to zoom in up to 8× and see the cells in detail; drag to pan.
 - The small **book** at the top right opens a field notebook: the day, a census of the forms, the water
-  (nutrients, silica and grazers over time, lined up with the population of each form, so you can watch the
-  succession happen), their daily migration, and a ledger of deaths (grazed, eaten by fish, hunted, lysed by
-  viruses...) and visitors. The **note** beside it turns the music off and on.
+  (nutrients, silica, grazers, oxygen and warmth over time, lined up with the population of each form, so you can
+  watch the succession happen), the column (a vertical cast of the water now, like an oceanographer's profile:
+  temperature, oxygen, nutrients, silica, light and chlorophyll, with the mixed layer and thermocline marked),
+  their daily migration, and a ledger of deaths (grazed, eaten by fish, hunted, lysed by viruses, suffocated...)
+  and visitors. The **note** beside it turns the music off and on.
 
 ## A world that keeps living
 
@@ -106,7 +119,7 @@ then choose **⋮ → Install app**. It runs full screen and offline, and update
 - **One file.** The whole app is `index.html`: vanilla JavaScript, Canvas 2D and the Web Audio API, with no
   frameworks and no build step. The other files (`manifest.webmanifest`, `sw.js`, `icons/`) are only what
   installing needs.
-- **Pixel art from a fixed palette.** Everything renders at 180 × 320 pixels from a palette of 53 colours,
+- **Pixel art from a fixed palette.** Everything renders at 180 × 320 pixels from a palette of 72 colours,
   with ordered dithering instead of gradients, and is scaled up by whole numbers.
 - **Deterministic.** All randomness comes from one seeded generator, the simulation runs at a fixed 30 ticks
   per second, and its maths avoids anything that could differ between JavaScript engines. The same seed grows

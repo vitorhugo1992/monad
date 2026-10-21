@@ -83,6 +83,53 @@ const PARAMS = {
     speed: 1.2, windSpeed: 2.5, wave: 70, turn: 0.004, advectEvery: 15,
     grazedRecycled: 0.7, lysedRecycled: 0.9,
   },
+  // Trichodesmium (approved local rule, author): the bloom-forming cyanobacterium, colonies of filaments ("sea
+  // sawdust"), a third field of biomass per node. It fixes its own nitrogen (fix: share of its nutrient drawn from the
+  // air, counted as imported, so it fertilises poor water when it dies), grows slowly and only in warm water
+  // (warmFrom..warmFull degrees), is hardly grazed (grazed: share of the grazers' pressure; it is toxic) and is lysed by
+  // its own phages where dense. Gas vesicles: it rises at rise units/s, and ballast built in bright light turns it
+  // down (v = rise x (ballast x L - 1)), so in calm water it gathers at the surface as a scum; wind mixing stirs it down.
+  // It shades the water below (shade per unit) and a scum burns in full sun (burn per s in the surface row at full
+  // light). Of what dies, recycled is returned in place; the rest sinks as marine snow (scums collapse and sink).
+  tricho: { growth: 0.024, half: 0.03, fix: 0.7, warmFrom: 19, warmFull: 23, max: 4, respire: 0.002, q: 0.65,
+            grazed: 0.15, phage: 0.045, phageHalf: 1.2, floor: 0.001, rise: 1.2, ballast: 1.4, shade: 0.12, burn: 0.004,
+            diffusion: 0.1, recycled: 0.5, trace: 0.01 },   // trace: below it, in water too cold to grow, nothing happens but drift
+  // Temperature (approved local rule): sunlight warms the water where it is absorbed (heat degrees/s at full light),
+  // the surface row loses heat toward the air (cool per s, faster in wind: windCool), deep water is cold (deep; the
+  // bottom layer is renewed by cold shelf water: vent per s at the floor, fading upward like the tide's stirring; the
+  // seabed itself takes no heat). Heat diffuses slowly (diffusion, nodes^2/s): left alone the water stratifies.
+  // Growth speeds up when warm: x q10^((T - ref)/10) for cells (q10) and cyanobacteria (cyanoQ10).
+  temperature: { deep: 10, surface: 19, air: 15, heat: 0.026, cool: 0.001, windCool: 0.015, ref: 18, q10: 1.6, cyanoQ10: 2.2, diffusion: 0.008, vent: 0.002 },
+  // Vertical mixing (approved local rules), nodes^2/s: base everywhere; the wind's stirring (at full wind, squared)
+  // fading with depth over depth of the column; and the tide's over the seabed (author: tidal stirring makes a bottom
+  // mixed layer, as on shelves), fading upward over tideDepth of the column. Stratification resists mixing (approved,
+  // after Pacanowski & Philander 1981): both are divided by (1 + stratified x the step in degrees, warm over cold, to the
+  // rows around)^2, so the wind mixes a uniform surface layer and stops at a sharp thermocline, deepening it in storms.
+  // Where cold water lies over warm (the surface cooling at night) the water overturns: convect, as convective
+  // adjustment does in ocean models, so the mixed layer also deepens by night.
+  // It mixes heat, oxygen and Trichodesmium, and a share (nutrients) of it the nutrients and silica.
+  mixing: { base: 0.005, wind: 5, depth: 0.6, tide: 1.2, tideDepth: 0.1, stratified: 5, convect: 3, nutrients: 0.5 },
+  // Storm runoff (approved local rule): rain on the land washes nutrients and silt into the sea. During a storm (wind
+  // above storm), now and then (rate per s at full storm, at least refractory s apart) a lens of muddy fresh water
+  // spreads from the coast across the surface (speed units/s, depth units thick), releasing amount nutrients (and
+  // silica x that) along its way, counted as imported, with silt: silt shades the water below (siltShade per unit),
+  // sinks (siltSink units/s) and settles out (siltTau s). It rains while the lens spreads.
+  runoff: { storm: 0.55, rate: 0.02, refractory: 400, amount: 30, silica: 0.8, speed: 2.5, depth: 30, silt: 25, siltShade: 0.5, siltSink: 0.6, siltTau: 150 },
+  // Oxygen (approved local rule): made where nutrients are taken up (photosynthesis, per unit of nutrient) and used
+  // where they are returned (respiration and decomposition, the same per unit), so it piles up in the lit layer and runs
+  // short where dead matter rots. The surface row breathes with the air toward saturation (aerate per s, faster in wind:
+  // windAerate); warm water holds less (saturation 1 - satT x (T - air temperature)). It diffuses slowly (diffusion); shelf
+  // water renews the bottom layer (vent per s at the floor, toward deep), as it does the heat.
+  // Below hypoxic cells suffocate (kill per s at anoxic and below), grazers die back (grazerDie per s) and sardines
+  // steer away. With 1 = saturation (about 5.8 mL/L, 8 mg/L, in seawater at 15 degrees), hypoxic 0.35 is the usual
+  // definition of hypoxia, 2 mL/L or 2.8 mg/L (Diaz & Rosenberg 2008); anoxic 0.08 is severe hypoxia, about 0.6 mg/L.
+  oxygen: { per: 1, diffusion: 0.008, deep: 0.8, vent: 0.004, aerate: 0.02, windAerate: 0.1, satT: 0.02, hypoxic: 0.35, anoxic: 0.08, kill: 0.04, grazerDie: 0.01 },
+  // Marine snow (approved local rule): what sinks out of the water (dead cells, pellets, the lost share of the eaten
+  // and the lysed) falls as a detritus field (sink units/s) that rots on the way (rot per s) and settles on the floor as
+  // a deposit (one pool per column) that rots slowly (bed per s), feeding the bottom water and using its oxygen. Without
+  // oxygen only the anaerobic share of the rotting goes on (half: oxygen for half the aerobic rate); warm water rots
+  // faster (q10, from temperature.ref).
+  snow: { sink: 2.5, rot: 0.004, bed: 0.003, half: 0.15, anaerobic: 0.25, q10: 2 },
   // The soft cells' lineage forms (approved, author): share of soft lineages that are coccolithophores and
   // cryptophytes (the rest green algae). cocco: top growth x slow (calcifiers grow slowly, so they win only where water
   // is poor), half-saturation x affinity (efficient uptake in stripped water), upkeep
@@ -293,6 +340,11 @@ const PARAMS = {
     // an octave higher. Both go through the music bus (the music button silences them).
     visitorVoices: {
       school: { every: 4.5, dur: 10, attack: 3, gain: 0.018, octave: 4, cut: 2400, detune: 7, wet: 0.55, pan: 0.6 },
+      // The salp chain (author): a gentle, smooth sequenced melody while it is on screen, one step per barrel along the
+      // chain (step s apart, then rest steps of silence before it loops); each barrel's note is a scale step from the last
+      // (steps), within low..high degrees of the root around octave. A barrel the sunfish has bitten off leaves a hole.
+      salp: { step: 0.62, rest: 2, octave: 4, steps: [-1, 1, 1, 2, -2, 0, 1, -1], low: -2, high: 6, gain: 0.03, attack: 0.09, release: 1.9,
+              cut: 1700, twin: 2.003, twinGain: 0.16, wet: 0.6, pan: 0.6 },
       sunfish: { everyMin: 12, everyMax: 20, dur: 4.2, attack: 0.5, glideAt: 1.3, glide: 0.6, gain: 0.06, octave: 3,
                  cut: 760, sub: 0.5, wet: 0.45, pan: 0.5, baskGain: 0.55 },
     },
@@ -300,6 +352,8 @@ const PARAMS = {
     // in octave (and one up now and then), at up to rate per s, rising with the cyanobacteria on screen (mean biomass
     // from .. from + full); through the music bus.
     cyanoGrains: { rate: 7, from: 0.02, full: 0.1, gain: 0.006, octave: 6, attack: 0.004, release: 0.2, wet: 0.65, pan: 0.7 },
+    // Trichodesmium joins the shimmer lower and slower: warmer grains an octave and more below, rising with the colonies on screen
+    trichoGrains: { rate: 3, from: 0.03, full: 0.4, gain: 0.009, octave: 4, attack: 0.012, release: 0.7, wet: 0.7, pan: 0.7 },
     ambience: {
       gain: 0.55, wet: 0.25, noiseSeconds: 3,
       swell: { everyCalm: 6, everyStorm: 2.2, durCalm: 10, durStorm: 5, gainCalm: 0.012, gainStorm: 0.09, freqCalm: 320, freqStorm: 1300 },
@@ -395,7 +449,7 @@ const PARAMS = {
   // Bubbles: breaking chop entrains clusters just under the surface that sink a little and rise back to pop;
   // now and then gas seeps from the sediment and a few bubbles rise through the whole column. Each one chirps.
   bubbles: { chopFrom: 0.35, chopFull: 0.85, clusters: 1.4, clusterMin: 3, clusterMax: 8, depthMin: 3, depthMax: 18, plunge: 9,
-             seepRate: 0.025, seepMin: 2, seepMax: 5, rMin: 0.35, rMax: 1.1, riseMin: 5, riseMax: 13, drag: 2, wobble: 0.6, wobbleRate: 5, max: 120 },
+             seepRate: 0.025, anoxicSeep: 3, seepMin: 2, seepMax: 5, rMin: 0.35, rMax: 1.1, riseMin: 5, riseMax: 13, drag: 2, wobble: 0.6, wobbleRate: 5, max: 120 },
   // Touch: a tap is a short press that barely moves; at zoom 1 a drag strums (each touched cell plucks its note,
   // within touch units of the finger, at most once per pluckRest s, at most plucksPerSecond overall) and leaves a
   // wake fading over trail s. Moving toward the surface opens the master filter, toward the deep closes it (bendSpan
@@ -493,6 +547,24 @@ const PARAMS = {
     // only): a streaky noise grainX x grainY units (fine: share of a finer layer), drifting with the current, lets specks
     // show only between patchFrom and patchTo of it, so a bloom breaks into drifting filaments and patches.
     cyano: { from: 0.02, full: 0.12, density: 0.28, twinkle: 0.7, grainX: 16, grainY: 7, fine: 0.35, patchFrom: 0.42, patchTo: 0.78 },
+    // Trichodesmium as drawn: golden-brown colonies on a lattice (spacing units, drifting sideways with the current), shown
+    // where the field holds from..full (chance up to share): tufts (filaments side by side) or puffs (puff of them:
+    // filaments radiating from a centre), len units long, loose (splay: rad between neighbours; wave: their waving as a
+    // share of len); each sways (sway units) and turns (turn rad) as the water moves it. The scum: a mat
+    // just under the surface, up to thick units deep, where the surface row holds scumFrom..scumFull.
+    tricho: { spacing: 6, from: 0.04, full: 0.8, share: 0.8, len: 3.4, puff: 0.35, filaments: 4, sway: 1.2, turn: 0.35, splay: 0.14, wave: 0.05, scumFrom: 0.12, scumFull: 1.5, thick: 4, bob: 0.6 },
+    // Marine snow from the detritus field: flocs on a lattice (spacing units) falling with it at its own speed, shown
+    // where it holds from..full (chance up to share); loose aggregates close up
+    snow: { spacing: 5, from: 0.004, full: 0.08, share: 0.75, clumpZoom: 2 },
+    // The floor deposit: units of fluff per unit of deposit in a grid column (at most max); crawlers pick it over
+    // (eat: share per s while feeding) and it settles back over regrow s. White sulphur-bacteria mats (Beggiatoa-like)
+    // grow on it where the bottom water is nearly anoxic (below mat x the severe level, oxygen.anoxic), as on sulfidic sediment.
+    deposit: { perUnit: 0.5, max: 5, eat: 0.04, regrow: 120, mat: 1.5 },
+    // Tints: runoff silt (per node for full mud, at most max) and dead water (hypoxic to anoxic, at most max)
+    mud: { full: 0.35, max: 0.6 }, dead: { max: 0.55 },
+    // Rain while runoff spreads: drops per s on the whole surface, each a ring spreading for ring s; bubble: share that
+    // leave a bubble (which chirps: rain heard from under the water)
+    rain: { drops: 30, ring: 0.45, ringR: 2.5, bubble: 0.2 },
     krill: { hungry: 0, foodFull: 0.8, fedTau: 2.5, zFrom: 0.3, zSpan: 0.6, coverage: 0.25, len: 8, thick: 0.15, curl: 0.12, flick: 0.35,
              feelers: 0.95, legBeat: 3, swimBeat: 9, glide: 0.45, wander: 8, dartEvery: 4.5, dartDist: 7, dartTime: 0.6 },
   },
@@ -503,16 +575,18 @@ const PARAMS = {
   // a row every sampleEvery simulated s for the whole life (when maxSamples fill up, every other row is dropped and
   // rows come half as often). spans: windows the graphs zoom between (s; 0 = the whole life). Rects in pixels.
   // nightBelow: surface light drawn as night behind the graphs; seaStates: wind for breeze, windy, storm;
-  // noonHour: the clock reads solar time (noon halfway through the daylight).
+  // noonHour: the clock reads solar time (noon halfway through the daylight); chlDim: extra chlorophyll per biomass in
+  // dim water, at no light (the column page, photoacclimation).
   notebook: {
     sampleEvery: 5, maxSamples: 65536, spans: [600, 1800, 3600, 10800, 0], startSpan: 4,
     page: { x: 6, y: 14, w: 168, h: 292 }, chart: { x: 20, w: 140 }, glyph: { x: 164, y: 3 }, bar: { x: 64, w: 84 },
-    dim: 0.55, swipe: 20, nightBelow: 0.15, seaStates: [0.15, 0.35, 0.6], noonHour: 12, dialR: 34,
+    dim: 0.55, swipe: 20, nightBelow: 0.15, chlDim: 3,
+    layers: { mixedStep: 0.5, clineShare: 0.5, stratified: 1, minRows: 9 },   // the column page's layer criteria (degrees; share of the steepest gradient; chart rows) seaStates: [0.15, 0.35, 0.6], noonHour: 12, dialR: 34,
   },
   // One world that lives on between visits (unless the URL picks a seed or another start: a scratch world, never saved).
   // every: real s between autosaves (also on hiding the page); chunkRows: notebook rows per stored chunk, so a save
   // writes only the rows that changed.
-  persist: { db: 'monad', every: 30, chunkRows: 1024, version: 4,
+  persist: { db: 'monad', every: 30, chunkRows: 1024, version: 5,
     // Catching up: the time away is lived again, exactly, up to maxAway (s); beyond it the water rests. A worker runs
     // it out of sight and shows a frame every show s (a silent time-lapse); the last tail simulated s play on the page,
     // from tailSpeed x slowing to real time, so the recap glides into the live world. bench: s measured by ?bench.
@@ -563,9 +637,20 @@ function dexp(x) {
   let k = 0;
   while (x > 0.5 || x < -0.5) { x *= 0.5; k++; }
   let term = 1, sum = 1;
-  for (let i = 1; i <= 12; i++) { term = term * x / i; sum += term; }
+  for (let i = 1; i <= 12; i++) {
+    term = term * x / i;
+    sum += term;
+    if (term < 1e-17 && term > -1e-17) break;   // the rest no longer changes the sum (the same on every engine)
+  }
   while (k-- > 0) sum *= sum;
   return sum;
+}
+
+// Natural log from dexp alone (Halley's iteration), for the few constants built from PARAMS
+function dlog(x) {
+  let y = 0;
+  for (let i = 0; i < 40; i++) { const e = dexp(y); y += 2 * (x - e) / (x + e); }
+  return y;
 }
 
 // Sine from arithmetic only (Taylor series on [-pi/2, pi/2]); error below 1e-7.
@@ -706,17 +791,37 @@ function createFields() {
     kinds: Array.from({ length: KINDS }, () => new Float64Array(n)),   // biomass per kind, for the viruses
     syn: new Float64Array(n).fill(PARAMS.cyano.floor), pro: new Float64Array(n).fill(PARAMS.cyano.floor),   // cyanobacteria
     cyScratch: new Float64Array(n),
+    tri: new Float64Array(n).fill(PARAMS.tricho.floor),   // Trichodesmium
+    temp: new Float64Array(n), o2: new Float64Array(n),   // degrees; oxygen (1 = saturated at 15 degrees)
+    det: new Float64Array(n), sed: new Float64Array(cols), silt: new Float64Array(n),   // marine snow; the floor deposit per column; runoff silt
+    warm: new Float64Array(n), warmCy: new Float64Array(n), warmSnow: new Float64Array(n),   // warmth factors for cells, cyanobacteria, rotting
   };
-  const Si = PARAMS.silica;
+  const Si = PARAMS.silica, T = PARAMS.temperature, O = PARAMS.oxygen;
   for (let j = 0; j < rows; j++) {
-    const depth = (j + 0.5) / rows;
+    const depth = (j + 0.5) / rows, cline = smoothstep(N.clineTop, N.clineBottom, depth);
     f.profile[j] = PARAMS.light.surface * dexp(-PARAMS.light.atten * depth);
-    const nut = N.surface + (N.deep - N.surface) * smoothstep(N.clineTop, N.clineBottom, depth);
-    const si = Si.surface + (Si.deep - Si.surface) * smoothstep(N.clineTop, N.clineBottom, depth);
-    for (let i = 0; i < cols; i++) { f.nut[j * cols + i] = nut; f.si[j * cols + i] = si; }
+    const nut = N.surface + (N.deep - N.surface) * cline;
+    const si = Si.surface + (Si.deep - Si.surface) * cline;
+    for (let i = 0; i < cols; i++) {
+      const k = j * cols + i;
+      f.nut[k] = nut; f.si[k] = si;
+      f.temp[k] = T.surface + (T.deep - T.surface) * cline;
+      f.o2[k] = 1 + (O.deep - 1) * cline;
+    }
   }
   f.graz.fill(PARAMS.grazing.floor);
+  updateWarmth(f);
   return f;
+}
+
+// Warmth factors per node, from the temperature (it changes slowly, so they are refreshed every few ticks)
+function updateWarmth(f) {
+  const t = f.temp;
+  for (let k = 0; k < t.length; k++) {
+    f.warm[k] = warmth(WARM_CELL, t[k]);
+    f.warmCy[k] = warmth(WARM_CYANO, t[k]);
+    f.warmSnow[k] = warmth(WARM_SNOW, t[k]);
+  }
 }
 
 // Surface light over the diel cycle (phase 0 = sunrise): sqrt of a half sine, then moonlight.
@@ -732,14 +837,75 @@ function dayPhase(w) {
 }
 
 function updateLight(w) {
-  const { cols, rows } = PARAMS.grid, f = w.fields, ks = PARAMS.light.shade;
+  const { cols, rows } = PARAMS.grid, f = w.fields, ks = PARAMS.light.shade, kt = PARAMS.tricho.shade, kz = PARAMS.runoff.siltShade;
   w.surfaceLight = surfaceLightAt(dayPhase(w));
-  for (let i = 0; i < cols; i++) {   // self-shading: the biomass above (last tick's) dims the water below
+  for (let i = 0; i < cols; i++) {   // self-shading: the biomass above (last tick's), a scum and runoff silt dim the water below
     let above = 0;
     for (let j = 0; j < rows; j++) {
-      const k = j * cols + i, b = f.bio[k];
-      f.light[k] = f.profile[j] * w.surfaceLight * (ks > 0 ? dexp(-ks * (above + 0.5 * b)) : 1);
+      const k = j * cols + i, b = ks * f.bio[k] + kt * f.tri[k] + kz * f.silt[k];
+      f.light[k] = f.profile[j] * w.surfaceLight * dexp(-(above + 0.5 * b));
       above += b;
+    }
+  }
+}
+
+// Growth speeds up in warm water: q10^((T - ref)/10), as dexp(ln q10 x (T - ref)/10), tabulated once per hundredth of a
+// degree over 0..40 and read linearly
+const WARM_STEP = 0.01, WARM_N = 4001;
+function warmTable(q10) {
+  const lnq = dlog(q10) / 10, t = new Float64Array(WARM_N);
+  for (let i = 0; i < WARM_N; i++) t[i] = dexp(lnq * (i * WARM_STEP - PARAMS.temperature.ref));
+  return t;
+}
+const WARM_CELL = warmTable(PARAMS.temperature.q10), WARM_CYANO = warmTable(PARAMS.temperature.cyanoQ10), WARM_SNOW = warmTable(PARAMS.snow.q10);
+function warmth(table, T) {
+  const g = clamp(T / WARM_STEP, 0, WARM_N - 1.000001), i = Math.floor(g);
+  return table[i] + (table[i + 1] - table[i]) * (g - i);
+}
+
+// Vertical stirring, one coefficient per interface between row j and j + 1 of each column (stored at j's node): the
+// wind's from the surface and the tide's from the seabed, each fading with distance from where it is made, both damped
+// where the water is stratified (warm over cold), plus a weak background everywhere. Their shapes with depth are fixed.
+const FLOOR_ROW = Math.floor((H - PARAMS.world.floor) / GRID_H);   // the row the sediment surface lies in
+const MIX_K = new Float64Array(PARAMS.grid.cols * PARAMS.grid.rows), MIX_COL = new Float64Array(PARAMS.grid.rows);
+const WIND_REACH = new Float64Array(PARAMS.grid.rows), TIDE_REACH = new Float64Array(PARAMS.grid.rows), BOTTOM = new Float64Array(PARAMS.grid.rows);
+for (let j = 0; j < PARAMS.grid.rows; j++) {
+  const M = PARAMS.mixing, rows = PARAMS.grid.rows, above = FLOOR_ROW - (j + 1);   // rows between the interface and the seabed
+  WIND_REACH[j] = dexp(-(j + 1) / rows / M.depth);
+  TIDE_REACH[j] = above >= 0 ? dexp(-above / rows / M.tideDepth) : 0;   // no stirring inside the sediment
+  BOTTOM[j] = j >= FLOOR_ROW ? 1 : dexp(-(FLOOR_ROW - j) / rows / M.tideDepth);   // the bottom layer, where shelf water flows in
+}
+
+// Shelf water renews the bottom layer: a field there eases toward the shelf water's value (rate per s at the floor)
+function renewBottom(a, value, rate) {
+  const { cols, rows } = PARAMS.grid;
+  for (let j = 0; j < rows; j++) {
+    const k = rate * BOTTOM[j];
+    if (k < 1e-9) continue;
+    for (let i = 0; i < cols; i++) a[j * cols + i] += (value - a[j * cols + i]) * k;
+  }
+}
+function updateMixing(w, dt) {
+  const M = PARAMS.mixing, { cols, rows } = PARAMS.grid, t = w.fields.temp, wind = M.wind * w.wind * w.wind;
+  for (let j = 0; j < rows - 1; j++) {
+    const stir = wind * WIND_REACH[j] + M.tide * TIDE_REACH[j];
+    const up = j > 0 ? j - 1 : j, down = j < rows - 2 ? j + 2 : j + 1;   // judged over the rows around the interface:
+    for (let i = 0; i < cols; i++) {                                      // over one step alone, mixing breaks the water into stairs
+      const k = j * cols + i, dT = (t[up * cols + i] - t[down * cols + i]) / (down - up), damp = dT > 0 ? 1 + M.stratified * dT : 1;
+      MIX_K[k] = (M.base + stir / (damp * damp) + (dT < 0 ? M.convect : 0)) * dt;   // cold over warm overturns at once
+    }
+  }
+}
+
+// One vertical mixing step (share of the coefficient): conservative, closed at the top and the bottom
+function mixColumn(a, share) {
+  const { cols, rows } = PARAMS.grid, b = MIX_COL;
+  for (let i = 0; i < cols; i++) {
+    for (let j = 0; j < rows; j++) b[j] = a[j * cols + i];
+    for (let j = 0; j < rows - 1; j++) {
+      const q = MIX_K[j * cols + i] * share * (b[j + 1] - b[j]);
+      a[j * cols + i] += q;
+      a[(j + 1) * cols + i] -= q;
     }
   }
 }
@@ -820,7 +986,7 @@ function diffuseGrid(a, b, k, kb, deep) {
 
 // Grazers: grow where food is dense, starve slowly elsewhere, spread by closed diffusion, never below a floor.
 function updateGrazers(f, dt) {
-  const { cols, rows } = PARAMS.grid, G = PARAMS.grazing;
+  const { cols, rows } = PARAMS.grid, G = PARAMS.grazing, O = PARAMS.oxygen;
   const k = G.diffusion * dt, K2 = G.halfB * G.halfB;
   const a = f.graz, b = f.grazScratch;
   for (let j = 0; j < rows; j++) {
@@ -828,8 +994,8 @@ function updateGrazers(f, dt) {
       const idx = j * cols + i, c = a[idx], B = f.bio[idx];
       const l = i > 0 ? a[idx - 1] : c, r = i < cols - 1 ? a[idx + 1] : c;
       const u = j > 0 ? a[idx - cols] : c, d = j < rows - 1 ? a[idx + cols] : c;
-      const food = B * B / (B * B + K2);
-      const v = c + k * (l + r + u + d - 4 * c) + c * (G.growth * food - G.decay) * dt;
+      const food = B * B / (B * B + K2), ox = f.o2[idx], die = ox < O.hypoxic ? O.grazerDie * smoothstep(O.hypoxic, O.anoxic, ox) : 0;   // they die back in hypoxic water
+      const v = c + k * (l + r + u + d - 4 * c) + c * (G.growth * food - G.decay - die) * dt;
       b[idx] = clamp(v, G.floor, G.max);
     }
   }
@@ -1070,7 +1236,9 @@ function createWorld(seed, founderCount, dayLength) {
     pulses: [], lastPulse: -1e9,
     wind: PARAMS.wind.start, windTarget: PARAMS.wind.start, nextWind: 0,
     fallen: new Float64Array(PARAMS.grid.cols),   // detritus exported per column, ever (observed only, never read by the rules)
-    deaths: { starved: 0, old: 0, grazed: 0, sardines: 0, salps: 0, hunted: 0, lysed: 0 },   // observed only
+    deaths: { starved: 0, old: 0, grazed: 0, sardines: 0, salps: 0, hunted: 0, lysed: 0, hypoxia: 0 },   // observed only
+    runoffs: [], lastRunoff: -1e9,                  // storm runoff: spreading lenses of muddy fresh water
+    fixed: 0, washed: 0, siWashed: 0,               // nutrients fixed from the air by Trichodesmium, washed in by runoff (in imported too); silica washed in (observed only)
     inputs: [], disturb: [],                        // the hand: queued gestures, active disturbances
     visitors: [], nextVisitorId: 1, carried: 0,     // carried: nutrients that left the column inside visitors
     siUpwelled: 0, initialSilica: 0,                // silica in from the deep; at the start (observed only)
@@ -1108,24 +1276,43 @@ function aliveCount(w) {
   return n;
 }
 
-// Field + nutrients bound in cells + cyst reserves. Changes only by upwelling and newcomers (in) and visitors (carried out).
+// Field + nutrients bound in cells, cysts, cyanobacteria, marine snow and the floor deposit. Changes only by upwelling,
+// newcomers, nitrogen fixation and runoff (in) and visitors (carried out).
 function nutrientInventory(w) {
   let s = 0;
-  const nut = w.fields.nut;
-  for (let i = 0; i < nut.length; i++) s += nut[i];
+  const f = w.fields, nut = f.nut;
+  for (let i = 0; i < nut.length; i++) s += nut[i] + f.det[i];
+  for (let i = 0; i < f.sed.length; i++) s += f.sed[i];
   for (let i = 0; i < w.cells.length; i++) s += w.cells[i].held;
   for (let i = 0; i < w.cysts.length; i++) s += w.cysts[i].reserve;
-  const syn = w.fields.syn, pro = w.fields.pro;
-  for (let i = 0; i < syn.length; i++) s += (syn[i] + pro[i]) * PARAMS.cyano.q;   // bound in cyanobacteria
+  const syn = f.syn, pro = f.pro, tri = f.tri;
+  for (let i = 0; i < syn.length; i++) s += (syn[i] + pro[i]) * PARAMS.cyano.q + tri[i] * PARAMS.tricho.q;   // bound in cyanobacteria
   return s;
 }
 
 // Cyanobacteria in the whole column (biomass, about a cell's worth per unit)
 function cyanoTotal(w) {
-  const syn = w.fields.syn, pro = w.fields.pro;
-  let a = 0, b = 0;
-  for (let i = 0; i < syn.length; i++) { a += syn[i]; b += pro[i]; }
-  return { syn: a, pro: b };
+  const syn = w.fields.syn, pro = w.fields.pro, tri = w.fields.tri;
+  let a = 0, b = 0, c = 0;
+  for (let i = 0; i < syn.length; i++) { a += syn[i]; b += pro[i]; c += tri[i]; }
+  return { syn: a, pro: b, tri: c };
+}
+
+// Oxygen in the bottom water (the lowest rows above the sediment), and the lowest node there: where dead zones form
+const BOTTOM_ROWS = [30, 31, 32, 33, 34, 35, 36, 37];
+function bottomOxygen(w) {
+  const o2 = w.fields.o2, cols = PARAMS.grid.cols;
+  let s = 0, lo = Infinity;
+  for (const j of BOTTOM_ROWS) for (let i = 0; i < cols; i++) { const v = o2[j * cols + i]; s += v; if (v < lo) lo = v; }
+  return { mean: s / (BOTTOM_ROWS.length * cols), min: lo };
+}
+
+// Mean temperature of the surface row
+function surfaceTemp(w) {
+  const t = w.fields.temp, cols = PARAMS.grid.cols;
+  let s = 0;
+  for (let i = 0; i < cols; i++) s += t[i];
+  return s / cols;
 }
 
 function meanNutrient(w) {
@@ -1139,7 +1326,7 @@ function meanNutrient(w) {
 // dinoflagellate range keeps the flag but no longer shows it
 const isLuminous = (c) => c.lum && dinoWeight(c.g.timbre) > 0.5;
 
-// Silica in the water and in the frustules. Changes only by upwelling (in).
+// Silica in the water and in the frustules. Changes only by upwelling and runoff (in).
 function silicaInventory(w) {
   let s = 0;
   const si = w.fields.si;
@@ -1180,7 +1367,12 @@ function stepWorld(w) {
   w.upwelled += diffuseNutrients(w.fields, dt);
   w.siUpwelled += diffuseSilica(w.fields, dt);
   updateWind(w, dt);
+  updateMixing(w, dt);
+  mixColumn(w.fields.nut, PARAMS.mixing.nutrients);
+  mixColumn(w.fields.si, PARAMS.mixing.nutrients);
   updatePulses(w, dt);
+  updateRunoff(w, dt);
+  updateTemperature(w, dt);
   applyHand(w);
   buildHash(w);
   for (let i = 0; i < cells.length; i++) {   // Brownian kicks, drawn in the same order as always
@@ -1203,12 +1395,16 @@ function stepWorld(w) {
   updateChains(w, dt);
   graze(w, dt);
   cyanobacteria(w, dt);
+  tricho(w, dt);
   lyse(w, dt);
   hunt(w, dt);
+  suffocate(w, dt);
   updateVisitors(w, dt);
   lifeAndDeath(w);
   updateCysts(w, dt);
   immigrate(w, dt);
+  marineSnow(w, dt);
+  updateOxygen(w, dt);
   // Extinction is an ending, not a reset: the water goes on, empty and silent
   if (w.extinctTick < 0 && !w.cysts.length && aliveCount(w) === 0) w.extinctTick = w.tick;
 }
@@ -1362,9 +1558,11 @@ function metabolise(w, c, dt, pace) {
   const siLim = (1 - glass + glass * S / (S + Si.half))   // diatoms slow as silica runs low
     * (c.hunter ? PARAMS.hunt.dark + (1 - PARAMS.hunt.dark) * c.klepto : 1);   // Dinophysis photosynthesises with stolen plastids
   if (c.hunter) c.klepto *= KLEPTO_K;
-  const gain = c.gainK * L * N / (N + c.halfSat) * calm * siLim * (1 - PARAMS.elder.slowUpkeep * c.elder) * dt;   // elders: slow metabolism
+  const gain = c.gainK * L * N / (N + c.halfSat) * calm * siLim * (1 - PARAMS.elder.slowUpkeep * c.elder)   // elders: slow metabolism
+    * sampleField(f.warm, c.x, c.y) * dt;                                                                     // faster in warm water
   const want = gain * PARAMS.metabolism.uptake * c.biomass;
   const got = want > 0 ? takeField(f.nut, c.x, c.y, want) : 0;
+  if (got > 0) addField(f.o2, c.x, c.y, got * PARAMS.oxygen.per);   // photosynthesis gives oxygen off
   let share = want > 0 ? got / want : 0;
   if (glass > 0 && got > 0) {   // the glass is built from silica, in step with the growth
     const siWant = got * Si.ratio * glass, siGot = takeField(f.si, c.x, c.y, siWant);
@@ -1502,22 +1700,23 @@ function graze(w, dt) {
 
 // Cyanobacteria: two living fields, node by node; then the currents carry them
 function cyanobacteria(w, dt) {
-  const Cy = PARAMS.cyano, G = PARAMS.grazing, f = w.fields, { cols, rows } = PARAMS.grid, K = G.halfB, h2 = Cy.phageHalf * Cy.phageHalf;
+  const Cy = PARAMS.cyano, G = PARAMS.grazing, f = w.fields, K = G.halfB, h2 = Cy.phageHalf * Cy.phageHalf;
   for (const type of ['syn', 'pro']) {
     const C = f[type], dim = Cy[type].dim;
     for (let k = 0; k < C.length; k++) {
       let c = C[k];
       if (c < Cy.floor) { w.imported += (Cy.floor - c) * Cy.q; c = Cy.floor; }   // a trace drifts in from the open ocean
       const L0 = f.light[k], L = dim ? L0 * (1 + dim) / (L0 + dim) : L0, N = f.nut[k];
-      const want = Cy.growth * L * N / (N + Cy.half) * c * (1 - c / Cy.max) * dt;
+      const want = Cy.growth * L * N / (N + Cy.half) * f.warmCy[k] * c * (1 - c / Cy.max) * dt;
       const grow = want > 0 ? takeNode(f.nut, k, want * Cy.q) / Cy.q : 0;
       const B = f.bio[k], Z = f.graz[k];
       const resp = Cy.respire * c * dt;
       const eaten = G.rate * Z * K * B / (B * B + K * K) * c * dt;
       const lysed = Cy.phage * c * c / (c * c + h2) * c * dt;
-      const x = ((k % cols) + 0.5) * GRID_W;
-      f.nut[k] += (resp + eaten * Cy.grazedRecycled + lysed * Cy.lysedRecycled) * Cy.q;
-      exportDetritus(w, x, (eaten * (1 - Cy.grazedRecycled) + lysed * (1 - Cy.lysedRecycled)) * Cy.q);
+      const back = (resp + eaten * Cy.grazedRecycled + lysed * Cy.lysedRecycled) * Cy.q;
+      f.nut[k] += back;
+      f.o2[k] += (grow * Cy.q - back) * PARAMS.oxygen.per;   // made as they grow, used as they are respired and rot
+      f.det[k] += (eaten * (1 - Cy.grazedRecycled) + lysed * (1 - Cy.lysedRecycled)) * Cy.q;
       C[k] = Math.max(0, c + grow - resp - eaten - lysed);
     }
     const k2 = Cy.diffusion * dt;
@@ -1536,22 +1735,166 @@ function currentAt(w, x, y, out) {
   out.v = -sp * (dsin(a1 + HALF_PI) * dsin(b1) * k + 0.6 * dsin(a2 + HALF_PI) * dsin(b2) * k * 0.6);
 }
 
-// Semi-Lagrangian: each node takes what the current brought from upstream; rescaled so nothing is made or lost
-const CUR = { u: 0, v: 0 };
+// Semi-Lagrangian: each node takes what the current brought from upstream; rescaled so nothing is made or lost.
+// Where each node's water came from is worked out once per tick and shared by every field the current carries.
+const CUR = { u: 0, v: 0 }, DEP_X = new Float64Array(PARAMS.grid.cols * PARAMS.grid.rows), DEP_Y = new Float64Array(DEP_X.length);
+let depTick = -1;
 function advect(w, C) {
   const Cy = PARAMS.cyano, { cols, rows } = PARAMS.grid, b = w.fields.cyScratch, step = Cy.advectEvery * TICK_DT;
   let before = 0, after = 0;
   for (let k = 0; k < C.length; k++) before += C[k];
-  for (let j = 0; j < rows; j++) {
-    for (let i = 0; i < cols; i++) {
-      const x = (i + 0.5) * GRID_W, y = (j + 0.5) * GRID_H;
-      currentAt(w, x, y, CUR);
-      b[j * cols + i] = sampleField(C, x - CUR.u * step, y - CUR.v * step);
+  if (depTick !== w.tick) {
+    depTick = w.tick;
+    for (let j = 0; j < rows; j++) {
+      for (let i = 0; i < cols; i++) {
+        const x = (i + 0.5) * GRID_W, y = (j + 0.5) * GRID_H;
+        currentAt(w, x, y, CUR);
+        DEP_X[j * cols + i] = x - CUR.u * step; DEP_Y[j * cols + i] = y - CUR.v * step;
+      }
     }
   }
+  for (let k = 0; k < C.length; k++) b[k] = sampleField(C, DEP_X[k], DEP_Y[k]);
   for (let k = 0; k < C.length; k++) after += b[k];
   const keep = after > 0 ? before / after : 1;
   for (let k = 0; k < C.length; k++) C[k] = b[k] * keep;
+}
+
+// Trichodesmium: grows where the water is warm, fixing most of its nitrogen from the air; floats up on its gas
+// vesicles and sinks under the ballast it builds in bright light, so calm water gathers it into a surface scum
+const TRI_V = new Float64Array(PARAMS.grid.cols * PARAMS.grid.rows);   // sinking speed per node (negative: rising)
+function tricho(w, dt) {
+  const Tr = PARAMS.tricho, G = PARAMS.grazing, Ox = PARAMS.oxygen, f = w.fields, { cols, rows } = PARAMS.grid;
+  const C = f.tri, K = G.halfB, h2 = Tr.phageHalf * Tr.phageHalf;
+  for (let k = 0; k < C.length; k++) {
+    let c = C[k];
+    if (c < Tr.floor) { w.imported += (Tr.floor - c) * Tr.q; c = Tr.floor; }   // a trace drifts in from the open ocean
+    const L = f.light[k], N = f.nut[k];
+    TRI_V[k] = Tr.rise * (Tr.ballast * L - 1);
+    if (c < Tr.trace && f.temp[k] <= Tr.warmFrom) { C[k] = c; continue; }   // only a trace, in water too cold to grow: it just drifts
+    const want = Tr.growth * L * N / (N + Tr.half) * smoothstep(Tr.warmFrom, Tr.warmFull, f.temp[k]) * f.warmCy[k] * c * (1 - c / Tr.max) * dt;
+    let grow = 0;
+    if (want > 0) {   // the fixed share comes from the air (new nutrients); the rest from the water, as far as it holds
+      const need = want * Tr.q * (1 - Tr.fix), got = takeNode(f.nut, k, need);
+      grow = need > 0 ? want * got / need : want;
+      const fixed = grow * Tr.q * Tr.fix;
+      w.fixed += fixed; w.imported += fixed;
+    }
+    const B = f.bio[k], Z = f.graz[k];
+    const resp = Tr.respire * c * dt;
+    const eaten = G.rate * Z * K * B / (B * B + K * K) * Tr.grazed * c * dt;
+    const lysed = (Tr.phage * c * c / (c * c + h2) + (k < cols ? Tr.burn * L : 0)) * c * dt;   // phages; a scum burns in full sun
+    const back = (resp + eaten * G.recycled + lysed * Tr.recycled) * Tr.q;
+    f.nut[k] += back;
+    f.o2[k] += (grow * Tr.q - back) * Ox.per;
+    f.det[k] += (eaten * (1 - G.recycled) + lysed * (1 - Tr.recycled)) * Tr.q;
+    C[k] = Math.max(0, c + grow - resp - eaten - lysed);
+  }
+  // Buoyancy: each interface passes what rises from below and what sinks from above (closed at the surface: the scum)
+  const b = f.cyScratch, s = dt / GRID_H;
+  b.set(C);
+  for (let j = 0; j < rows - 1; j++) {
+    for (let i = 0; i < cols; i++) {
+      const k = j * cols + i, kd = k + cols;
+      const q = (TRI_V[kd] < 0 ? -TRI_V[kd] * b[kd] : 0) - (TRI_V[k] > 0 ? TRI_V[k] * b[k] : 0);
+      C[k] += q * s;
+      C[kd] -= q * s;
+    }
+  }
+  mixColumn(C, 1);
+  diffuseGrid(C, b, Tr.diffusion * dt, 0, 0);
+  C.set(b);
+  if (w.tick % PARAMS.cyano.advectEvery === 0) advect(w, C);
+}
+
+const SLOW_EVERY = 3;   // ticks between the steps of the weak diffusion of heat and oxygen
+
+// Temperature: sunlight warms the water where it is absorbed, the surface gives heat back to the air (faster in wind),
+// heat diffuses, deep water is cold, and wind mixing carries the warm layer down
+function updateTemperature(w, dt) {
+  const T = PARAMS.temperature, f = w.fields, cols = PARAMS.grid.cols, t = f.temp, k = T.diffusion * dt * SLOW_EVERY;
+  for (let i = 0; i < t.length; i++) t[i] += T.heat * f.light[i] * f.profile[(i / cols) | 0] * dt;   // most of the heat stays in the top few metres
+  const loss = (T.cool + T.windCool * w.wind) * dt;
+  for (let i = 0; i < cols; i++) t[i] += (T.air - t[i]) * loss;
+  if (w.tick % SLOW_EVERY === 0) { diffuseGrid(t, f.cyScratch, k, 0, 0); t.set(f.cyScratch); }   // weak: every few ticks is enough
+  renewBottom(t, T.deep, T.vent * dt);
+  mixColumn(t, 1);
+  if (w.tick % PARAMS.cyano.advectEvery === 0) updateWarmth(f);
+}
+
+// Oxygen: the surface breathes with the air toward saturation (less in warm water, faster in wind); oxygen diffuses
+// and is mixed; deep water seeps in slowly at the bottom. Never below none.
+function updateOxygen(w, dt) {
+  const O = PARAMS.oxygen, f = w.fields, cols = PARAMS.grid.cols, o2 = f.o2, b = f.cyScratch, k = O.diffusion * dt * SLOW_EVERY;
+  const air = (O.aerate + O.windAerate * w.wind) * dt;
+  for (let i = 0; i < cols; i++) o2[i] += (1 - O.satT * (f.temp[i] - PARAMS.temperature.air) - o2[i]) * air;
+  if (w.tick % SLOW_EVERY === 0) diffuseGrid(o2, b, k, 0, 0); else b.set(o2);   // weak: every few ticks is enough
+  for (let i = 0; i < o2.length; i++) o2[i] = b[i] > 0 ? b[i] : 0;
+  renewBottom(o2, O.deep, O.vent * dt);
+  mixColumn(o2, 1);
+}
+
+// Marine snow: detritus sinks, rotting on the way (the rot uses oxygen; without it only the anaerobic share goes on),
+// and settles on the floor, where the deposit rots slowly into the bottom water
+function marineSnow(w, dt) {
+  const S = PARAMS.snow, O = PARAMS.oxygen, f = w.fields, { cols, rows } = PARAMS.grid, d = f.det, o2 = f.o2, nut = f.nut;
+  const fall = S.sink * dt / GRID_H;
+  const rot = (k, m, rate) => {   // returns what rotted
+    const ox = o2[k], aer = (1 - S.anaerobic) * ox / (ox + S.half), q = rate * f.warmSnow[k] * dt;
+    const r = m * q * (S.anaerobic + aer);
+    nut[k] += r;
+    o2[k] = Math.max(0, ox - m * q * aer * O.per);
+    return r;
+  };
+  for (let j = rows - 1; j >= 0; j--) {   // from the bottom up, so each flake falls one step per tick
+    for (let i = 0; i < cols; i++) {
+      const k = j * cols + i;
+      if (d[k] <= 0) continue;
+      const left = d[k] - rot(k, d[k], S.rot), move = left * fall;
+      d[k] = left - move;
+      if (j >= FLOOR_ROW) { f.sed[i] += move; w.fallen[i] += move; }
+      else d[k + cols] += move;
+    }
+  }
+  for (let i = 0; i < cols; i++) if (f.sed[i] > 0) f.sed[i] -= rot(FLOOR_ROW * cols + i, f.sed[i], S.bed);
+}
+
+// Storm runoff: during a storm, now and then a lens of muddy fresh water spreads from the coast across the surface,
+// bringing nutrients, silica and silt; the silt sinks and settles out
+function updateRunoff(w, dt) {
+  const Ro = PARAMS.runoff, rng = w.rng, f = w.fields;
+  if (w.wind > Ro.storm && w.tick - w.lastRunoff > Ro.refractory * PARAMS.time.tickRate
+      && rng.chance(Ro.rate * (w.wind - Ro.storm) / (1 - Ro.storm) * dt)) {
+    w.lastRunoff = w.tick;
+    const fromLeft = (w.seed & 1) === 0;   // the coast lies on one side, fixed by the seed
+    w.runoffs.push({ x: fromLeft ? 0 : W, dir: fromLeft ? 1 : -1, age: 0 });
+  }
+  const per = Ro.amount * Ro.speed * dt / W, siPer = per * Ro.silica, siltPer = Ro.silt * Ro.speed * dt / W, layers = 4;
+  let n = 0;
+  for (const r of w.runoffs) {
+    r.age += dt;
+    r.x += r.dir * Ro.speed * dt;
+    if (r.x < 0 || r.x > W) continue;
+    for (let l = 0; l < layers; l++) {
+      const y = (l + 0.5) * Ro.depth / layers;
+      addField(f.nut, r.x, y, per / layers);
+      addField(f.si, r.x, y, siPer / layers);
+      addField(f.silt, r.x, y, siltPer / layers);
+    }
+    w.imported += per; w.washed += per; w.siWashed += siPer;
+    w.runoffs[n++] = r;
+  }
+  w.runoffs.length = n;
+  // The silt sinks a row at a time and settles out
+  const { cols, rows } = PARAMS.grid, z = f.silt, fall = Ro.siltSink * dt / GRID_H, keep = 1 - dt / Ro.siltTau;
+  for (let j = rows - 1; j >= 0; j--) {
+    for (let i = 0; i < cols; i++) {
+      const k = j * cols + i;
+      if (z[k] <= 0) continue;
+      const m = z[k] * keep, move = j < rows - 1 ? m * fall : 0;
+      z[k] = m - move;
+      if (move) z[k + cols] += move;
+    }
+  }
 }
 
 // Viruses: each kind has its own, and a cell's risk rises with the biomass of its own kind around it
@@ -1573,8 +1916,8 @@ function burst(w, c) {
   c.lysed = true;
   w.deaths.lysed++;
   const here = c.held * PARAMS.virus.recycled;
-  addField(w.fields.nut, c.x, c.y, here);
-  exportDetritus(w, c.x, c.held - here);
+  remin(w, c.x, c.y, here);
+  exportDetritus(w, c.x, c.y, c.held - here);
   c.held = 0;
   releaseSilica(w, c);
 }
@@ -1614,7 +1957,7 @@ function devour(w, c, o) {
   o.grazed = true;
   w.deaths.hunted++;
   c.held += kept;
-  addField(w.fields.nut, o.x, o.y, o.held - kept);
+  remin(w, o.x, o.y, o.held - kept);
   o.held = 0;
   c.energy += Math.max(0, o.energy) * Hn.energy;
   releaseSilica(w, o);
@@ -1631,8 +1974,8 @@ function eaten(w, c) {
   c.grazed = true;
   w.deaths.grazed++;
   const recycled = c.held * PARAMS.grazing.recycled;
-  addField(w.fields.nut, c.x, c.y, recycled);
-  exportDetritus(w, c.x, c.held - recycled);
+  remin(w, c.x, c.y, recycled);
+  exportDetritus(w, c.x, c.y, c.held - recycled);
   c.held = 0;
   releaseSilica(w, c);
 }
@@ -1682,7 +2025,9 @@ function updateVisitors(w, dt) {
 // The school sweeps across, leaning toward richer water ahead, swallowing cells in its path
 function moveSchool(w, v, dt) {
   const S = PARAMS.visitors.sardines, f = w.fields;
-  const ax = v.x + v.dir * S.rx, up = sampleField(f.bio, ax, v.y - S.ry), down = sampleField(f.bio, ax, v.y + S.ry);
+  const O = PARAMS.oxygen, ax = v.x + v.dir * S.rx;
+  const breathable = (y) => smoothstep(O.anoxic, O.hypoxic, sampleField(f.o2, ax, y));   // they steer away from hypoxic water
+  const up = sampleField(f.bio, ax, v.y - S.ry) * breathable(v.y - S.ry), down = sampleField(f.bio, ax, v.y + S.ry) * breathable(v.y + S.ry);
   v.vy += (S.steer * (down - up) / (down + up + 1e-6) + S.wave * 0.3 * dsin(v.age * 0.9 + v.id) - S.drag * v.vy) * dt;
   v.x += v.vx * dt;
   v.y = clamp(v.y + v.vy * dt, 20, H - PARAMS.world.floor - 20);
@@ -1764,8 +2109,8 @@ function swallow(w, c, kind, S) {
   c.eaten = kind;
   w.deaths[kind]++;
   const ex = c.held * S.excreted, pel = c.held * S.pellets;
-  addField(w.fields.nut, c.x, c.y, ex);
-  exportDetritus(w, c.x, pel);
+  remin(w, c.x, c.y, ex);
+  exportDetritus(w, c.x, c.y, pel);
   w.carried += c.held - ex - pel;
   c.held = 0;
   releaseSilica(w, c);
@@ -1780,9 +2125,15 @@ function releaseSilica(w, c) {
   c.si = 0;
 }
 
-function exportDetritus(w, x, amount) {
-  addField(w.fields.nut, x, H - 1, amount);
-  w.fallen[clamp(Math.floor(x / GRID_W), 0, PARAMS.grid.cols - 1)] += amount;
+// What sinks out becomes marine snow where it was made; it reaches the floor later (see marineSnow)
+function exportDetritus(w, x, y, amount) {
+  addField(w.fields.det, x, y, amount);
+}
+
+// Organic matter returned to the water as nutrients: respiration and decomposition use oxygen
+function remin(w, x, y, amount) {
+  addField(w.fields.nut, x, y, amount);
+  addField(w.fields.o2, x, y, -amount * PARAMS.oxygen.per);
 }
 
 // Rules 3 and 4
@@ -1858,8 +2209,8 @@ function divide(w, c) {
 
 // Death returns nutrients: most are recycled in place, the rest sinks to the bottom as detritus.
 // A dying cell (more often a starving one) may leave a resting cyst.
-function die(w, c, starved) {
-  const Cy = PARAMS.cyst, nut = w.fields.nut;
+function die(w, c, starved, cause) {
+  const Cy = PARAMS.cyst;
   c.dying = 1;
   unlink(c);
   lastNote(w, c);
@@ -1873,11 +2224,22 @@ function die(w, c, starved) {
     });
   }
   const recycled = give * PARAMS.death.recycled;
-  addField(nut, c.x, c.y, recycled);
-  exportDetritus(w, c.x, give - recycled);
+  remin(w, c.x, c.y, recycled);
+  exportDetritus(w, c.x, c.y, give - recycled);
   c.held = 0;
   releaseSilica(w, c);
-  if (starved) w.deaths.starved++; else w.deaths.old++;
+  w.deaths[cause || (starved ? 'starved' : 'old')]++;
+}
+
+// Hypoxia: where oxygen runs short cells suffocate (a cyst may stay behind, as from a starving cell)
+function suffocate(w, dt) {
+  const O = PARAMS.oxygen, cells = w.cells, o2 = w.fields.o2;
+  for (let i = 0; i < cells.length; i++) {
+    const c = cells[i];
+    if (c.dying) continue;
+    const ox = sampleField(o2, c.x, c.y);
+    if (ox < O.hypoxic && w.rng.chance(O.kill * smoothstep(O.hypoxic, O.anoxic, ox) * dt)) die(w, c, true, 'hypoxia');
+  }
 }
 
 // A newcomer from the open ocean: one cell of a new lineage drifts in at a side of the column
@@ -1904,7 +2266,7 @@ function updateCysts(w, dt) {
     const q = cysts[i];
     q.age += dt;
     if (q.y < q.floorY) q.y = Math.min(q.floorY, q.y + Cy.sink * dt);
-    if (q.age > Cy.viability) { addField(w.fields.nut, q.x, q.y, q.reserve); continue; }
+    if (q.age > Cy.viability) { remin(w, q.x, q.y, q.reserve); continue; }
     if (q.age > q.dormancy && alive < PARAMS.division.maxCells
         && sampleField(w.fields.nut, q.x, q.y) > Cy.germNutrient && w.rng.chance(Cy.germRate * dt)) {
       const c = createCell(w, q.x, q.y, q.g, Cy.germEnergy, null, q.spriteSeed);
@@ -2903,24 +3265,30 @@ function scaleNote(m, octave, semis) {
   return 12 * (octave + 1) + m.root + best + 12 * Math.floor(semis / 12);
 }
 
-const visitorNext = { school: 0, sunfish: 0, grain: 0 };
+const visitorNext = { school: 0, sunfish: 0, grain: 0, triGrain: 0, salp: 0, salpStep: 0, salpId: -1 };
 
 // Cyanobacteria's shimmer: grains scheduled at random, thicker where more is on screen
 function audioCyano(w) {
   if (!audio.started) return;
-  const C = PARAMS.audio.cyanoGrains, t = audio.ctx.currentTime, mean = cyanoSeen / (TINT_W * TINT_H);
+  const A = PARAMS.audio;
+  grainStream(w, A.cyanoGrains, 'grain', cyanoSeen, cyanoSeenX);   // the picocyanobacteria: tiny high grains
+  grainStream(w, A.trichoGrains, 'triGrain', triSeen, triSeenX);    // Trichodesmium: lower, slower, warmer
+}
+
+function grainStream(w, C, key, seen, seenX) {
+  const t = audio.ctx.currentTime, mean = seen / (TINT_W * TINT_H);
   const rate = C.rate * clamp((mean - C.from) / C.full, 0, 1);
-  if (rate <= 0) { visitorNext.grain = t; return; }
-  while (visitorNext.grain <= t + 0.05) {
+  if (rate <= 0) { visitorNext[key] = t; return; }
+  while (visitorNext[key] <= t + 0.05) {
     const m = w.music, semis = m.scale[ambRng.int(m.scale.length)], up = ambRng.next() < 0.3 ? 12 : 0;
-    const x = cyanoSeen > 0 ? cyanoSeenX / cyanoSeen / W * 2 - 1 : 0;
-    grain(scaleNote(m, C.octave, semis + up), Math.max(visitorNext.grain, t) + PARAMS.audio.lookahead, x + (ambRng.next() - 0.5) * 0.6);
-    visitorNext.grain = Math.max(visitorNext.grain, t) + (-Math.log(1 - ambRng.next() * 0.999)) / rate;
+    const x = seen > 0 ? seenX / seen / W * 2 - 1 : 0;
+    grain(C, scaleNote(m, C.octave, semis + up), Math.max(visitorNext[key], t) + PARAMS.audio.lookahead, x + (ambRng.next() - 0.5) * 0.6);
+    visitorNext[key] = Math.max(visitorNext[key], t) + (-Math.log(1 - ambRng.next() * 0.999)) / rate;
   }
 }
 
-function grain(midi, t0, panX) {
-  const C = PARAMS.audio.cyanoGrains, ctx = audio.ctx, end = t0 + C.attack + C.release;
+function grain(C, midi, t0, panX) {
+  const ctx = audio.ctx, end = t0 + C.attack + C.release;
   const o = ctx.createOscillator(), env = ctx.createGain(), dry = ctx.createGain(), wet = ctx.createGain();
   const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
   o.frequency.value = 440 * Math.pow(2, (midi - 69) / 12);
@@ -2946,6 +3314,17 @@ function audioVisitors(w) {
     const S = V.school, m = w.music;
     schoolChord([scaleNote(m, S.octave, 0), scaleNote(m, S.octave, 7), scaleNote(m, S.octave, 14)], school.x / W * 2 - 1);
     visitorNext.school = t + S.every;
+  }
+  const salp = w.visitors.find((v) => v.kind === 'salps' && onScreen(v, 30));
+  if (salp) {   // one barrel's note per step, along the chain, then a rest; a bitten-off barrel is a hole in the tune
+    const Sp = V.salp, n = salp.alive.length;
+    if (salp.id !== visitorNext.salpId) { visitorNext.salpId = salp.id; visitorNext.salpStep = 0; visitorNext.salp = t; }
+    while (visitorNext.salp <= t + 0.05) {
+      const k = visitorNext.salpStep % (n + Sp.rest), at = Math.max(visitorNext.salp, t) + PARAMS.audio.lookahead;
+      if (k < n && salp.alive[k]) salpNote(salpMelody(w.music, salp.id, k), at, salpBarrel(salp, k).x / W * 2 - 1);
+      visitorNext.salpStep++;
+      visitorNext.salp = Math.max(visitorNext.salp, t) + Sp.step;
+    }
   }
   const fish = w.visitors.find((v) => v.kind === 'sunfish' && onScreen(v, 10));
   if (fish && t >= visitorNext.sunfish) {
@@ -2985,6 +3364,38 @@ function schoolChord(midis, panX) {
   dry.connect(audio.bus); wet.connect(audio.wet);
   for (const o of oscs) { o.start(t0); o.stop(end + 0.05); }
   oscs[0].onended = () => { for (const node of [...oscs, filt, env, pan, dry, wet]) if (node) node.disconnect(); };
+}
+
+// The salp's tune: a walk of scale steps along its barrels, fixed by the chain (a stateless hash, so the music never
+// touches the world)
+function salpMelody(m, id, k) {
+  const Sp = PARAMS.audio.visitorVoices.salp, len = m.scale.length;
+  let deg = 0;
+  for (let b = 1; b <= k; b++) deg = clamp(deg + Sp.steps[Math.floor(hash01(id * 977 + b) * Sp.steps.length)], Sp.low, Sp.high);
+  const oct = Math.floor(deg / len), d = deg - oct * len;
+  return scaleNote(m, Sp.octave + oct, m.scale[d]);
+}
+
+// One soft, rounded note of the salp's tune: a sine with a faint octave twin under a gentle lowpass, long and legato
+function salpNote(midi, t0, panX) {
+  const Sp = PARAMS.audio.visitorVoices.salp, ctx = audio.ctx, end = t0 + Sp.attack + Sp.release, hz = 440 * Math.pow(2, (midi - 69) / 12);
+  const o = ctx.createOscillator(), o2 = ctx.createOscillator(), g2 = ctx.createGain(), filt = ctx.createBiquadFilter();
+  const env = ctx.createGain(), dry = ctx.createGain(), wet = ctx.createGain(), pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+  o.frequency.value = hz;
+  o2.frequency.value = hz * Sp.twin;
+  g2.gain.value = Sp.twinGain;
+  filt.type = 'lowpass'; filt.frequency.value = Sp.cut; filt.Q.value = 0.5;
+  env.gain.setValueAtTime(0.0001, t0);
+  env.gain.linearRampToValueAtTime(Sp.gain, t0 + Sp.attack);
+  env.gain.exponentialRampToValueAtTime(0.0001, end);
+  dry.gain.value = 1 - Sp.wet; wet.gain.value = Sp.wet;
+  o.connect(filt); o2.connect(g2); g2.connect(filt); filt.connect(env);
+  let out = env;
+  if (pan) { pan.pan.value = clamp(panX, -1, 1) * Sp.pan; env.connect(pan); out = pan; }
+  out.connect(dry); out.connect(wet);
+  dry.connect(audio.bus); wet.connect(audio.wet);
+  for (const x of [o, o2]) { x.start(t0); x.stop(end + 0.05); }
+  o.onended = () => { for (const node of [o, o2, g2, filt, env, pan, dry, wet]) if (node) node.disconnect(); };
 }
 
 // The sunfish's call: a warm low tone (a filtered saw over a sine) that glides up a fifth
@@ -3092,6 +3503,8 @@ const bloomTint = new Float64Array(TINT_W * TINT_H);              // per 4x4 scr
 const milkyTint = new Float64Array(TINT_W * TINT_H);              // coccolithophore water, per 4x4 screen block
 const synTint = new Float64Array(TINT_W * TINT_H), proTint = new Float64Array(TINT_W * TINT_H);   // cyanobacteria, per block
 let cyanoSeen = 0, cyanoSeenX = 0;                                  // how much is on screen, and where (for the shimmer)
+const mudTint = new Float64Array(TINT_W * TINT_H), deadTint = new Float64Array(TINT_W * TINT_H);   // runoff silt; dead water
+let triSeen = 0, triSeenX = 0;                                      // Trichodesmium on screen (for its grains)
 const pebbles = [];
 let buildDeadline = 0;
 
@@ -3379,7 +3792,8 @@ function updateBloom(w) {
     for (let i = 0; i < chl.length; i++) { chl[i] += (chlNow[i] - chl[i]) * k; milk[i] += (milkNow[i] - milk[i]) * km; }
   }
   const z = cam.zoom;
-  cyanoSeen = 0; cyanoSeenX = 0;
+  cyanoSeen = 0; cyanoSeenX = 0; triSeen = 0; triSeenX = 0;
+  const Lk = PARAMS.look, O = PARAMS.oxygen, f = w.fields;
   for (let j = 0; j < TINT_H; j++) {
     for (let i = 0; i < TINT_W; i++) {
       const v = sampleField(chl, (view.bx0 + i * 4 + 2) / z, (view.by0 + j * 4 + 2) / z);
@@ -3388,11 +3802,20 @@ function updateBloom(w) {
       const wx = (view.bx0 + i * 4 + 2) / z, wy = (view.by0 + j * 4 + 2) / z, sy = sampleField(w.fields.syn, wx, wy), pr = sampleField(w.fields.pro, wx, wy);
       synTint[j * TINT_W + i] = sy; proTint[j * TINT_W + i] = pr;
       cyanoSeen += sy + pr; cyanoSeenX += (sy + pr) * (i * 4 + 2);
+      const tr = sampleField(f.tri, wx, wy);
+      triSeen += tr; triSeenX += tr * (i * 4 + 2);
+      mudTint[j * TINT_W + i] = clamp(sampleField(f.silt, wx, wy) / Lk.mud.full, 0, 1) * Lk.mud.max;
+      deadTint[j * TINT_W + i] = smoothstep(O.hypoxic, O.anoxic, sampleField(f.o2, wx, wy)) * Lk.dead.max;
     }
   }
 }
 
 const surfaceLine = new Float64Array(W), floorLine = new Float64Array(W);   // per screen column, per frame
+// Muddy runoff water and dead water, by the water band they replace (0..SHAFT, darkest first)
+const MUD = [rampBase(BROWN) + OUTLINE, rampBase(BROWN) + OUTLINE, rampBase(AMBER) + OUTLINE, rampBase(AMBER) + OUTLINE, rampBase(OLIVE) + SHADOW,
+             rampBase(OLIVE) + SHADOW, rampBase(AMBER) + SHADOW, rampBase(AMBER) + SHADOW, rampBase(OLIVE) + BASE];
+const DEAD = [rampBase(OLIVE) + OUTLINE, rampBase(OLIVE) + OUTLINE, rampBase(OLIVE) + OUTLINE, rampBase(OLIVE) + OUTLINE, rampBase(BROWN) + OUTLINE,
+              rampBase(OLIVE) + SHADOW, rampBase(OLIVE) + SHADOW, rampBase(OLIVE) + SHADOW, rampBase(OLIVE) + SHADOW];
 
 function drawBackground(t) {
   const ib = view.ibuf, z = cam.zoom, invz = 1 / z, bx0 = view.bx0, by0 = view.by0;
@@ -3425,6 +3848,9 @@ function drawBackground(t) {
       if (frac > seamStart && b < (frac - seamStart) / R.seam) i++;      // flat bands, dithered seams
       if (cf > 0 && b < cf && causticAt(wx0 + px * invz + shift, wy) < cw) i++;
       if (i > COL.SHAFT) i = COL.SHAFT;
+      const mud = mudTint[tintRow + (px >> 2)], dead = deadTint[tintRow + (px >> 2)];
+      if (mud > 0 && BAYER[brow2 | ((bx + 3) & 3)] < mud) { ib[row + px] = MUD[i]; continue; }       // runoff: tea-brown water
+      if (dead > 0 && BAYER[brow | ((bx + 2) & 3)] < dead) { ib[row + px] = DEAD[i]; continue; }     // dead water: murky olive-black
       if (i >= COL.BLOOM_FROM && i <= COL.BLOOM_TO) {
         const tint = bloomTint[tintRow + (px >> 2)];
         if (tint > 0 && BAYER[brow2 | ((bx + 2) & 3)] < tint) i = COL.BLOOM + i - COL.BLOOM_FROM;
@@ -3487,6 +3913,144 @@ function drawPlumes(w) {
       if (sx < 0 || sy < 0 || sx >= W || sy >= H) continue;
       if (hash01(h + 6) < P.sediment) put(sx, sy, rampBase(GOLD) + SHADOW);
       else lift(sx, sy);
+    }
+  }
+}
+
+// ---- Trichodesmium: golden-brown colonies where the field is dense, and a scum under the surface in calm water ----
+// Colonies sit on a lattice that drifts sideways with the current; tufts are filaments side by side, puffs radiate
+const TRI_COLS = Math.round(W / PARAMS.look.tricho.spacing), TRI_ROWS = Math.round(H / PARAMS.look.tricho.spacing);
+const TRI_TONES = [rampBase(GOLD) + SHADOW, rampBase(GOLD) + BASE, rampBase(AMBER) + HIGHLIGHT, rampBase(GOLD) + HIGHLIGHT];   // straw to golden-brown
+function drawTricho(w, t) {
+  const L = PARAMS.look.tricho, f = w.fields, z = cam.zoom, sx = W / TRI_COLS, sy = H / TRI_ROWS;
+  for (let j = 0; j < TRI_ROWS; j++) {
+    for (let i = 0; i < TRI_COLS; i++) {
+      const id = j * TRI_COLS + i + 0x7c1, h = (k) => hash01(id * 7 + k);
+      // each colony sways and bobs on its own as the water moves it, and slowly turns
+      const x = mod(i * sx + h(1) * sx + cyDrift.x + L.sway * Math.sin(t * 0.23 + id * 1.3), W);
+      const y = j * sy + h(2) * sy + L.bob * Math.sin(t * 0.4 + id);
+      const v = sampleField(f.tri, x, y);
+      if (v < L.from || h(3) >= clamp((v - L.from) / (L.full - L.from), 0, 1) * L.share) continue;
+      const cx = (x * z) - view.bx0, cy = (y * z) - view.by0, len = L.len * (0.7 + 0.6 * h(4)) * z;
+      if (cx < -len || cy < -len || cx >= W + len || cy >= H + len || y < SURFACE_MAX) continue;
+      if (len < 3) { const px = Math.round(cx), py = Math.round(cy); if (px >= 0 && py >= 0 && px < W && py < H) put(px, py, TRI_TONES[h(5) < 0.5 ? 2 : 1]); continue; }
+      const puff = h(6) < L.puff, n = clamp(Math.round(len / 3), 2, L.filaments), a0 = h(7) * Math.PI + L.turn * Math.sin(t * 0.12 + id);
+      const gap = Math.max(1.6, z * 0.45), seg = Math.max(2, z * 0.6);   // px between a tuft's filaments; px per trichome piece
+      for (let m = 0; m < n; m++) {
+        // a puff's filaments radiate from its centre; a tuft's lie loosely side by side, splaying toward the ends,
+        // each its own length and a little offset along the bundle, waving in the water and broken into short pieces
+        const side = (m - (n - 1) / 2) / Math.max(1, (n - 1) / 2);
+        const a = puff ? a0 + (m + 0.3 * h(20 + m)) / n * TAU : a0 + side * L.splay, ca = Math.cos(a), sa = Math.sin(a);
+        const off = puff ? 0 : side * (n - 1) / 2 * gap, ox = cx - sa * off, oy = cy + ca * off;
+        const half = len / 2 * (0.75 + 0.25 * h(10 + m)), shift = (h(30 + m) - 0.5) * len * 0.3;
+        const from = puff ? 0.2 * len : -half + shift, to = puff ? len * (0.4 + 0.2 * h(10 + m)) : half + shift;
+        for (let s = from; s <= to; s += 0.7) {
+          if (z >= 3 && ((s - from) / seg | 0) % 4 === 3) continue;   // gaps between the pieces of a trichome
+          const wave = L.wave * len * Math.sin((s - from) / len * 4.5 + t * 0.9 + m * 2.1 + id);
+          const px = Math.round(ox + ca * s - sa * wave), py = Math.round(oy + sa * s + ca * wave);
+          if (px < 0 || py < 0 || px >= W || py >= H) continue;
+          put(px, py, TRI_TONES[side < -0.3 ? 3 : side > 0.3 ? 1 : 2]);   // lit on one side
+        }
+      }
+    }
+  }
+}
+
+// The scum: a golden-brown mat just under the surface, thicker and patchier where the surface row is dense
+function drawScum(w, t) {
+  const L = PARAMS.look.tricho, z = cam.zoom, invz = 1 / z;
+  if ((view.by0 + 0.5) * invz > SURFACE_MAX + L.thick) return;
+  for (let px = 0; px < W; px++) {
+    const wx = (view.bx0 + px + 0.5) * invz, v = sampleField(w.fields.tri, wx, GRID_H * 0.5);
+    const k = clamp((v - L.scumFrom) / (L.scumFull - L.scumFrom), 0, 1);
+    if (k <= 0) continue;
+    const s = surfaceY(wx, t) + invz, thick = L.thick * k * (0.6 + 0.4 * valueNoise(wx / 5 - cyDrift.x / 5, 3));
+    const y0 = Math.max(0, Math.ceil(s * z - view.by0)), y1 = Math.min(H - 1, Math.floor((s + thick) * z - view.by0));
+    for (let py = y0; py <= y1; py++) {
+      const wy = (view.by0 + py + 0.5) * invz, d = (wy - s) / thick;
+      if (valueNoise((wx - cyDrift.x) / 2.2 + t * 0.05, wy / 1.6) < 0.4 + 0.45 * d * (1 - k * 0.5)) continue;   // patchy, thinning downward
+      if (hash01(Math.imul(Math.floor(wx * 3), 7919) + Math.floor(wy * 3) * 131 + Math.floor(t * 0.5)) < 0.3) continue;   // loose: water between the filaments
+      put(px, py, TRI_TONES[d < 0.25 ? 3 : d < 0.6 ? 2 : (hash01(px * 31 + py) < 0.5 ? 1 : 0)]);
+    }
+  }
+}
+
+// ---- Marine snow: flocs falling where the detritus field is, loose aggregates close up ----
+const SNOW_COLS = Math.round(W / PARAMS.look.snow.spacing), SNOW_ROWS = Math.round(H / PARAMS.look.snow.spacing);
+const SNOW_TONES = [rampBase(OLIVE) + SHADOW, rampBase(BROWN) + SHADOW, COL.SLATE, rampBase(OLIVE) + BASE];
+function drawSnow(w, t) {
+  const L = PARAMS.look.snow, f = w.fields, z = cam.zoom, sx = W / SNOW_COLS, sy = H / SNOW_ROWS, sink = PARAMS.snow.sink;
+  for (let j = 0; j < SNOW_ROWS; j++) {
+    for (let i = 0; i < SNOW_COLS; i++) {
+      const id = j * SNOW_COLS + i + 0x51e, h = (k) => hash01(id * 5 + k);
+      const x = i * sx + h(1) * sx + 0.8 * Math.sin(t * 0.25 + id), y = mod(j * sy + h(2) * sy + t * sink * (0.7 + 0.6 * h(3)), H);
+      if (y < SURFACE_MAX || y > FLOOR_MIN) continue;
+      const v = sampleField(f.det, x, y);
+      if (v < L.from || h(4) >= clamp((v - L.from) / (L.full - L.from), 0, 1) * L.share) continue;
+      const px = Math.round(x * z) - view.bx0, py = Math.round(y * z) - view.by0;
+      if (px < -3 || py < -3 || px >= W + 3 || py >= H + 3) continue;
+      const tone = SNOW_TONES[(h(5) * 3) | 0];
+      if (z < L.clumpZoom) { if (px >= 0 && py >= 0 && px < W && py < H) put(px, py, tone); continue; }
+      const r = Math.min(3, Math.round(z * (0.3 + 0.3 * h(6))));   // an irregular clump, a lit speck now and then
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          const qx = px + dx, qy = py + dy;
+          if (qx < 0 || qy < 0 || qx >= W || qy >= H || dx * dx + dy * dy > r * r + 1 || hash01(id * 13 + (dx + 4) * 9 + dy + 4) < 0.4) continue;
+          put(qx, qy, dx + dy < -r * 0.6 && h(7) < 0.5 ? SNOW_TONES[3] : tone);
+        }
+      }
+    }
+  }
+}
+
+// ---- The floor deposit: fluff where snow has settled, picked over by the crawlers; white bacterial mats in anoxic water ----
+const depositEaten = new Float64Array(PARAMS.grid.cols);   // render only: what the crawlers have picked over, settling back
+const DEPOSIT_TONES = [rampBase(OLIVE) + OUTLINE, rampBase(BROWN) + SHADOW, rampBase(OLIVE) + SHADOW, rampBase(OLIVE) + BASE];
+function drawDeposit(w) {
+  const L = PARAMS.look.deposit, f = w.fields, z = cam.zoom, invz = 1 / z, cols = PARAMS.grid.cols, O = PARAMS.oxygen;
+  if ((view.by0 + H) * invz < FLOOR_MIN - L.max) return;
+  for (let px = 0; px < W; px++) {
+    const wx = (view.bx0 + px + 0.5) * invz, g = clamp(wx / GRID_W - 0.5, 0, cols - 1), i0 = Math.floor(g), i1 = Math.min(cols - 1, i0 + 1), fr = g - i0;
+    const sed = f.sed[i0] * (1 - depositEaten[i0]) * (1 - fr) + f.sed[i1] * (1 - depositEaten[i1]) * fr;
+    const thick = Math.min(L.max, sed * L.perUnit) * (0.75 + 0.5 * valueNoise(wx / 3, 7.5));
+    if (thick < 0.3 * invz) continue;
+    const fy = floorY(wx), anoxic = sampleField(f.o2, wx, fy - 2) < O.anoxic * L.mat;
+    const y0 = Math.max(0, Math.ceil((fy - thick) * z - view.by0)), y1 = Math.min(H - 1, Math.floor(fy * z - view.by0));
+    for (let py = y0; py <= y1; py++) {
+      const wy = (view.by0 + py + 0.5) * invz, d = (wy - (fy - thick)) / thick, hh = hash01(Math.imul(Math.floor(wx * 2), 7919) + Math.floor(wy * 2) * 131 + 5);
+      if (d < 0.3 && hh < 0.35) continue;   // a fluffy, ragged top
+      if (anoxic && d < 0.35 && valueNoise(wx / 2.5, 11) > 0.45) { put(px, py, hh < 0.5 ? COL.FOAM : COL.SHAFT); continue; }   // Beggiatoa-like mat
+      put(px, py, DEPOSIT_TONES[d < 0.2 ? 3 : d < 0.55 ? (hh < 0.5 ? 2 : 1) : 0]);
+    }
+  }
+}
+
+// ---- Rain while runoff spreads: rings on the surface seen from below; some drops leave a bubble ----
+const drops = [];
+let dropT = -1;
+function updateRain(w, ta) {
+  const Rn = PARAMS.look.rain, dt = dropT < 0 ? 0 : clamp(ta - dropT, 0, 0.5);
+  dropT = ta;
+  if (w.runoffs.length) {
+    const n = Math.floor(Rn.drops * dt) + (bubbleRng.next() < (Rn.drops * dt) % 1 ? 1 : 0);
+    for (let k = 0; k < n; k++) {
+      const x = bubbleRng.next() * W;
+      drops.push({ x, t0: ta });
+      if (bubbleRng.next() < Rn.bubble) spawnBubble(x, surfaceY(x, waterT) + 1.5, 2, false);
+    }
+  }
+  let k = 0;
+  for (const d of drops) if (ta - d.t0 < Rn.ring) drops[k++] = d;
+  drops.length = k;
+}
+
+function drawRain(ta) {
+  const Rn = PARAMS.look.rain, z = cam.zoom;
+  for (const d of drops) {
+    const a = (ta - d.t0) / Rn.ring, r = a * Rn.ringR, y = surfaceY(d.x, waterT) + 0.6;
+    for (const x of a < 0.15 ? [d.x] : [d.x - r, d.x + r]) {
+      const px = Math.round(x * z) - view.bx0, py = Math.round(y * z) - view.by0;
+      if (px >= 0 && py >= 0 && px < W && py < H) put(px, py, a < 0.5 ? COL.GLOW : COL.FOAM);
     }
   }
 }
@@ -3594,7 +4158,8 @@ function updateBubbles(w, ta) {
       spawnBubble(bx, surfaceY(bx, waterT) + B.depthMin + r() * (B.depthMax - B.depthMin), B.plunge * r(), false);
     }
   }
-  if (r() < B.seepRate * dt) {
+  const anoxic = smoothstep(PARAMS.oxygen.hypoxic, PARAMS.oxygen.anoxic, bottomOxygen(w).min);   // a rotting floor seeps more gas
+  if (r() < B.seepRate * (1 + B.anoxicSeep * anoxic) * dt) {
     const x = 8 + r() * (W - 16), n = B.seepMin + Math.floor(r() * (B.seepMax - B.seepMin + 1));
     for (let i = 0; i < n; i++) spawnBubble(x + (r() - 0.5) * 2, H - PARAMS.world.floor - i * 2.5, 0, i === 0);
   }
@@ -4606,7 +5171,8 @@ function updateCrawlers(w) {
   const ticks = w.tick - crawlTick;
   if (ticks <= 0) return;
   crawlTick = w.tick;
-  const dt = ticks * TICK_DT, decay = Math.exp(-dt / C.smellTau);
+  const dt = ticks * TICK_DT, decay = Math.exp(-dt / C.smellTau), settle = Math.exp(-dt / PARAMS.look.deposit.regrow);
+  for (let i = 0; i < cols; i++) depositEaten[i] *= settle;   // picked-over fluff settles back
   let total = 0, best = 0;
   for (let i = 0; i < cols; i++) {
     smell[i] = smell[i] * decay + (w.fallen[i] - fallenSeen[i]);
@@ -4631,6 +5197,7 @@ function updateCrawlers(w) {
     if (cr.state === 'feed') {
       cr.feed -= dt;
       smell[cr.col] *= decay;                       // picking the detritus over
+      depositEaten[cr.col] += (1 - depositEaten[cr.col]) * PARAMS.look.deposit.eat * dt;   // and the deposit with it
       if (cr.feed <= 0) cr.state = 'out';
       continue;
     }
@@ -4926,6 +5493,10 @@ function composeFrame(w, now) {
   drawParticles(P.mid, 2000, ta, false);
   drawPlumes(w);
   drawCyano(w, waterT);
+  drawTricho(w, waterT);
+  drawScum(w, waterT);
+  drawSnow(w, t);
+  drawDeposit(w);
   drawPebbles();
   drawCysts(w);
   updateCrawlers(w);
@@ -4937,7 +5508,9 @@ function composeFrame(w, now) {
   drawSongs(w);
   drawVisitors(w, ta);
   updateBubbles(w, ta);
+  updateRain(w, ta);
   drawBubbles();
+  drawRain(ta);
   drawTrail(now);
   drawRipples(now);
   drawParticles(P.near, 3000, ta, true);
@@ -4983,13 +5556,15 @@ const CAUSES = [
   { key: 'starved', name: 'STARVED', ramp: GOLD }, { key: 'old', name: 'OLD AGE', ramp: VIOLET },
   { key: 'grazed', name: 'GRAZED', ramp: ROSE }, { key: 'sardines', name: 'SARDINES', ramp: LIGHTBLUE },
   { key: 'salps', name: 'SALPS', ramp: EMERALD }, { key: 'hunted', name: 'HUNTED', ramp: BLUE },
-  { key: 'lysed', name: 'LYSED', ramp: VIOLET },
+  { key: 'lysed', name: 'LYSED', ramp: VIOLET }, { key: 'hypoxia', name: 'HYPOXIA', ramp: OLIVE },
 ];
+// Where each cause's running count sits in a row (hypoxia came later, after the other columns)
+const causeCol = (i) => (CAUSES[i].key === 'hypoxia' ? NB.HYPOXIA : NB.DEATHS + i);
 const VISITOR_INK = [
   { kind: 'sardines', name: 'SARDINES', ramp: LIGHTBLUE }, { kind: 'salps', name: 'SALPS', ramp: VIOLET },
   { kind: 'sunfish', name: 'SUNFISH', ramp: GOLD },
 ];
-const PAGES = ['THE DAY', 'CENSUS', 'THE WATER', 'MIGRATION', 'LEDGER'];
+const PAGES = ['THE DAY', 'CENSUS', 'THE WATER', 'THE COLUMN', 'MIGRATION', 'LEDGER'];
 const SEA_STATES = ['CALM', 'BREEZE', 'WINDY', 'STORM'];
 // The notebook glyph, an open book: o page, - a line of writing; the spine is the gap between the pages
 const GLYPH = ['ooooo...ooooo', 'oooooo.oooooo', 'o----o.o----o', 'oooooo.oooooo', 'o----o.o----o', 'oooooo.oooooo', 'o---oo.oo---o', 'oooooo.oooooo', '..oooo.oooo..'];
@@ -4997,7 +5572,8 @@ const PAGE_INK = 1;   // the page: one step above the darkest water
 
 // One row of the record: offsets into the flat Float32Array (N, DEPTH and SD hold one value per form).
 // TICK holds simulated seconds (whole numbers, exact in a Float32 for ~194 days of life); rowTick turns it back.
-const NB = { TICK: 0, LIGHT: 1, WIND: 2, NUT: 3, GRAZ: 4, POP: 5, CYSTS: 6, CHAINED: 7, GLOW: 8, N: 9, DEPTH: 18, SD: 27, DEATHS: 36, SILICA: 43, SYN: 44, PRO: 45, STRIDE: 46 };   // SYN, PRO: cyanobacteria (filled from their arrival)
+const NB = { TICK: 0, LIGHT: 1, WIND: 2, NUT: 3, GRAZ: 4, POP: 5, CYSTS: 6, CHAINED: 7, GLOW: 8, N: 9, DEPTH: 18, SD: 27, DEATHS: 36, SILICA: 43, SYN: 44, PRO: 45,
+             TRI: 46, O2: 47, TEMP: 48, HYPOXIA: 49, STRIDE: 50 };   // SYN, PRO, TRI: cyanobacteria; O2: bottom water; TEMP: surface (each filled from its arrival)
 
 const notebook = {
   open: false, page: 0, span: PARAMS.notebook.startSpan, solo: -1, hits: [],
@@ -5028,7 +5604,9 @@ function notebookSample(w) {
   r[o + NB.NUT] = meanNutrient(w);
   r[o + NB.SILICA] = meanSilica(w);
   const cy = cyanoTotal(w);
-  r[o + NB.SYN] = cy.syn; r[o + NB.PRO] = cy.pro;
+  r[o + NB.SYN] = cy.syn; r[o + NB.PRO] = cy.pro; r[o + NB.TRI] = cy.tri;
+  r[o + NB.O2] = bottomOxygen(w).mean;
+  r[o + NB.TEMP] = surfaceTemp(w);
   let z = 0;
   for (let i = 0; i < graz.length; i++) z += graz[i];
   r[o + NB.GRAZ] = z / graz.length;
@@ -5050,7 +5628,7 @@ function notebookSample(w) {
     r[o + NB.DEPTH + f] = m;
     r[o + NB.SD + f] = Math.sqrt(Math.max(0, r[o + NB.SD + f] / n - m * m));
   }
-  CAUSES.forEach((k, i) => { r[o + NB.DEATHS + i] = w.deaths[k.key]; });
+  CAUSES.forEach((k, i) => { r[o + causeCol(i)] = w.deaths[k.key]; });
 }
 
 // More rows: grow up to maxSamples, then keep every other row and sample half as often, so the whole life still fits
@@ -5111,14 +5689,16 @@ function notebookColumns() {
     t0, t1, first: rowAt(t0), has: new Uint8Array(CW), k: new Float32Array(CW),
     light: new Float32Array(CW), nut: new Float32Array(CW), graz: new Float32Array(CW), pop: new Float32Array(CW), si: new Float32Array(CW),
     lys: new Float32Array(CW),   // cells burst by viruses per minute (from the ledger's running count)
-    cyano: new Float32Array(CW),   // cyanobacteria biomass
+    cyano: new Float32Array(CW),   // cyanobacteria biomass, all three
+    o2: new Float32Array(CW), temp: new Float32Array(CW), kw: new Float32Array(CW),   // oxygen in the bottom water; surface temperature; rows holding them (saved since v5)
     n: new Float32Array(CW * F), depth: new Float32Array(CW * F), sd: new Float32Array(CW * F),
   };
   for (let i = cols.first; i < n; i++) {
     const o = i * S, c = t1 > t0 ? Math.min(CW - 1, Math.floor((rowTick(r, i) - t0) / (t1 - t0) * CW)) : CW - 1;
     cols.k[c]++;
     cols.light[c] += r[o + NB.LIGHT]; cols.nut[c] += r[o + NB.NUT]; cols.graz[c] += r[o + NB.GRAZ]; cols.pop[c] += r[o + NB.POP]; cols.si[c] += r[o + NB.SILICA];
-    cols.cyano[c] += r[o + NB.SYN] + r[o + NB.PRO];
+    cols.cyano[c] += r[o + NB.SYN] + r[o + NB.PRO] + r[o + NB.TRI];
+    if (r[o + NB.TEMP] > 0) { cols.o2[c] += r[o + NB.O2]; cols.temp[c] += r[o + NB.TEMP]; cols.kw[c]++; }
     const LY = NB.DEATHS + CAUSES.findIndex((k) => k.key === 'lysed'), dtRow = i > 0 ? r[o + NB.TICK] - r[o - S + NB.TICK] : 0;
     if (dtRow > 0) cols.lys[c] += Math.max(0, r[o + LY] - r[o - S + LY]) / dtRow * 60;
     for (let f = 0; f < F; f++) {
@@ -5131,6 +5711,7 @@ function notebookColumns() {
   const scalars = [cols.light, cols.nut, cols.graz, cols.pop, cols.si, cols.lys, cols.cyano], perForm = [cols.n, cols.depth, cols.sd];
   for (let c = 0; c < CW; c++) {
     const k = cols.k[c];
+    if (cols.kw[c]) { cols.o2[c] /= cols.kw[c]; cols.temp[c] /= cols.kw[c]; }
     if (k) {
       cols.has[c] = 1;
       for (const a of scalars) a[c] /= k;
@@ -5145,6 +5726,7 @@ function notebookColumns() {
     } else if (c && cols.has[c - 1]) {
       cols.has[c] = 1;
       for (const a of scalars) a[c] = a[c - 1];
+      cols.o2[c] = cols.o2[c - 1]; cols.temp[c] = cols.temp[c - 1]; cols.kw[c] = cols.kw[c - 1];
       for (const a of perForm) for (let f = 0; f < F; f++) a[c * F + f] = a[(c - 1) * F + f];
     }
   }
@@ -5327,7 +5909,7 @@ function drawNotebook(w) {
     hit(dx0 + i * 6, fy - 3, 6, 11, () => { notebook.page = i; });
   }
   if (notebook.page !== PAGES.length - 1 || !notebook.open) notebook.confirm = false;   // a question left unanswered is withdrawn
-  [drawDayPage, drawCensusPage, drawWaterPage, drawMigrationPage, drawLedgerPage][notebook.page](w, P.y + 19);
+  [drawDayPage, drawCensusPage, drawWaterPage, drawColumnPage, drawMigrationPage, drawLedgerPage][notebook.page](w, P.y + 19);
 }
 
 // The notebook keeps day colours at every hour, so it reads the same at night
@@ -5388,6 +5970,10 @@ function drawDayPage(w, y) {
   row('SUNLIGHT', (x, yy) => bar(x, yy + 1, N.bar.w, w.surfaceLight, GOLD));
   row('SEA ' + SEA_STATES[sea], (x, yy) => bar(x, yy + 1, N.bar.w, w.wind, EMERALD));
   row('UPWELLING', value(w.pulses.length ? 'A PLUME RISES' : 'NONE', w.pulses.length ? rampBase(GREEN) + HIGHLIGHT : COL.SLATE));
+  row('RUNOFF', value(w.runoffs.length ? 'RAIN   MUD WASHES IN' : 'NONE', w.runoffs.length ? rampBase(AMBER) + HIGHLIGHT : COL.SLATE));
+  row('WATER', value(surfaceTemp(w).toFixed(1) + ' C AT THE SURFACE'));
+  const ox = bottomOxygen(w), deadZone = ox.min < PARAMS.oxygen.hypoxic;
+  row(deadZone ? 'DEAD ZONE' : 'BOTTOM OXYGEN', (x, yy) => bar(x, yy + 1, N.bar.w, ox.mean, deadZone ? OLIVE : LIGHTBLUE));
   row('NUTRIENTS', (x, yy) => bar(x, yy + 1, N.bar.w, meanNutrient(w), GREEN));
   row('GRAZERS', (x, yy) => bar(x, yy + 1, N.bar.w, z / w.fields.graz.length / 2, ROSE));
   divide();
@@ -5434,18 +6020,29 @@ function drawCensusPage(w, y) {
     bar(BX, ry + 2, BW, counts[f] / most, FORMS[f].ramp);
     inkRight(x1 - 7, ry + 1, String(counts[f]), counts[f] ? COL.FOAM : COL.SLATE);
   }
-  const cyT = cyanoTotal(w), cyN = Math.round(cyT.syn + cyT.pro), ry = y + F * 10;   // cyanobacteria: biomass, about a cell's worth per unit
-  drawCyanoIcon(P.x + 6, ry, !cyN);
-  ink(P.x + 16, ry + 1, 'CYANOBACTERIA', cyN ? COL.FOAM : COL.SLATE);
-  bar(BX, ry + 2, BW, Math.min(1, cyN / Math.max(most, 1)), ROSE);
-  inkRight(x1 - 7, ry + 1, String(cyN), cyN ? COL.FOAM : COL.SLATE);
-  ink(P.x + 6, y + 102, 'IN CHAINS ' + chained + '   CYSTS ' + w.cysts.length + '   GLOWING ' + glow, COL.SHAFT);
-  dotted(P.x + 6, x1 - 7, y + 111, COL.SLATE);
-  drawSpanRow(y + 117);
+  // Cyanobacteria as biomass (about a cell's worth per unit): the single cells together (author: just cyanobacteria),
+  // and under them, indented, the filamentous ones (Trichodesmium)
+  const cyT = cyanoTotal(w);
+  [['CYANOBACTERIA', cyT.syn + cyT.pro, drawCyanoIcon, ROSE, 0], ['FILAMENTOUS', cyT.tri, drawTrichoIcon, AMBER, 6]].forEach(([name, v, icon, ramp, indent], k) => {
+    const n = Math.round(v), ry = y + (F + k) * 10;
+    icon(P.x + 6 + indent, ry, !n);
+    ink(P.x + 16 + indent, ry + 1, name, n ? COL.FOAM : COL.SLATE);
+    bar(BX, ry + 2, BW, Math.min(1, n / Math.max(most, 1)), ramp);
+    inkRight(x1 - 7, ry + 1, String(n), n ? COL.FOAM : COL.SLATE);
+  });
+  ink(P.x + 6, y + 112, 'IN CHAINS ' + chained + '   CYSTS ' + w.cysts.length + '   GLOWING ' + glow, COL.SHAFT);
+  dotted(P.x + 6, x1 - 7, y + 121, COL.SLATE);
+  drawSpanRow(y + 127);
 
-  const cols = notebookColumns(), cy0 = y + 129, ch = 107;
+  const cols = notebookColumns(), cy0 = y + 139, ch = 97;
   drawStack(cols, cy0, ch);
   drawTimeAxis(cols, cy0 + ch + 3);
+}
+
+// Trichodesmium's icon: a tuft of golden-brown filaments
+function drawTrichoIcon(x, y, faint) {
+  const rows = ['.o...o.', '..o.o..', 'o.hob.o', '.ohbbo.', '..bbb..', '.o.b.o.', 'o..o..o'];
+  rows.forEach((row, dy) => { for (let dx = 0; dx < 7; dx++) { const ch = row[dx]; if (ch !== '.') put(x + dx, y + dy, faint ? COL.SLATE : rampBase(AMBER) + (ch === 'h' ? BRIGHT : ch === 'b' ? HIGHLIGHT : BASE)); } });
 }
 
 // Cyanobacteria's icon: a haze of tiny specks, pink and blue-green
@@ -5492,7 +6089,9 @@ function drawWaterPage(w, y) {
     { name: 'SILICA', a: cols.si, idx: rampBase(LIGHTBLUE) + BRIGHT },
     { name: 'GRAZERS', a: cols.graz, idx: rampBase(ROSE) + HIGHLIGHT, own: true },
     { name: 'VIRUSES', a: cols.lys, idx: rampBase(VIOLET) + HIGHLIGHT, own: true },   // cells they burst per minute
-    { name: 'CYANO', a: cols.cyano, idx: rampBase(EMERALD) + BRIGHT, own: true },     // cyanobacteria biomass
+    { name: 'CYANO', a: cols.cyano, idx: rampBase(EMERALD) + BRIGHT, own: true },     // cyanobacteria biomass, all three
+    { name: 'OXYGEN', a: cols.o2, idx: COL.FOAM, lo: 0, top: 1.2, kw: true },                    // in the bottom water, on a fixed scale
+    { name: 'WARMTH', a: cols.temp, idx: rampBase(AMBER) + HIGHLIGHT, lo: 10, top: 26, kw: true },   // the surface, in degrees
   ];
   let lx = P.x + 6;
   for (const sr of series) { if (lx + textWidth(sr.name) > P.x + P.w - 6) { lx = P.x + 6; y += 7; } ink(lx, y + 11, sr.name, sr.idx); lx += textWidth(sr.name) + 8; }
@@ -5501,15 +6100,124 @@ function drawWaterPage(w, y) {
   let shared = 0;   // nutrients and silica share one scale, so the two can be compared
   for (let c = 0; c < CW; c++) if (cols.has[c]) shared = Math.max(shared, cols.nut[c], cols.si[c]);
   for (const sr of series) {
-    let top = sr.own ? 0 : shared;
+    let top = sr.top || (sr.own ? 0 : shared);
+    const lo = sr.lo || 0;
     if (sr.own) for (let c = 0; c < CW; c++) if (cols.has[c]) top = Math.max(top, sr.a[c]);
-    if (top <= 0) continue;
-    chartLine(cy0, (c) => (cols.has[c] ? ch - 1 - Math.round(sr.a[c] / top * (ch - 1)) : -1), sr.idx);
+    if (top <= lo) continue;
+    chartLine(cy0, (c) => (cols.has[c] && (!sr.kw || cols.kw[c]) ? ch - 1 - Math.round(clamp((sr.a[c] - lo) / (top - lo), 0, 1) * (ch - 1)) : -1), sr.idx);   // older rows hold no oxygen or warmth
   }
   const sy0 = cy0 + ch + 6, sh = 100;
   drawStack(cols, sy0, sh);
   drawTimeAxis(cols, sy0 + sh + 3);
   for (let f = 0; f < F; f++) drawIcon(CX + Math.round(f * (CW - 7) / (F - 1)), sy0 + sh + 14, f, false);   // the forms, bottom to top of the stack
+}
+
+// IV. The column: a cast of the water now, as oceanographers draw it: depth down the page, each property across it from
+// low to high on its own fixed scale (chlorophyll to its own peak). The layers are read from the temperature (see
+// below). Hypoxic depths are shaded. Chlorophyll is the living
+// biomass (cells and cyanobacteria, every species together) times the chlorophyll each unit carries: cells in dim
+// water pack more (photoacclimation: 1 + chlDim x the share of the surface light they miss), which is why real casts
+// show a deep chlorophyll maximum below the biomass peak. Observation only.
+const PROFILE = [
+  { name: 'WARMTH', idx: rampBase(AMBER) + HIGHLIGHT, lo: 8, hi: 26 },
+  { name: 'OXYGEN', idx: COL.FOAM, lo: 0, hi: 1.4 },
+  { name: 'NUTRIENTS', idx: rampBase(GOLD) + BRIGHT, lo: 0, hi: 1.2 },
+  { name: 'SILICA', idx: rampBase(LIGHTBLUE) + BRIGHT, lo: 0, hi: 1.2 },
+  { name: 'LIGHT', idx: rampBase(GOLD) + BASE, lo: 0, hi: 1 },
+  { name: 'CHLOROPHYLL', idx: rampBase(GREEN) + HIGHLIGHT, lo: 0, hi: 0, area: true },   // as a fluorometer sees it, to its own peak: a shaded area
+];
+function drawColumnPage(w, y) {
+  const N = PARAMS.notebook, P = N.page, CX = N.chart.x, CW = N.chart.w, f = w.fields, { cols, rows } = PARAMS.grid, O = PARAMS.oxygen;
+  // Row means of each property (and the lowest oxygen in each row)
+  const prof = PROFILE.map(() => new Float64Array(rows)), o2min = new Float64Array(rows);
+  const props = [f.temp, f.o2, f.nut, f.si, f.light];
+  for (let j = 0; j < rows; j++) {
+    o2min[j] = Infinity;
+    for (let i = 0; i < cols; i++) {
+      const k = j * cols + i;
+      props.forEach((a, p) => { prof[p][j] += a[k] / cols; });
+      const dim = 1 - clamp(f.light[k] / Math.max(w.surfaceLight, 1e-6), 0, 1);
+      prof[5][j] += (f.bio[k] + f.tri[k]) * (1 + N.chlDim * dim) / cols;
+      o2min[j] = Math.min(o2min[j], f.o2[k]);
+    }
+  }
+  const chl = prof[5], smooth = chl.slice();   // patchy row to row: smoothed over seven rows, as a fluorometer would see it
+  for (let j = 0; j < rows; j++) {
+    let s = 0, wsum = 0;
+    for (let d = -3; d <= 3; d++) { const wgt = 4 - Math.abs(d); s += chl[clamp(j + d, 0, rows - 1)] * wgt; wsum += wgt; }
+    smooth[j] = s / wsum;
+  }
+  prof[5] = smooth;
+  let lx = P.x + 6, ly = y;
+  for (const p of PROFILE) { if (lx + textWidth(p.name) > P.x + P.w - 6) { lx = P.x + 6; ly += 8; } ink(lx, ly, p.name, p.idx); lx += textWidth(p.name) + 8; }
+  ink(CX, ly + 10, 'LOW', COL.SLATE);
+  inkRight(CX + CW - 1, ly + 10, 'HIGH', COL.SLATE);
+  for (let x = CX + textWidth('LOW') + 3; x < CX + CW - textWidth('HIGH') - 4; x++) put(x, ly + 12, COL.SLATE);
+  put(CX + CW - textWidth('HIGH') - 5, ly + 11, COL.SLATE); put(CX + CW - textWidth('HIGH') - 5, ly + 13, COL.SLATE);
+
+  const cy0 = ly + 20, ch = 196, column = H - PARAMS.world.floor;
+  const depthOf = (k) => (k + 0.5) / ch * column;   // world depth of a chart row
+  const at = (a, wy) => {   // a row-mean profile at a world depth, linear between grid rows
+    const g = clamp(wy / GRID_H - 0.5, 0, rows - 1), j0 = Math.floor(g), j1 = Math.min(rows - 1, j0 + 1);
+    return a[j0] + (a[j1] - a[j0]) * (g - j0);
+  };
+  // Layers from the temperature profile (this water has no salinity, so density follows temperature alone):
+  // the mixed layer by the threshold criterion (mixedStep degrees cooler than the surface; Monterey & Levitus 1997),
+  // the thermocline as the band where the gradient is at least clineShare of its steepest below the mixed layer, and a
+  // bottom mixed layer where the bottom water lies within mixedStep of the floor's. Only in stratified water (stratified
+  // degrees or more from the surface to the floor); a layer is named only where the profile shows it.
+  const L = N.layers, T = (k) => at(prof[0], depthOf(k)), tSurf = T(0), tFloor = T(ch - 1), stratified = tSurf - tFloor >= L.stratified;
+  let mixed = ch, top = ch, bottom = ch, bml = ch;
+  if (stratified) {
+    for (let k = 0; k < ch; k++) if (T(k) < tSurf - L.mixedStep) { mixed = k; break; }
+    let kmax = -1, gmax = 0;
+    for (let k = mixed; k < ch - 1; k++) { const g = T(k) - T(k + 1); if (g > gmax) { gmax = g; kmax = k; } }
+    if (kmax >= 0) {
+      top = kmax; bottom = kmax;
+      while (top > mixed && T(top - 1) - T(top) >= gmax * L.clineShare) top--;
+      while (bottom < ch - 2 && T(bottom + 1) - T(bottom + 2) >= gmax * L.clineShare) bottom++;
+      bottom++;
+    }
+    bml = ch - 1;
+    while (bml > bottom && T(bml - 1) < tFloor + L.mixedStep) bml--;
+    if (ch - bml < L.minRows) bml = ch;
+  }
+  // The water, lighter above, with the dead zone shaded
+  for (let k = 0; k < ch; k++) {
+    const band = 6 - Math.floor(k / ch * 5.5), dead = smoothstep(O.hypoxic, O.anoxic, at(o2min, depthOf(k)));
+    for (let c = 0; c < CW; c++) {
+      const x = CX + c, yy = cy0 + k;
+      put(x, yy, dead > 0 && bayer(x, yy) < dead * 0.7 ? rampBase(OLIVE) + OUTLINE : bayer(x, yy) < (k / ch * 5.5) % 1 ? Math.max(1, band - 1) : band);
+    }
+    if (k % 49 === 0) for (let c = -2; c < 0; c++) put(CX + c, cy0 + k, COL.SLATE);   // depth ticks
+  }
+  const dashed = (k) => { for (let c = 0; c < CW; c += 3) { put(CX + c, cy0 + k, COL.SLATE); put(CX + c + 1, cy0 + k, COL.SLATE); } };
+  for (const k of new Set([mixed, top, bottom, bml])) if (k > 0 && k < ch) dashed(k);
+  for (const p of [5, 0, 1, 2, 3, 4]) {   // the chlorophyll's area first, the lines over it
+    const S = PROFILE[p];
+    let hi = S.hi;
+    if (!hi) for (let j = 0; j < rows; j++) hi = Math.max(hi, prof[p][j]);
+    if (hi <= S.lo) continue;
+    let px = -1;
+    for (let k = 0; k < ch; k++) {   // one point per row, joined across to the last
+      const x = CX + Math.round(clamp((at(prof[p], depthOf(k)) - S.lo) / (hi - S.lo), 0, 1) * (CW - 1));
+      if (S.area) for (let q = CX; q < x; q++) if (bayer(q, cy0 + k) < 0.3) put(q, cy0 + k, rampBase(GREEN) + SHADOW);   // the chlorophyll, shaded
+      const a = px < 0 ? x : Math.min(px, x), b = px < 0 ? x : Math.max(px, x);
+      for (let q = a; q <= b; q++) put(q, cy0 + k, S.idx);
+      px = x;
+    }
+  }
+  // Labels for the layers, on the left inside the plot
+  const label = (k0, k1, text) => { if (k1 - k0 >= L.minRows) ink(CX + 2, cy0 + Math.round((k0 + k1) / 2) - 2, text, COL.SHAFT); };
+  if (stratified) {
+    label(0, mixed, 'MIXED LAYER');
+    label(top, bottom, 'THERMOCLINE');
+    if (bml < ch) label(bml, ch, 'BOTTOM MIXED LAYER');
+  }
+  const ox = bottomOxygen(w);
+  inkCentre(cy0 + ch + 4, 'SURFACE ' + tSurf.toFixed(1) + ' C   FLOOR ' + tFloor.toFixed(1) + ' C', COL.SHAFT);
+  inkCentre(cy0 + ch + 12, ox.min < O.hypoxic ? 'HYPOXIC BOTTOM WATER' : !stratified ? 'MIXED TO THE FLOOR' : 'MIXED LAYER ' + Math.round(mixed / ch * 100) + '% OF THE DEPTH',
+    ox.min < O.hypoxic ? rampBase(OLIVE) + BRIGHT : COL.SHAFT);
 }
 
 // III. Migration: each form's mean depth over the window, nights dark behind (the diel vertical migration figure).
@@ -5571,7 +6279,7 @@ function drawLedgerPage(w, y) {
   const N = PARAMS.notebook, P = N.page, CX = N.chart.x, CW = N.chart.w, x1 = P.x + P.w, S = NB.STRIDE, r = notebook.rows;
   drawSpanRow(y);
   const cols = notebookColumns(), last = (notebook.count - 1) * S, before = cols.t0 > 0 && cols.first > 0 ? (cols.first - 1) * S : -1;
-  const deaths = CAUSES.map((k, i) => (notebook.count ? r[last + NB.DEATHS + i] - (before >= 0 ? r[before + NB.DEATHS + i] : 0) : 0));
+  const deaths = CAUSES.map((k, i) => (notebook.count ? r[last + causeCol(i)] - (before >= 0 ? r[before + causeCol(i)] : 0) : 0));
   const total = deaths.reduce((s, v) => s + v, 0), most = Math.max(1, ...deaths);
   ink(P.x + 6, y + 11, 'DEATHS', COL.SHAFT);
   inkRight(x1 - 7, y + 11, String(total), COL.SHAFT);
@@ -5588,8 +6296,8 @@ function drawLedgerPage(w, y) {
     { name: 'CELLS', a: cols.pop, idx: COL.FOAM },
   ];
   let lx = P.x + 6;
-  for (const s of [...series].reverse()) { ink(lx, y + 87, s.name, s.idx); lx += textWidth(s.name) + 8; }
-  const cy0 = y + 96, ch = 104;
+  for (const s of [...series].reverse()) { ink(lx, y + 96, s.name, s.idx); lx += textWidth(s.name) + 8; }
+  const cy0 = y + 105, ch = 95;
   chartBackground(cols, cy0, ch);
   for (const s of series) {   // each scaled to its own peak in the window
     let top = 0;
@@ -6000,12 +6708,13 @@ async function loadWorld(db) {
   for (let i = 0; i < rec.chunks; i++) keys.push('rows:' + i);
   const rows = await storeGet(db, keys);
   const chunks = keys.map((k) => rows[k] || new Float32Array(0));
+  const V4 = 46;   // a v4 row: everything up to the cyanobacteria (SYN, PRO), in the places they still hold
   if (rec.v < 4) {   // older rows: seven forms (v3 also had hunted, lysed and silica; v2 five deaths and no silica)
     const L = rec.v < 3 ? { DEPTH: 16, SD: 23, DEATHS: 30, deaths: 5, SILICA: -1, STRIDE: 35 } : { DEPTH: 16, SD: 23, DEATHS: 30, deaths: 7, SILICA: 37, STRIDE: 38 };
     for (let k = 0; k < chunks.length; k++) {
-      const old = chunks[k], n = old.length / L.STRIDE, wide = new Float32Array(n * NB.STRIDE);
+      const old = chunks[k], n = old.length / L.STRIDE, wide = new Float32Array(n * V4);
       for (let i = 0; i < n; i++) {
-        const a = i * L.STRIDE, b = i * NB.STRIDE;
+        const a = i * L.STRIDE, b = i * V4;
         for (let j = 0; j < NB.N; j++) wide[b + j] = old[a + j];
         for (let f = 0; f < 7; f++) {
           wide[b + NB.N + f] = old[a + NB.N + f];
@@ -6015,6 +6724,13 @@ async function loadWorld(db) {
         for (let d = 0; d < L.deaths; d++) wide[b + NB.DEATHS + d] = old[a + L.DEATHS + d];
         if (L.SILICA >= 0) wide[b + NB.SILICA] = old[a + L.SILICA];
       }
+      chunks[k] = wide;
+    }
+  }
+  if (rec.v < 5) {   // v4 rows had no Trichodesmium, oxygen, temperature or hypoxia: widened, those left empty
+    for (let k = 0; k < chunks.length; k++) {
+      const old = chunks[k], n = old.length / V4, wide = new Float32Array(n * NB.STRIDE);
+      for (let i = 0; i < n; i++) wide.set(old.subarray(i * V4, (i + 1) * V4), i * NB.STRIDE);
       chunks[k] = wide;
     }
   }

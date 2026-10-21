@@ -23,7 +23,7 @@ const start = html.indexOf('// ===== PARAMS =====');
 const end = html.indexOf('// ===== Audio =====');
 if (start < 0 || end < 0) throw new Error('section markers not found');
 const sim = new Function(html.slice(start, end) +
-  '\nreturn { PARAMS, createWorld, stepWorld, aliveCount, nutrientInventory, worldChecksum, dayPhase, syncStats, dinoWeight, GENES, HUE_WHEEL, intervalClass, keyName, snapshotWorld, restoreWorld, aliveCount: aliveCount, silicaInventory, meanSilica, cyanoTotal };')();
+  '\nreturn { PARAMS, createWorld, stepWorld, aliveCount, nutrientInventory, worldChecksum, dayPhase, syncStats, dinoWeight, GENES, HUE_WHEEL, intervalClass, keyName, snapshotWorld, restoreWorld, aliveCount: aliveCount, silicaInventory, meanSilica, cyanoTotal, bottomOxygen, surfaceTemp };')();
 
 // Positional numbers, plus PARAMS overrides like metabolism.efficiency=0.2 or diel.dayLength=600
 const args = process.argv.slice(2);
@@ -71,8 +71,9 @@ function arcs(pops) {
   return { n, dieoffs, bloom: state > 0 || n > 0 };
 }
 
-const GROUPS = ['glass', 'dino', 'green', 'cocco', 'crypto', 'cyano'];
-const GROUP_NAMES = ['diatoms', 'dinoflagellates', 'green algae', 'coccolithophores', 'cryptophytes', 'cyanobacteria'];
+const GROUPS = ['glass', 'dino', 'green', 'cocco', 'crypto', 'cyano', 'tricho'];
+const GROUP_NAMES = ['diatoms', 'dinoflagellates', 'green algae', 'coccolithophores', 'cryptophytes', 'cyanobacteria', 'filamentous cyanobacteria'];
+const CAUSES = ['starved', 'old', 'grazed', 'sardines', 'salps', 'hunted', 'lysed', 'hypoxia'];
 const GROUP_OF = ['green', 'dino', 'dino', 'dino', 'dino', 'glass', 'glass', 'cocco', 'crypto'];   // by kind
 
 function run(seed) {
@@ -81,14 +82,18 @@ function run(seed) {
   let lateMin = Infinity, lateCellMin = Infinity, extinctAt = null;
   let capTicks = 0, extinct = false, minPop = Infinity, maxPop = 0, pulses = 0, lastPhase = sim.dayPhase(w);
   const noon = [], night = [], syncs = [], dinos = [], groups = [];
+  // The water: surface temperature, oxygen in the bottom water (hypoxic: its lowest node below the threshold),
+  // Trichodesmium and its scum (biomass in the surface row), runoff events
+  const water = { tMin: Infinity, tMax: -Infinity, tSum: 0, n: 0, oMin: Infinity, oSum: 0, hypoxic: 0, triMax: 0, scumMax: 0, scum: 0, runoffs: 0 };
   // Music: onset times, chords (2+ onsets within chordWin), clashes against the notes still sounding
   const chordWin = 0.3 * rate, sounding = [], onsetTicks = [];
   let chords2 = 0, chords3 = 0, group = 0, groupStart = -1e9, pairs = 0, harsh = 0, seconds = 0, lastNotes = 0, maxVox = 0;
   const total = minutes * 60 * rate;
   for (let t = 1; t <= total; t++) {
-    const before = w.pulses.length;
+    const before = w.pulses.length, lastRunoff = w.lastRunoff;
     sim.stepWorld(w);
     if (w.pulses.length > before) pulses++;
+    if (w.lastRunoff !== lastRunoff) water.runoffs++;
     for (let i = sounding.length - 1; i >= 0; i--) if (sounding[i].end <= t) sounding.splice(i, 1);
     for (const n of w.music.notes) {
       onsetTicks.push(t);
@@ -110,10 +115,19 @@ function run(seed) {
       if (pop >= 20 && t % (3 * sampleTicks) === 0) syncs.push(sim.syncStats(w));
       // Dinoflagellates: their share of the living cells, and how many there are (Margalef: blooms only in calm water)
       // Five groups by form: diatoms, dinoflagellates, green algae, coccolithophores, cryptophytes
-      const gc = { glass: 0, dino: 0, green: 0, cocco: 0, crypto: 0, cyano: 0 }, cy = sim.cyanoTotal(w);
+      const gc = { glass: 0, dino: 0, green: 0, cocco: 0, crypto: 0, cyano: 0, tricho: 0 }, cy = sim.cyanoTotal(w);
       for (const c of w.cells) if (!c.dying) gc[GROUP_OF[c.kind]]++;
       gc.cyano = cy.syn + cy.pro;   // biomass, about a cell's worth per unit
-      const all = pop + gc.cyano;
+      gc.tricho = cy.tri;
+      const st = sim.surfaceTemp(w), ox = sim.bottomOxygen(w), cols = sim.PARAMS.grid.cols;
+      let scum = 0;
+      for (let i = 0; i < cols; i++) scum += w.fields.tri[i];
+      water.tMin = Math.min(water.tMin, st); water.tMax = Math.max(water.tMax, st); water.tSum += st; water.n++;
+      water.oMin = Math.min(water.oMin, ox.min); water.oSum += ox.mean;
+      if (ox.min < sim.PARAMS.oxygen.hypoxic) water.hypoxic++;
+      water.triMax = Math.max(water.triMax, cy.tri); water.scumMax = Math.max(water.scumMax, scum / cols);
+      if (scum / cols > 0.3) water.scum++;   // a scum: the surface row holds a third of a cell per node, or more
+      const all = pop + gc.cyano + gc.tricho;
       const nd = gc.dino;
       dinos.push({ n: nd, share: pop ? nd / pop : 0, wind: w.wind });
       // Diversity, late in the run; one group >= 90% counts as a monoculture
@@ -137,13 +151,15 @@ function run(seed) {
   const music = { ons: onsetTicks.length / (total / rate), longest, quiet: quiet / (total / rate), chords2: chords2 / minutes, chords3: chords3 / minutes,
                   harsh: pairs ? harsh / pairs : 0, seconds: pairs ? seconds / pairs : 0, lastNotes, maxVox, key: sim.keyName(w.music) };
   const drift = sim.nutrientInventory(w) - (w.initialInventory + w.upwelled - w.carried + w.imported);
-  const siDrift = sim.silicaInventory(w) - (w.initialSilica + w.siUpwelled);
+  const siDrift = sim.silicaInventory(w) - (w.initialSilica + w.siUpwelled + w.siWashed);
+  Object.assign(water, { tMean: water.tSum / (water.n || 1), oMean: water.oSum / (water.n || 1), hypoxic: water.hypoxic / (water.n || 1),
+                         scum: water.scum / (water.n || 1), fixed: w.fixed, washed: w.washed });
   const mean = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : NaN);
   const alive = w.cells.filter((c) => !c.dying);
   const ramps = new Array(sim.HUE_WHEEL.length).fill(0);
   for (const c of alive) ramps[Math.floor(c.g.hue)]++;
   return {
-    seed, music, pops, minPop, maxPop, lateMin, lateCellMin, extinctAt, capFrac: capTicks / total, extinct, drift, siDrift, arc: arcs(pops), pulses,
+    seed, music, water, pops, minPop, maxPop, lateMin, lateCellMin, extinctAt, capFrac: capTicks / total, extinct, drift, siDrift, arc: arcs(pops), pulses,
     noon: mean(noon), night: mean(night), deaths: w.deaths, ramps,
     size: mean(alive.map((c) => c.g.size)), checksum: sim.worldChecksum(w),
     sync: Object.fromEntries(['local', 'locked', 'global', 'chained', 'chains', 'longest', 'coils', 'stars'].map((k) => [k, mean(syncs.map((q) => q[k]))])),
@@ -169,18 +185,20 @@ const results = [];
 for (let s = firstSeed; s < firstSeed + seeds; s++) {
   const r = run(s);
   results.push(r);
-  const f = (v) => v.toFixed(2), d = r.deaths, dt = d.starved + d.old + d.grazed + d.sardines + d.salps + (d.hunted || 0) + (d.lysed || 0) || 1;
+  const f = (v) => v.toFixed(2), d = r.deaths, dt = CAUSES.reduce((s, k) => s + (d[k] || 0), 0) || 1, wa = r.water;
   process.stdout.write(
     `seed ${String(s).padStart(4)} |${spark(r.pops)}| min ${String(r.minPop).padStart(3)} max ${String(r.maxPop).padStart(3)}` +
     ` late min ${String(r.lateCellMin).padStart(3)} (+cysts ${String(r.lateMin).padStart(3)})` +
     ` cap ${(r.capFrac * 100).toFixed(1).padStart(4)}% ${r.extinct ? `EXTINCT at ${r.extinctAt.toFixed(0)} min` : '       '} arcs ${r.arc.n} falls ${r.arc.dieoffs}` +
     ` | depth noon ${f(r.noon)} night ${f(r.night)} | pulses ${r.pulses}` +
-    ` | deaths S/O/G/F/Sp/H/V ${[d.starved, d.old, d.grazed, d.sardines, d.salps, d.hunted, d.lysed].map((x) => Math.round(100 * x / dt)).join('/')}%` +
+    ` | deaths S/O/G/F/Sp/H/V/X ${CAUSES.map((k) => Math.round(100 * (d[k] || 0) / dt)).join('/')}%` +
+    ` | temp ${wa.tMin.toFixed(1)}..${wa.tMax.toFixed(1)} (${wa.tMean.toFixed(1)}) O2 bottom ${f(wa.oMean)} min ${f(wa.oMin)} hypoxic ${Math.round(wa.hypoxic * 100)}%` +
+    ` | tricho max ${wa.triMax.toFixed(0)} scum ${f(wa.scumMax)} (${Math.round(wa.scum * 100)}%) fixed ${wa.fixed.toFixed(0)} | runoffs ${wa.runoffs} washed ${wa.washed.toFixed(0)}` +
     ` | size ${f(r.size)} ramps ${r.ramps.join('/')} drift ${r.drift.toExponential(1)}` +
     ` | sync loc ${f(r.sync.local)} lock ${f(r.sync.locked)} glob ${f(r.sync.global)}` +
     ` | chains ${r.sync.chains.toFixed(1)} in ${Math.round(r.sync.chained * 100)}% max ${r.longest} rings ${r.sync.coils.toFixed(1)} stars ${r.sync.stars.toFixed(1)}` +
     ` | dino ${Math.round(r.dino.share * 100)}% peak ${r.dino.peak} >=50 ${Math.round(r.dino.over50 * 100)}%` +
-    ` | late diat/dino/green/cocco/crypto/cyano ${r.groups.share.map((x) => Math.round(x * 100)).join('/')}% mono ${Math.round(r.groups.mono * 100)}% lead ${r.groups.lead.map((x) => Math.round(x * 100)).join('/')}%` +
+    ` | late diat/dino/green/cocco/crypto/cyano/tricho ${r.groups.share.map((x) => Math.round(x * 100)).join('/')}% mono ${Math.round(r.groups.mono * 100)}% lead ${r.groups.lead.map((x) => Math.round(x * 100)).join('/')}%` +
     ` | music ${r.music.key} ons ${r.music.ons.toFixed(2)}/s vox<=${r.music.maxVox} quiet ${Math.round(r.music.quiet * 100)}% longest ${r.music.longest.toFixed(0)} s` +
     ` chords/min ${r.music.chords2.toFixed(1)} (3+ ${r.music.chords3.toFixed(1)}) clash ${(r.music.harsh * 100).toFixed(1)}% 2nds ${(r.music.seconds * 100).toFixed(0)}% last ${r.music.lastNotes}\n`);
 }
@@ -221,7 +239,8 @@ console.log('\n' + [
   `music (median): onsets ${median(results.map((r) => r.music.ons)).toFixed(2)}/s, near-silence ${Math.round(100 * median(results.map((r) => r.music.quiet)))}% of the time, chords ${median(results.map((r) => r.music.chords2)).toFixed(1)}/min (3+ ${median(results.map((r) => r.music.chords3)).toFixed(1)}), m2/tritone clashes ${(100 * median(results.map((r) => r.music.harsh))).toFixed(1)}%, seconds ${Math.round(100 * median(results.map((r) => r.music.seconds)))}%`,
   `diversity, second half (median share): ${GROUP_NAMES.map((name, i) => name + ' ' + Math.round(100 * median(results.map((r) => r.groups.share[i] || 0))) + '%').join(', ')}; monoculture (one group >= 90%) ${Math.round(100 * median(results.map((r) => r.groups.mono)))}% of the time, worst seed ${Math.round(100 * Math.max(...results.map((r) => r.groups.mono)))}%`,
   `leading the water (mean share of time): ${GROUP_NAMES.map((name, i) => name + ' ' + Math.round(100 * results.reduce((s, r) => s + r.groups.lead[i], 0) / results.length) + '%').join(', ')}`,
-  `causes of death (median share): ${['starved', 'old', 'grazed', 'sardines', 'salps', 'hunted', 'lysed'].map((k) => k + ' ' + Math.round(100 * median(results.map((r) => { const d = r.deaths, t = Object.values(d).reduce((s, v) => s + v, 0) || 1; return (d[k] || 0) / t; }))) + '%').join(', ')}`,
+  `the water (median): surface ${median(results.map((r) => r.water.tMin)).toFixed(1)}..${median(results.map((r) => r.water.tMax)).toFixed(1)} degrees, bottom oxygen ${median(results.map((r) => r.water.oMean)).toFixed(2)} (lowest ${median(results.map((r) => r.water.oMin)).toFixed(2)}), hypoxic ${Math.round(100 * median(results.map((r) => r.water.hypoxic)))}% of the time (worst ${Math.round(100 * Math.max(...results.map((r) => r.water.hypoxic)))}%); filamentous cyanobacteria peak ${median(results.map((r) => r.water.triMax)).toFixed(0)}, a scum ${Math.round(100 * median(results.map((r) => r.water.scum)))}% of the time (seeds with one: ${results.filter((r) => r.water.scum > 0).length}/${n}); runoffs ${median(results.map((r) => r.water.runoffs))}`,
+  `causes of death (median share): ${CAUSES.map((k) => k + ' ' + Math.round(100 * median(results.map((r) => { const d = r.deaths, t = Object.values(d).reduce((s, v) => s + v, 0) || 1; return (d[k] || 0) / t; }))) + '%').join(', ')}`,
   `max |nutrient drift|: ${Math.max(...results.map((r) => Math.abs(r.drift))).toExponential(2)}, |silica drift|: ${Math.max(...results.map((r) => Math.abs(r.siDrift))).toExponential(2)}`,
   `deterministic rerun: ${again.checksum === results[0].checksum ? 'yes' : 'NO'} (${results[0].checksum.toString(16)})`,
   `save/restore round trip: ${trip.same && trip.sum ? 'identical' : 'DIFFERENT'} (snapshot ~${(trip.bytes / 1024).toFixed(0)} KB, save+restore ${trip.saveMs} ms)`,

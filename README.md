@@ -110,11 +110,8 @@ newcomers, nitrogen fixation, stratification and tidal mixing, and hypoxia.
   - **Migration:** where each form spends the day and the night.
   - **The ledger:** deaths (grazed, eaten by fish, hunted, lysed by viruses, suffocated...), cysts and visitors.
 
-  After the ledger comes a chapter on **the music**:
-  - **The music:** the key and the elder that holds it, a pitch circle where the notes sounding now (and a colony's
-    chords) appear as shapes, and which species are playing which instrument.
-  - **Listening:** the water column as a staff, high notes at the surface and low ones at the floor, with every note
-    drawn where it was sung, and a live spectrum.
+  - **The music:** the key (its mode follows the season), a pitch circle where the notes sounding now (and a colony's
+    chords) appear as shapes, which species are playing which instrument, and a live spectrum.
 
   The **note** beside the book turns the music off and on.
 - Now and then a small **i in an air bubble** rises in a corner. Tap it for a curiosity about what you are looking at:

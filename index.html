@@ -297,11 +297,24 @@ const PARAMS = {
   // Harmonic field: one root and one pentatonic-family scale for the whole water, chosen by the seed.
   // Rule 7: each cell holds a scale degree (inherited; a daughter may start one step away). When it flashes it
   // moves at most one step toward the degree most consonant with what its neighbours sang recently.
-  // Register = depth: the surface sings high, the floor low; larger cells sing up to an octave lower.
+  // Register = depth: the surface sings high, the floor low; larger cells sing lower (sizeDrop semitones at most).
+  // register: [depth, MIDI] knots, read linearly between them. Most cells live in the lit upper water, so evenly spread
+  // octaves made the music top-heavy (C5 49%, C4 36%, C3 10%, C2 3%); these bands were fitted to the author's shares
+  // (C5 and C4 30% at most, C3 ~20%, more C2) from recorded notes: C5 30%, C4 31%, C3 23%, C2 15% (8 worlds, 2026-10-22).
   harmony: {
     scales: { major: [0, 2, 4, 7, 9], dorian: [0, 2, 3, 7, 9], minor: [0, 3, 5, 7, 10], hirajoshi: [0, 2, 3, 7, 8] },
-    top: 84, bottom: 36,                // MIDI: C6 at the surface .. C2 at the floor
-    sizeDrop: 24,                       // semitones lower for the biggest-looking cells (drawn size: dinoflagellates are big)
+    // The season's mode (author, 2026-10-22: a probability, not a rule): a world is born in a mode drawn from its
+    // season's weights, and each key change (an elder's event) draws the mode again from the weights of the season it
+    // happens in. By SEASONS: winter, spring, summer, autumn; weights in the order of scales.
+    seasonScales: [
+      { major: 0.05, dorian: 0.15, minor: 0.3, hirajoshi: 0.5 },    // winter: stark
+      { major: 0.5, dorian: 0.3, minor: 0.05, hirajoshi: 0.15 },    // spring: rising
+      { major: 0.3, dorian: 0.5, minor: 0.1, hirajoshi: 0.1 },      // summer: warm
+      { major: 0.1, dorian: 0.25, minor: 0.5, hirajoshi: 0.15 },    // autumn: falling
+    ],
+    top: 84, bottom: 36,                // MIDI: C6 at the surface .. C2 at the floor (notes are folded into this range)
+    register: [[0, 84], [0.16, 72], [0.24, 60], [0.48, 48], [1, 36]],
+    sizeDrop: 30,                       // semitones lower for the biggest-looking cells (drawn size: dinoflagellates are big)
     listen: 12, recent: 4,              // neighbours within this distance (<= hash.cell) whose last flash is this recent (s)
     consonance: [0.7, 0, 0.3, 0.85, 0.9, 1, 0.1],   // by interval class 0..6: unison/octave, m2, M2, m3, M3, 4th/5th, tritone
     choirUnison: 0,                     // against a neighbour flashing in phase (or a chain mate) a unison only doubles: spread out
@@ -656,10 +669,9 @@ const PARAMS = {
     layers: { mixedStep: 0.6, clineShare: 0.5, stratified: 1, minRows: 9 },   // the column page's layer criteria (density in degrees; share of the steepest gradient; chart rows)
     seaStates: [0.15, 0.35, 0.6], noonHour: 12, dialR: 32,
     // The music chapter (author, 2026-10-22; observation only, of what is heard: nothing when the music is off).
-    // keep: notes remembered (the last minute or so); share: s the instruments' shares count over; staff: s of notes
-    // the listening staff shows; lit: s a visitor's voice stays lit; circleR: the pitch circle's radius (px);
-    // scope: the spectrum's band (Hz) and bars.
-    music: { keep: 480, share: 60, staff: 20, lit: 4, circleR: 30, scope: { lo: 60, hi: 12000, bars: 39, fft: 1024, smooth: 0.7 } },
+    // keep: notes remembered (the last minute or so); share: s the instruments' shares count over; circleR: the pitch
+    // circle's radius (px); scope: the spectrum's band (Hz) and bars.
+    music: { keep: 480, share: 60, circleR: 30, scope: { lo: 60, hi: 12000, bars: 39, fft: 1024, smooth: 0.7 } },
     surfaceRows: 4,   // the surface water the recorder and the day page read: the top grid rows (about a tenth of the column)
     // Real units (sources in the Notebook section). depthM: the column in metres (light falls to e^-atten at the
     // floor: Kd 0.067 per m for a clear stratified shelf); o2mL: oxygen saturation at 15 C and 35 psu in mL/L, the
@@ -680,8 +692,10 @@ const PARAMS = {
   // picked by what is in view (see curioTopic); ignored, it fades after life s. r: the bubble's radius in px; rise:
   // px/s. The facts live in facts.json (sourced; updated by reviewed pushes) and are cached offline.
   // Zooming in to zoomFrom x or more on cells brings one bubble about the cells in frame after zoomDelay s (author),
-  // once until the camera zooms out again.
-  curio: { first: 40, everyMin: 90, everyMax: 180, life: 25, r: 5, rise: 1.2, sway: 2.5, zoomFrom: 3, zoomDelay: 10,
+  // once until the camera zooms out again. Facts marked why explain the ecology behind what is seen (author): now of
+  // the bubbles tell why something happening now happens (facts whose 'when' conditions hold), and a topic's why
+  // facts come first whyFirst of the time.
+  curio: { first: 40, everyMin: 90, everyMax: 180, life: 25, r: 5, rise: 1.2, sway: 2.5, zoomFrom: 3, zoomDelay: 10, now: 0.5, whyFirst: 0.7,
            corners: [[16, 120], [164, 120], [16, 250], [164, 230]] },
   persist: { db: 'monad', every: 30, chunkRows: 1024, version: 8,
     // Catching up: the time away is lived again, exactly, up to maxAway (s); beyond it the water rests. A worker runs
@@ -1416,6 +1430,7 @@ function createWorld(seed, founderCount, dayLength, yearStart = seedYearStart(se
   };
   w.nextWind = Math.floor(rng.range(PARAMS.wind.gapMin, PARAMS.wind.gapMax) * PARAMS.time.tickRate);
   updateSeason(w);
+  setScale(w.music, seasonMode(w));   // born in a mode its season makes likely
   w.surfaceLight = surfaceLightAt(dayPhase(w), moonLit(moonPhase(w)), w.dayFrac, w.sun);
   updateLight(w);
   const count = founderCount || F.count;
@@ -2683,7 +2698,10 @@ const looksBig = (c) => clamp((c.rv - RV_MIN) / (RV_MAX - RV_MIN), 0, 1);
 function notePitch(m, c, step) {
   const Hm = PARAMS.harmony, n = m.scale.length;
   const depth = clamp(c.y / (H - PARAMS.world.floor), 0, 1);
-  const target = Hm.top - (Hm.top - Hm.bottom) * depth - Hm.sizeDrop * looksBig(c);
+  const R = Hm.register;
+  let j = 0;
+  while (j < R.length - 2 && depth > R[j + 1][0]) j++;
+  const target = R[j][1] + (R[j + 1][1] - R[j][1]) * (depth - R[j][0]) / (R[j + 1][0] - R[j][0]) - Hm.sizeDrop * looksBig(c);
   const pc = m.root + m.scale[c.deg], d = c.deg + step, o = Math.floor(d / n);
   let midi = pc + 12 * Math.round((target - pc) / 12) + m.scale[d - o * n] + 12 * o - m.scale[c.deg];
   while (midi > Hm.top) midi -= 12;
@@ -2806,10 +2824,14 @@ function updateElders(w) {
   }
   if (holder || !oldest) return;
   const pc = (m.root + m.scale[oldest.deg]) % 12;
-  if (pc !== m.root && w.tick - m.rootTick >= PARAMS.harmony.rootRest * PARAMS.time.tickRate) {   // a fresh key holds a while
-    m.rootChanges++;
-    m.rootTick = w.tick;
-    m.root = pc;
+  if (w.tick - m.rootTick >= PARAMS.harmony.rootRest * PARAMS.time.tickRate) {   // a fresh key holds a while
+    const mode = seasonMode(w);   // a mode the season makes likely
+    if (pc !== m.root || mode !== m.scaleName) {
+      m.rootChanges++;
+      m.rootTick = w.tick;
+      m.root = pc;
+      setScale(m, mode);
+    }
   }
   m.rootCell = oldest.id;
   oldest.deg = 0;
@@ -3020,6 +3042,14 @@ function emitNote(w, c, step, last, final, phrase, startled, stretch) {
   });
 }
 
+const setScale = (m, name) => { m.scaleName = name; m.scale = PARAMS.harmony.scales[name]; };
+// A mode drawn from the season's weights, on the music's own stream (never the biology's)
+function seasonMode(w) {
+  const wt = PARAMS.harmony.seasonScales[seasonOf(yearDay(w))];
+  let r = w.music.rng.next() * SCALE_NAMES.reduce((t, k) => t + wt[k], 0);
+  for (const k of SCALE_NAMES) { r -= wt[k]; if (r < 0) return k; }
+  return SCALE_NAMES[SCALE_NAMES.length - 1];
+}
 const keyName = (m) => NOTE_NAMES[m.root] + ' ' + m.scaleName.toUpperCase();
 
 // ===== Persist =====
@@ -3450,8 +3480,8 @@ function playNote(n) {
 // whole phrases so tunes stay whole; the simulation is unchanged. Every note that plays is also seen: its cell
 // swells and sends out a ring (even when muted or before the first tap).
 // What was heard, for the music pages (page side only, never the world): the last notes played (when, pitch,
-// the cell's pigment, form and instrument) and when each visitor's voice last sounded. Nothing when the music is off.
-const heard = { notes: [], voices: {} };
+// the cell's pigment, form and instrument). Nothing when the music is off.
+const heard = { notes: [] };
 function logHeard(n, at) {
   const mix = n.drone ? null : noteMix(n);
   let inst = 'drone', top = 0;
@@ -3459,9 +3489,6 @@ function logHeard(n, at) {
   heard.notes.push({ t: at, end: at + (n.attack + n.release) * 1000, midi: n.midi, pc: n.pc,
                      ramp: hueRamp(n.c), form: n.c.kind, inst });
   if (heard.notes.length > PARAMS.notebook.music.keep) heard.notes.splice(0, heard.notes.length - PARAMS.notebook.music.keep);
-}
-function heardVoice(kind) {
-  if (!audio.muted) heard.voices[kind] = performance.now();
 }
 
 function hearNotes(w) {
@@ -3636,7 +3663,6 @@ function grainStream(w, C, key, seen, seenX) {
     const m = w.music, semis = m.scale[ambRng.int(m.scale.length)], up = ambRng.next() < 0.3 ? 12 : 0;
     const x = seen > 0 ? seenX / seen / W * 2 - 1 : 0;
     grain(C, scaleNote(m, C.octave, semis + up), Math.max(visitorNext[key], t) + PARAMS.audio.lookahead, x + (ambRng.next() - 0.5) * 0.6);
-    heardVoice(key);
     visitorNext[key] = Math.max(visitorNext[key], t) + (-Math.log(1 - ambRng.next() * 0.999)) / rate;
   }
 }
@@ -3668,7 +3694,6 @@ function audioVisitors(w) {
     const S = V.school, m = w.music;
     schoolChord([scaleNote(m, S.octave, 0), scaleNote(m, S.octave, 7), scaleNote(m, S.octave, 14)], school.x / W * 2 - 1);
     voiceRing(LIGHTBLUE, school.x, school.y, PARAMS.visitors.sardines.ry);
-    heardVoice('sardines');
     visitorNext.school = t + S.every;
   }
   const salp = w.visitors.find((v) => v.kind === 'salps' && onScreen(v, 30));
@@ -3677,7 +3702,7 @@ function audioVisitors(w) {
     if (salp.id !== visitorNext.salpId) { visitorNext.salpId = salp.id; visitorNext.salpStep = 0; visitorNext.salp = t; }
     while (visitorNext.salp <= t + 0.05) {
       const k = visitorNext.salpStep % (n + Sp.rest), at = Math.max(visitorNext.salp, t) + PARAMS.audio.lookahead;
-      if (k < n && salp.alive[k]) { const q = salpBarrel(salp, k); salpNote(salpMelody(w.music, salp.id, k), at, q.x / W * 2 - 1); voiceRing(EMERALD, q.x, q.y, 3); heardVoice('salps'); }
+      if (k < n && salp.alive[k]) { const q = salpBarrel(salp, k); salpNote(salpMelody(w.music, salp.id, k), at, q.x / W * 2 - 1); voiceRing(EMERALD, q.x, q.y, 3); }
       visitorNext.salpStep++;
       visitorNext.salp = Math.max(visitorNext.salp, t) + Sp.step;
     }
@@ -3694,7 +3719,6 @@ function audioVisitors(w) {
       const r = ambRng.next(), oct = Jv.octave - (r < Jv.drop[0] ? 0 : r < Jv.drop[0] + Jv.drop[1] ? 1 : 2);   // sometimes an octave or two lower
       steps.forEach((semis, k) => harpNote(scaleNote(w.music, oct, semis), at + k * Jv.spacing * (0.85 + 0.3 * ambRng.next()), Jv, p.x / W * 2 - 1, k === steps.length - 1));
       voiceRing(v.kind === 'jellies' ? (m.tint ? VIOLET : ROSE) : -1, p.x, p.y, PARAMS.visitors[v.kind].r * m.size);
-      heardVoice(v.kind);
       visitorNext[v.kind] = t + Jv.gap + (Jv.gapMax - Jv.gap) * ambRng.next();   // a random rest before the next
     });
   }
@@ -3705,7 +3729,6 @@ function audioVisitors(w) {
     if (visitorNext.sunfish > 0) {
       sunfishCall(scaleNote(m, F.octave + (fish.leaving ? 1 : 0), 0), scaleNote(m, F.octave + (fish.leaving ? 1 : 0), 7), fish.leaving ? F.baskGain : 1, fish.x / W * 2 - 1);
       voiceRing(GOLD, fish.x, fish.y, PARAMS.visitors.sunfish.r);
-      heardVoice('sunfish');
     }
     visitorNext.sunfish = t + F.everyMin + (F.everyMax - F.everyMin) * ambRng.next();
   } else if (!fish) visitorNext.sunfish = 0;   // a sunfish arriving calls soon after it appears, not at once
@@ -6180,7 +6203,7 @@ const VISITOR_INK = [
   { kind: 'sunfish', name: 'SUNFISH', ramp: GOLD }, { kind: 'jellies', name: 'JELLYFISH', ramp: ROSE },
   { kind: 'combs', name: 'COMB JELLIES', ramp: VIOLET },
 ];
-const PAGES = ['THE DAY', 'CENSUS', 'SPECIES', 'THE WATER', 'THE COLUMN', 'MIGRATION', 'LEDGER', 'THE MUSIC', 'LISTENING'];   // the biology, then the music
+const PAGES = ['THE DAY', 'CENSUS', 'SPECIES', 'THE WATER', 'THE COLUMN', 'MIGRATION', 'LEDGER', 'THE MUSIC'];   // the biology, then the music
 const SEA_STATES = ['CALM', 'BREEZE', 'WINDY', 'STORM'];
 // The notebook glyph, an open book: o page, - a line of writing; the spine is the gap between the pages
 const GLYPH = ['ooooo...ooooo', 'oooooo.oooooo', 'o----o.o----o', 'oooooo.oooooo', 'o----o.o----o', 'oooooo.oooooo', 'o---oo.oo---o', 'oooooo.oooooo', '..oooo.oooo..'];
@@ -6715,7 +6738,8 @@ function loadFacts() {
   try { curio.seen = new Set(JSON.parse(localStorage.getItem('monad-facts-seen') || '[]')); } catch (e) { /* private mode */ }
   fetch('facts.json').then((r) => (r.ok ? r.json() : [])).then((list) => {
     if (!Array.isArray(list)) return;
-    curio.facts = list.filter((f) => f && f.topic && f.text).map((f) => ({ topic: f.topic, text: fontSafe(f.text), source: fontSafe(f.source || ''), id: hashString(f.text) }));
+    curio.facts = list.filter((f) => f && f.topic && f.text).map((f) => ({ topic: f.topic, text: fontSafe(f.text), source: fontSafe(f.source || ''), id: hashString(f.text),
+                                                                                why: !!f.why, when: Array.isArray(f.when) ? f.when : [] }));
   }).catch(() => { /* offline on a first visit, or file://: no curiosities */ });
 }
 function markSeen(f) {
@@ -6741,6 +6765,13 @@ function tipTags(w) {
   if (w.pulses.length) tags.add('upwelling');
   if (w.runoffs.length) tags.add('runoff');
   if (bottomOxygen(w).min < PARAMS.oxygen.hypoxic) tags.add('hypoxia');
+  // The season, how the water is layered, and who leads it (the 'why' facts are matched to these)
+  tags.add(SEASONS[seasonOf(yearDay(w))].toLowerCase());
+  tags.add(waterLayers(castProfile(w, false), LAYER_ROWS).stratified ? 'stratified' : 'mixed');
+  const groups = { diatoms: counts[5] + counts[6], dinos: counts[1] + counts[2] + counts[3] + counts[4], green: counts[0], cocco: counts[7], crypto: counts[8], cyano: cy.syn + cy.pro, tricho: cy.tri };
+  let lead = '', most = 10;
+  for (const k in groups) if (groups[k] > most) { most = groups[k]; lead = k; }
+  if (lead) tags.add('lead:' + lead);
   return tags;
 }
 
@@ -6779,14 +6810,24 @@ function curioTopic(w, cellsOnly) {
   for (const [t, v] of pool) { r -= v; if (r <= 0) return t; }
   return pool.length ? pool[pool.length - 1][0] : null;
 }
-// A fact on that topic not read yet (when all are read, the topic starts over)
+// A fact on that topic not read yet (when all are read, the topic starts over); facts that explain why (author: the
+// ecology behind what is seen) come first, most of the time
 function curioFact(topic) {
   let pool = curio.facts.filter((f) => f.topic === topic && !curio.seen.has(f.id));
   if (!pool.length) {
     for (const f of curio.facts) if (f.topic === topic) curio.seen.delete(f.id);
     pool = curio.facts.filter((f) => f.topic === topic);
   }
+  const why = pool.filter((f) => f.why && !f.when.length);
+  if (why.length && hash01(curio.count * 7477 + 11) < PARAMS.curio.whyFirst) pool = why;
   return pool.length ? pool[Math.floor(hash01(curio.count * 104729 + 7) * pool.length)] : null;
+}
+// A 'why' fact about what is happening now: one whose conditions all hold (season, layering, who leads, night...)
+function curioNow(w) {
+  const tags = tipTags(w), fits = (f) => f.why && f.when.length && f.when.every((t) => tags.has(t));
+  let pool = curio.facts.filter((f) => fits(f) && !curio.seen.has(f.id));
+  if (!pool.length) pool = curio.facts.filter(fits);
+  return pool.length ? pool[Math.floor(hash01(curio.count * 15485863 + 3) * pool.length)] : null;
 }
 
 // Now and then a bubble rises in a corner; ignored, it fades away. Zooming in on cells brings one about them soon.
@@ -6800,10 +6841,13 @@ function updateCurio(w, now) {
   if (b && !curio.card && now - b.born > C.life * 1000) curio.bubble = null;
   const zoomIn = curio.zoomAt && now >= curio.zoomAt;
   if (curio.bubble || curio.card || (now < curio.next && !zoomIn)) return;
-  let topic = zoomIn ? curioTopic(w, true) : null;
+  let topic = zoomIn ? curioTopic(w, true) : null, fact = null;
   curio.zoomAt = 0;
-  if (!topic) topic = curioTopic(w);
-  const fact = topic && curioFact(topic);
+  if (!topic && hash01(curio.count * 92821 + 1) < C.now) fact = curioNow(w);   // what is happening now, and why
+  if (!fact) {
+    if (!topic) topic = curioTopic(w);
+    fact = topic && curioFact(topic);
+  }
   curio.count++;
   curio.next = now + (C.everyMin + (C.everyMax - C.everyMin) * hash01(curio.count * 31 + 5)) * 1000;
   if (!fact) return;
@@ -6901,7 +6945,7 @@ function drawNotebook(w) {
   }
   if (notebook.page !== PAGES.indexOf('LEDGER') || !notebook.open) notebook.confirm = false;   // a question left unanswered is withdrawn
   [drawDayPage, drawCensusPage, drawSpeciesPage, drawWaterPage, drawColumnPage, drawMigrationPage, drawLedgerPage,
-   drawMusicPage, drawListeningPage][notebook.page](w, P.y + 19);
+   drawMusicPage][notebook.page](w, P.y + 19);
 }
 const PAGE_END = () => PARAMS.notebook.page.y + PARAMS.notebook.page.h - 17;   // the lowest row a page's content may use, above the page turner
 
@@ -7459,8 +7503,6 @@ function drawNewWater(y) {
 // heard log, page side): with the music off the pages stay drawn, but empty. ----
 const INSTRUMENTS = [['piano', 'FELT PIANO'], ['pad', 'PAD'], ['wood', 'MARIMBA'], ['string', 'PLUCKED STRING'], ['glock', 'GLOCKENSPIEL'],
   ['vibe', 'VIBRAPHONE'], ['celesta', 'CELESTA'], ['kalimba', 'KALIMBA'], ['drone', 'DRONE (ELDERS)']];
-const VOICES_HEARD = [['sardines', 'SARDINES: CHORD'], ['salps', 'SALPS: LINE'], ['sunfish', 'SUNFISH: CALL'], ['jellies', 'MOON JELLY: HARP'],
-  ['combs', 'COMB JELLY: HARP'], ['grain', 'CYANOBACTERIA'], ['triGrain', 'FILAMENTOUS']];
 const MUSIC_FROM = 7;                             // the chapter's first page
 const musicHeard = () => audio.started && !audio.muted;
 // A dotted line between two page points
@@ -7473,24 +7515,14 @@ function musicSilence(y) {
   inkCentre(y, !audio.started ? 'TAP TO LISTEN' : 'MUSIC OFF', COL.SLATE);
 }
 
-// VIII. The music: the key and who holds it; a pitch circle with the notes sounding now, low notes near the centre
+// VIII. The music: the key; a pitch circle with the notes sounding now, low notes near the centre
 // (a colony's chord shows as a shape); the voices in use; which species play which instrument (heard in the last
-// minute), and the visitors' voices, lit while they sound
+// minute), and the music's spectrum
 function drawMusicPage(w, y) {
   const N = PARAMS.notebook, M = N.music, P = N.page, x1 = P.x + P.w, cx = P.x + (P.w >> 1), m = w.music, now = performance.now();
-  const key = NOTE_NAMES[m.root] + ' ' + m.scaleName.toUpperCase(), column = H - PARAMS.world.floor;
+  const key = NOTE_NAMES[m.root] + ' ' + m.scaleName.toUpperCase();
   inkBig(cx - ((key.length * 8 - 2) >> 1), y + 1, key, COL.FOAM);
-  let holder = null;
-  for (const c of m.elders) if (c.id === m.rootCell && !c.dying) holder = c;
-  let ly = y + 16;
-  if (holder) {
-    drawIcon(P.x + 6, ly - 1, holder.kind);
-    const fn = FORMS[holder.kind].name;
-    ink(P.x + 16, ly, 'HELD BY ' + ('AEIOU'.includes(fn[0]) ? 'AN ' : 'A ') + fn + ' ELDER', COL.SHAFT);
-    ink(P.x + 16, ly + 7, metres(clamp(holder.y / column, 0, 1)) + ' M DEEP, AN ELDER FOR ' + clock(holder.elderAge), COL.SLATE);
-  } else inkCentre(ly + 3, m.rootChanges ? 'NO ELDER HOLDS IT NOW' : 'THE KEY THE WATER WAS BORN IN', COL.SHAFT);
-  ly += 14;
-  if (m.rootChanges) inkCentre(ly, 'KEY FOR ' + clock((w.tick - m.rootTick) * TICK_DT) + ', CHANGED ' + m.rootChanges + (m.rootChanges > 1 ? ' TIMES' : ' TIME'), COL.SLATE);
+  const ly = y + 6;
 
   // The pitch circle: C at the top, the scale's notes ringed, the root in gold
   const R = M.circleR, ccx = cx, ccy = ly + 16 + R;
@@ -7550,39 +7582,16 @@ function drawMusicPage(w, y) {
     vy += 9;
   }
   dotted(P.x + 6, x1 - 7, vy, COL.SLATE);
-  vy += 5;
-  VOICES_HEARD.forEach(([k, name], i) => ink(P.x + 6 + (i % 2) * 80, vy + (i >> 1) * 7, name, now - (heard.voices[k] || -1e9) < M.lit * 1000 ? COL.FOAM : COL.SLATE));
+  drawSpectrum(vy + 5, PAGE_END() - vy - 22);
   if (!musicHeard()) musicSilence(ccy - 2);
 }
 
-// IX. Listening: a staff of the last staff s, each note a stroke at the pitch it sounded (C6 to C1: the drones at the
-// foot), ringing out to the right, the newest on the right; register follows depth, so surface cells sing high and
-// the deep low. Below it, the music's spectrum now
-function drawListeningPage(w, y) {
-  const N = PARAMS.notebook, M = N.music, P = N.page, x1 = P.x + P.w, CX = N.chart.x, CW = N.chart.w, now = performance.now();
-  inkCentre(y, 'SURFACE CELLS SING HIGH, DEEP ONES LOW', COL.SLATE);
-  const sy0 = y + 10, sh = 150, span = M.staff * 1000, xAt = (t) => CX + CW - 1 - Math.round((now - t) / span * (CW - 1));
-  const yAt = (midi) => sy0 + Math.round(clamp((84 - midi) / 60, 0, 1) * (sh - 1));   // C6 (midi 84) at the top to C1 (24)
-  for (let k = 6; k >= 1; k--) {
-    const yy = yAt(12 * (k + 1));
-    dotted(CX, CX + CW - 1, yy, COL.SLATE);
-    ink(P.x + 6, yy - 2, 'C' + k, COL.SHAFT);
-  }
-  for (let yy = sy0; yy < sy0 + sh; yy++) put(CX - 1, yy, COL.SLATE);
-  for (const n of heard.notes) {
-    if (n.t > now || now - n.t > span) continue;
-    const yy = yAt(n.midi), xa = xAt(n.t), xb = xAt(Math.min(now, n.end)), rb = rampBase(n.ramp), on = now < n.end;
-    const vis = 1 - (now - n.t) / span;
-    for (let x = xa + 1; x <= xb; x++) if (bayer(x, yy) < (on ? 1 : vis)) put(x, yy, rb + (n.inst === 'drone' ? SHADOW : BASE));   // how long it rings
-    if (bayer(xa, yy) < Math.max(vis, 0.3)) { fillRect(xa, yy - 1, 2, 2, rb + (on ? BRIGHT : HIGHLIGHT)); }   // the strike
-  }
-  ink(CX, sy0 + sh + 3, '-' + M.staff + ' S', COL.SLATE);
-  inkRight(CX + CW - 1, sy0 + sh + 3, 'NOW', COL.SLATE);
-
-  // The spectrum: the music only (after its switch), log frequency, a bar per band
-  const S = M.scope, gy = sy0 + sh + 14, gh = 56, bx = P.x + 6, bw = Math.floor((P.w - 12) / S.bars);
-  ink(P.x + 6, gy, 'SPECTRUM', COL.SHAFT);
-  const g0 = gy + 8, base = g0 + gh;
+// The music's spectrum now: the music only (after its switch), log frequency, a bar per band, gh px tall
+function drawSpectrum(y, gh) {
+  const N = PARAMS.notebook, M = N.music, P = N.page, x1 = P.x + P.w;
+  const S = M.scope, bx = P.x + 6, bw = Math.floor((P.w - 12) / S.bars);
+  ink(P.x + 6, y, 'SPECTRUM', COL.SHAFT);
+  const g0 = y + 8, base = g0 + gh;
   dotted(bx, x1 - 7, base, COL.SLATE);
   const on = musicHeard() && audio.scope, bins = audio.scopeBins;
   if (on) audio.scope.getByteFrequencyData(bins);

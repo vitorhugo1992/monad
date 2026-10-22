@@ -112,6 +112,9 @@ newcomers, nitrogen fixation, stratification and tidal mixing, and hypoxia.
   - **The ledger:** deaths (grazed, eaten by fish, hunted, lysed by viruses, suffocated...), cysts and visitors.
 
   The **note** beside the book turns the music off and on.
+- Now and then a small **i in an air bubble** rises in a corner. Tap it for a curiosity about what you are looking at:
+  the species in view when zoomed in, the seabed near the bottom, the ocean and the water column from afar. Every fact
+  is sourced.
 
 ## A world that keeps living
 

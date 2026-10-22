@@ -653,6 +653,12 @@ const PARAMS = {
   // One world that lives on between visits (unless the URL picks a seed or another start: a scratch world, never saved).
   // every: real s between autosaves (also on hiding the page); chunkRows: notebook rows per stored chunk, so a save
   // writes only the rows that changed.
+  // Curiosities (author): now and then an "i" in an air bubble rises in a corner (first after first s, then every
+  // everyMin..everyMax real s, never with the notebook open or while catching up); tapped, it opens a card with a fact
+  // picked by what is in view (see curioTopic); ignored, it fades after life s. r: the bubble's radius in px; rise:
+  // px/s. The facts live in facts.json (sourced; updated by reviewed pushes) and are cached offline.
+  curio: { first: 40, everyMin: 90, everyMax: 180, life: 25, r: 5, rise: 1.2, sway: 2.5,
+           corners: [[16, 120], [164, 120], [16, 250], [164, 230]] },
   persist: { db: 'monad', every: 30, chunkRows: 1024, version: 7,
     // Catching up: the time away is lived again, exactly, up to maxAway (s); beyond it the water rests. A worker runs
     // it out of sight and shows a frame every show s (a silent time-lapse); the last tail simulated s play on the page,
@@ -5955,8 +5961,11 @@ function composeFrame(w, now) {
   if (debug.on) { const t0 = performance.now(); drawDebug(w); overlayMs = performance.now() - t0; }
   drawNotebookGlyph(now);
   drawMusicGlyph(now);
+  updateCurio(w, now);
+  drawCurio(now);
   if (notebook.open) drawNotebook(w);
   blitTimeOfDay(w);
+  inkCurio();
   if (notebook.open) inkNotebook();
   return overlayMs;
 }
@@ -6039,7 +6048,6 @@ const notebook = {
   rows: new Float32Array(4096 * NB.STRIDE), count: 0, every: PARAMS.notebook.sampleEvery * PARAMS.time.tickRate, next: 0,
   visits: [], seenVisitor: 1, cols: null, colsKey: '', confirm: false,   // confirm: NEW WATER asked, waiting for YES or NO
   rests: [],   // the kept world resting while away beyond the catch-up limit: { tick, s }
-  tip: -1, tips: 0,   // the curiosity at the foot of the page, and how many have been shown (render only)
 };
 const rowTick = (r, i) => r[i * NB.STRIDE + NB.TICK] * PARAMS.time.tickRate;
 
@@ -6331,12 +6339,10 @@ function dayNightDepths(t0) {
 // ---- Opening, turning, zooming ----
 function openNotebook(on) {
   notebook.open = on;
-  if (on) notebook.tip = -1;   // a fresh curiosity on each opening
   needsRender = true;
 }
 function turnPage(dir) {
   notebook.page = (notebook.page + dir + PAGES.length) % PAGES.length;
-  notebook.tip = -1;
   needsRender = true;
 }
 function setSpan(i) {
@@ -6535,58 +6541,44 @@ function drawStack(cols, cy0, ch) {
   inkOver(CX + 2, cy0 + 2, String(scale), COL.SLATE);
 }
 
-// ---- Curiosities: one at the foot of a page, picked by what the water is doing (render only). Not shown yet
-// (author: they take room; to come back once the open issues are fixed) ----
-// Each is true of the sea and of what MONAD shows; tag: when it fits (general: always). Sources by number below.
-const TIPS = [
-  { tag: 'cyano', text: 'PROCHLOROCOCCUS IS THE MOST ABUNDANT PHOTOSYNTHETIC ORGANISM ON EARTH: ABOUT THREE OCTILLION CELLS.' },   // Flombaum et al. 2013, PNAS 110:9824
-  { tag: 'general', text: "SEA PLANKTON DO ABOUT HALF OF THE WORLD'S PHOTOSYNTHESIS, WITH ABOUT 1% OF ITS PLANT BIOMASS." },   // Field et al. 1998, Science 281:237
-  { tag: 'general', text: "PLANKTON MAKE ABOUT HALF OF EARTH'S OXYGEN, BUT SEA LIFE BREATHES MOST OF IT BACK AGAIN." },   // Field et al. 1998; Falkowski 1998
-  { tag: 'general', text: "THE OCEAN'S PHYTOPLANKTON ARE EATEN OR DIE AND ARE REPLACED ABOUT ONCE A WEEK." },   // Falkowski 1998, Science 281:200
-  { tag: 'diatoms', text: 'DIATOMS FIX ABOUT A FIFTH OF ALL THE CARBON PHOTOSYNTHESISED ON EARTH.' },   // Nelson et al. 1995, GBC 9:359
-  { tag: 'diatoms', text: "A DIATOM'S LATTICE OF GLASS PORES BENDS LIGHT LIKE A PHOTONIC CRYSTAL: WHY THEIR RIMS SHIMMER." },   // Fuhrmann et al. 2004, Appl. Phys. B 78:257
-  { tag: 'diatoms', text: 'SILICA RETURNS TO THE WATER MORE SLOWLY THAN NITROGEN, SO DIATOMS RUN OUT FIRST AND OTHERS TAKE THEIR TURN.' },   // Dugdale et al. 1995, DSR I 42:697
-  { tag: 'crash', text: 'DIATOM BLOOMS OFTEN END IN A MASS SINKING OF CELLS AND RESTING SPORES.' },   // Smetacek 1985, Mar. Biol. 84:239
-  { tag: 'diatoms', text: 'CHAINS GUARD DIATOMS AGAINST THE SMALLEST GRAZERS, BUT COPEPODS AND FISH EAT CHAINS ALL THE SAME.' },   // Bergkvist et al. 2012, L&O 57:318
-  { tag: 'cysts', text: 'DINOFLAGELLATE CYSTS ABOUT A CENTURY OLD, DUG FROM FJORD MUD, HAVE BEEN WOKEN AND GROWN AGAIN.' },   // Ribeiro et al. 2011, ISME J 5:1645
-  { tag: 'cysts', text: "CYST BEDS ON THE SEABED SEED NEXT SEASON'S BLOOMS, AS ALEXANDRIUM'S DO IN THE GULF OF MAINE." },   // Anderson et al. 2005, DSR II 52:2522
-  { tag: 'storm', text: "MARGALEF'S MANDALA: DIATOMS RULE STIRRED, RICH WATER; DINOFLAGELLATES RULE CALM, LAYERED WATER." },   // Margalef 1978, Oceanol. Acta 1:493
-  { tag: 'calm', text: "MARGALEF'S MANDALA: DIATOMS RULE STIRRED, RICH WATER; DINOFLAGELLATES RULE CALM, LAYERED WATER." },
-  { tag: 'glow', text: 'A FLASH MAY BE A BURGLAR ALARM: IT DRAWS BIGGER HUNTERS ONTO WHATEVER IS GRAZING THE GLOWING CELL.' },   // Abrahams & Townsend 1993, Ecology 74:258
-  { tag: 'glow', text: 'DINOFLAGELLATES GLOW ON A DAILY CLOCK: THEY SHINE AT NIGHT EVEN WHEN KEPT IN THE DARK ALL DAY.' },   // Hastings & Sweeney 1957, PNAS 43:804
-  { tag: 'night', text: 'SOME DINOFLAGELLATES SWIM DOWN AT NIGHT TO FETCH NUTRIENTS AND RETURN TO THE LIGHT AT DAWN.' },   // Cullen & Horrigan 1981, Mar. Biol. 62:81
-  { tag: 'night', text: 'THE NIGHTLY RISE AND DAWN SINKING OF SEA ANIMALS IS THE LARGEST MIGRATION ON EARTH, EVERY DAY.' },   // Hays 2003, Hydrobiologia 503:163
-  { tag: 'general', text: 'A LITRE OF SEAWATER HOLDS ABOUT TEN BILLION VIRUSES.' },   // Suttle 2005, Nature 437:356
-  { tag: 'general', text: 'BURST CELLS RETURN THEIR NUTRIENTS TO THE WATER INSTEAD OF FEEDING GRAZERS: THE VIRAL SHUNT.' },   // Wilhelm & Suttle 1999, BioScience 49:781
-  { tag: 'milky', text: 'A GIANT VIRUS, EHV, CAN END A BLOOM OF THE COCCOLITHOPHORE EMILIANIA HUXLEYI.' },   // Bratbak et al. 1993, MEPS 93:39
-  { tag: 'milky', text: 'COCCOLITHOPHORE BLOOMS CAN SPREAD OVER 100 000 KM2, SEEN FROM SPACE AS MILKY TURQUOISE WATER.' },   // Holligan et al. 1993, GBC 7:879
-  { tag: 'dinophysis', text: "DINOPHYSIS'S CHLOROPLASTS PASS THROUGH THREE CELLS: A CRYPTOPHYTE, THE CILIATE MESODINIUM, THEN DINOPHYSIS." },   // Park et al. 2006
-  { tag: 'scum', text: 'DARWIN SAW TRICHODESMIUM FROM THE BEAGLE AND CALLED IT SEA-SAW-DUST.' },   // Darwin 1839, Journal of Researches
-  { tag: 'scum', text: 'TRICHODESMIUM FLOATS ON GAS VESICLES AND SINKS BY BUILDING HEAVY SUGAR BALLAST IN BRIGHT LIGHT.' },   // Villareal & Carpenter 2003, Microb. Ecol. 45:1
-  { tag: 'general', text: 'MARINE SNOW IS CLUMPS OF DEAD CELLS, MUCUS AND PELLETS, SINKING TENS TO HUNDREDS OF METRES A DAY.' },   // Alldredge & Silver 1988, Prog. Oceanogr. 20:41
-  { tag: 'salps', text: 'SALP PELLETS CAN SINK OVER TWO KILOMETRES A DAY, AMONG THE FASTEST PARTICLES IN THE SEA.' },   // Bruland & Silver 1981, Mar. Biol. 63:295
-  { tag: 'sunfish', text: 'OCEAN SUNFISH BASK AT THE SURFACE TO WARM UP AFTER DEEP, COLD DIVES FOR JELLY-LIKE PREY.' },   // Nakamura et al. 2015, J. Anim. Ecol. 84:590
-  { tag: 'sunfish', text: 'A SUNFISH OF ABOUT 2.3 TONNES IS THE HEAVIEST BONY FISH EVER WEIGHED.' },   // Sawai et al. 2018, Ichthyol. Res. 65:142
-  { tag: 'sardines', text: 'SARDINES FILTER PHYTOPLANKTON AS WELL AS ZOOPLANKTON: DIATOMS CAN FILL THEIR STOMACHS.' },   // Garrido et al. 2008, MEPS 354:245
-  { tag: 'hypoxia', text: 'OVER 400 COASTAL SYSTEMS NOW HAVE DEAD ZONES, MOSTLY FED BY NUTRIENTS WASHED OFF THE LAND.' },   // Diaz & Rosenberg 2008, Science 321:926
-  { tag: 'hypoxia', text: 'THE WHITE MATS ON DEAD SEABEDS ARE GIANT SULPHUR BACTERIA, BEGGIATOA, LIVING ON HYDROGEN SULPHIDE.' },   // Jorgensen 1977, Mar. Biol. 41:19
-  { tag: 'tide', text: 'SPRING TIDES HAVE NOTHING TO DO WITH SPRING: THEY COME ABOUT EVERY 15 DAYS, NEAR NEW AND FULL MOON.' },   // Simpson & Sharples 2012
-  { tag: 'tide', text: 'WHERE TIDES ARE STRONG FOR THE DEPTH THEY MIX THE SHELF FROM THE SEABED UP; FRONTS FORM WHERE THEY STOP.' },   // Simpson & Hunter 1974, Nature 250:404
-  { tag: 'general', text: 'A SUBSURFACE CHLOROPHYLL MAXIMUM IS OFTEN NOT MORE CELLS BUT GREENER ONES: DIM-LIGHT CELLS PACK MORE CHLOROPHYLL.' },   // Cullen 2015
-  { tag: 'bloom', text: 'TINY GRAZERS, MOSTLY SINGLE CELLS, EAT ABOUT TWO THIRDS OF WHAT PHYTOPLANKTON GROW EACH DAY.' },   // Calbet & Landry 2004, L&O 49:51
-  { tag: 'upwelling', text: 'UPWELLING LIFTS COLD, NUTRIENT-RICH WATER INTO THE LIGHT; SOME OF THE RICHEST FISHING GROUNDS LIVE ON IT.' },   // Simpson & Sharples 2012
-  { tag: 'runoff', text: 'RIVER WATER IS LIGHTER THAN SEAWATER, SO A LENS OF FRESH WATER CAN FLOAT ON THE SEA AND SEAL OFF THE WATER BELOW.' },   // Simpson & Sharples 2012
-];
+// ---- Curiosities: an "i" in an air bubble (render and input only: it never touches the world) ----
+// The facts come from facts.json: [{ topic, text, source }]. A topic is a form (green, alexandrium, dinophysis, tripos,
+// prorocentrum, centric, pennate, cocco, crypto, cyano, tricho), a group (diatoms, dinos), a place (ocean, column,
+// surface, floor), a process (nutrients, deadzone, tides, night, viruses) or an animal (grazers, sardines, salps,
+// sunfish, jellies, combs). Which topic is picked depends on what is in view: zoomed in on cells, their forms; near
+// the floor, the floor; a visitor on screen, the visitor; zoomed out, the ocean and the column; and what the water is
+// doing (a dead zone, milky water, night...). Facts already read are skipped until a topic runs out (kept in this
+// browser only).
+const curio = { facts: [], bubble: null, card: null, next: 0, count: 0, seen: new Set() };
+const KIND_TOPIC = ['green', 'alexandrium', 'dinophysis', 'tripos', 'prorocentrum', 'centric', 'pennate', 'cocco', 'crypto'];
+const TOPIC_NAME = {
+  green: 'GREEN ALGAE', alexandrium: 'ALEXANDRIUM', dinophysis: 'DINOPHYSIS', tripos: 'TRIPOS', prorocentrum: 'PROROCENTRUM',
+  centric: 'CENTRIC DIATOMS', pennate: 'PENNATE DIATOMS', cocco: 'COCCOLITHOPHORES', crypto: 'CRYPTOPHYTES', cyano: 'CYANOBACTERIA',
+  tricho: 'FILAMENTOUS CYANOBACTERIA', diatoms: 'DIATOMS', dinos: 'DINOFLAGELLATES', ocean: 'THE OCEAN', column: 'THE WATER COLUMN',
+  nutrients: 'NUTRIENTS', surface: 'THE SURFACE', floor: 'THE SEABED', deadzone: 'DEAD ZONES', tides: 'TIDES', night: 'NIGHT',
+  viruses: 'VIRUSES', grazers: 'GRAZERS', sardines: 'SARDINES', salps: 'SALPS', sunfish: 'OCEAN SUNFISH', jellies: 'MOON JELLIES',
+  combs: 'COMB JELLIES',
+};
+const fontSafe = (t) => String(t).toUpperCase().replace(/[^A-Z0-9 .,'()?!=;:\-\/%+]/g, ' ').replace(/ +/g, ' ').trim();
+function loadFacts() {
+  try { curio.seen = new Set(JSON.parse(localStorage.getItem('monad-facts-seen') || '[]')); } catch (e) { /* private mode */ }
+  fetch('facts.json').then((r) => (r.ok ? r.json() : [])).then((list) => {
+    if (!Array.isArray(list)) return;
+    curio.facts = list.filter((f) => f && f.topic && f.text).map((f) => ({ topic: f.topic, text: fontSafe(f.text), source: fontSafe(f.source || ''), id: hashString(f.text) }));
+  }).catch(() => { /* offline on a first visit, or file://: no curiosities */ });
+}
+function markSeen(f) {
+  curio.seen.add(f.id);
+  try { localStorage.setItem('monad-facts-seen', JSON.stringify([...curio.seen].slice(-400))); } catch (e) { /* private mode */ }
+}
+
 // What the water is doing now, as tags
 function tipTags(w) {
-  const tags = new Set(['general']), F = FORMS.length, counts = new Array(F).fill(0);
+  const tags = new Set(), F = FORMS.length, counts = new Array(F).fill(0);
   let glow = 0;
   for (const c of w.cells) { if (c.dying) continue; counts[formOf(c)]++; if (isLuminous(c)) glow++; }
   const alive = counts.reduce((s, v) => s + v, 0), night = w.surfaceLight < PARAMS.notebook.nightBelow, cy = cyanoTotal(w);
-  if (counts[5] + counts[6] > 30) tags.add('diatoms');
   if (counts[7] > 30) tags.add('milky');
-  if (counts[2] > 3) tags.add('dinophysis');
-  if (cy.syn + cy.pro > 15) tags.add('cyano');
   if (cy.tri > 20) tags.add('scum');
   if (alive > 150) tags.add('bloom');
   if (alive < 30) tags.add('crash');
@@ -6594,25 +6586,128 @@ function tipTags(w) {
   if (night && glow) tags.add('glow');
   if (w.cysts.length > 10) tags.add('cysts');
   if (w.wind > PARAMS.notebook.seaStates[2]) tags.add('storm');
-  if (w.wind < PARAMS.notebook.seaStates[0]) tags.add('calm');
   if (Math.abs(w.spring - 1) > PARAMS.tide.range / 2) tags.add('tide');
   if (w.pulses.length) tags.add('upwelling');
   if (w.runoffs.length) tags.add('runoff');
   if (bottomOxygen(w).min < PARAMS.oxygen.hypoxic) tags.add('hypoxia');
-  for (const v of w.visitors) tags.add(v.kind);
   return tags;
 }
-// A tip that fits the moment (one of the water's own if any, else a general one), different from the last
-function drawTip(w, y) {
-  const nb = notebook, P = PARAMS.notebook.page;
-  if (nb.tip < 0) {
-    const tags = tipTags(w), fits = TIPS.map((t, i) => i).filter((i) => tags.has(TIPS[i].tag) && TIPS[i].tag !== 'general');
-    const pool = fits.length && nb.tips % 3 !== 2 ? fits : TIPS.map((t, i) => i).filter((i) => TIPS[i].tag === 'general');
-    nb.tip = pool[Math.floor(hash01(nb.tips * 7919 + w.tick) * pool.length)];
-    nb.tips++;
+
+// The topic for what is in view: weights from the cells in frame (when zoomed in), the cyanobacteria and visitors on
+// screen, the depth the camera looks at, the zoom, and the water's state; drawn by weight among topics with facts
+function curioTopic(w) {
+  const wt = new Map(), add = (t, v) => wt.set(t, (wt.get(t) || 0) + v), z = cam.zoom;
+  const x0 = cam.x, y0 = cam.y, x1 = x0 + W / z, y1 = y0 + H / z, column = H - PARAMS.world.floor, mid = clamp((y0 + y1) / 2 / column, 0, 1);
+  if (z >= 3) {   // close up: the forms in frame
+    const counts = new Array(FORMS.length).fill(0);
+    let n = 0;
+    for (const c of w.cells) if (!c.dying && c.x >= x0 && c.x <= x1 && c.y >= y0 && c.y <= y1) { counts[c.kind]++; n++; }
+    counts.forEach((k, f) => { if (k) add(KIND_TOPIC[f], 6 * Math.min(1, n / 4) * k / n); });   // a lone cell counts less
+    if (counts[5] + counts[6]) add('diatoms', 1);
+    if (counts[1] + counts[2] + counts[3] + counts[4]) add('dinos', 1);
   }
-  dotted(P.x + 6, P.x + P.w - 7, y, COL.SLATE);
-  wrap(TIPS[nb.tip].text, 38).slice(0, 3).forEach((line, i) => ink(P.x + 6, y + 4 + i * 7, line, COL.SHAFT));
+  if (cyanoSeen > 30) add('cyano', z >= 2 ? 2 : 0.8);
+  if (triSeen > 10) add('tricho', z >= 2 ? 2.5 : 1);
+  for (const v of w.visitors) if (v.x > x0 - 20 && v.x < x1 + 20 && v.y > y0 - 20 && v.y < y1 + 20) add(v.kind, 4);
+  if (krillSeen.n > 0) add('grazers', 1.5);
+  if (mid > 0.75 || y1 > column - 10 && z >= 2) add('floor', 5);
+  if (mid < 0.2 && z >= 2) add('surface', 2.5);
+  if (z <= 1) { add('ocean', 2.5); add('column', 2.5); add('nutrients', 1); } else add('column', 0.6);
+  const tags = tipTags(w), T = (tag, topic, v) => { if (tags.has(tag)) add(topic, v); };
+  T('milky', 'cocco', 1.5); T('scum', 'tricho', 2); T('night', 'night', 1.5); T('glow', 'dinos', 1); T('storm', 'column', 1);
+  T('tide', 'tides', 1.5); T('upwelling', 'nutrients', 1.5); T('runoff', 'surface', 1.5); T('hypoxia', 'deadzone', mid > 0.6 ? 4 : 1.5);
+  T('bloom', 'ocean', 1); T('bloom', 'grazers', 0.5); T('crash', 'viruses', 1); T('cysts', 'floor', 0.5);
+  add('ocean', 0.4); add('viruses', 0.2); add('tides', 0.2);
+  const have = new Set(curio.facts.map((f) => f.topic)), pool = [...wt].filter(([t]) => have.has(t));
+  let total = 0;
+  for (const [, v] of pool) total += v;
+  let r = hash01(curio.count * 7919 + world.tick) * total;
+  for (const [t, v] of pool) { r -= v; if (r <= 0) return t; }
+  return pool.length ? pool[pool.length - 1][0] : null;
+}
+// A fact on that topic not read yet (when all are read, the topic starts over)
+function curioFact(topic) {
+  let pool = curio.facts.filter((f) => f.topic === topic && !curio.seen.has(f.id));
+  if (!pool.length) {
+    for (const f of curio.facts) if (f.topic === topic) curio.seen.delete(f.id);
+    pool = curio.facts.filter((f) => f.topic === topic);
+  }
+  return pool.length ? pool[Math.floor(hash01(curio.count * 104729 + 7) * pool.length)] : null;
+}
+
+// Now and then a bubble rises in a corner; ignored, it fades away
+function updateCurio(w, now) {
+  const C = PARAMS.curio;
+  if (!curio.facts.length || notebook.open || catchup.phase) return;
+  if (!curio.next) curio.next = now + C.first * 1000;
+  const b = curio.bubble;
+  if (b && !curio.card && now - b.born > C.life * 1000) curio.bubble = null;
+  if (curio.bubble || curio.card || now < curio.next) return;
+  const topic = curioTopic(w), fact = topic && curioFact(topic);
+  curio.count++;
+  curio.next = now + (C.everyMin + (C.everyMax - C.everyMin) * hash01(curio.count * 31 + 5)) * 1000;
+  if (!fact) return;
+  const [x, y] = C.corners[Math.floor(hash01(curio.count * 17 + 3) * C.corners.length)];
+  curio.bubble = { x, y, born: now, fact };
+}
+function bubblePos(now) {
+  const C = PARAMS.curio, b = curio.bubble, age = (now - b.born) / 1000;
+  return { x: Math.round(b.x + C.sway * Math.sin(age * 1.3)), y: Math.round(b.y - C.rise * age) };
+}
+// A tap: on the bubble opens its card; anywhere while a card is open closes it. Returns true if it took the tap.
+function curioRelease(p) {
+  if (curio.card) { curio.card = null; curio.bubble = null; needsRender = true; return true; }
+  if (!curio.bubble) return false;
+  const q = bubblePos(performance.now());
+  if (Math.abs(p.x - q.x) > PARAMS.curio.r + 5 || Math.abs(p.y - q.y) > PARAMS.curio.r + 5) return false;
+  curio.card = { fact: curio.bubble.fact, top: q.y > H / 2 };
+  markSeen(curio.bubble.fact);
+  bubbleSound(cam.x + q.x / cam.zoom, 0.5, false);
+  needsRender = true;
+  return true;
+}
+// The bubble: a ring of foam with a lit cap and an "i" inside, fading in and out; the card: a small page with the
+// topic, the fact and its source
+function drawCurio(now) {
+  curio.box = null;
+  if (notebook.open || catchup.phase) return;
+  const C = PARAMS.curio, P = PARAMS.notebook.page;
+  if (curio.bubble && !curio.card) {
+    const q = bubblePos(now), age = (now - curio.bubble.born) / 1000, vis = Math.min(1, age / 1.5, (C.life - age) / 3), r = C.r;
+    for (let dy = -r - 1; dy <= r + 1; dy++) {
+      for (let dx = -r - 1; dx <= r + 1; dx++) {
+        const d = Math.sqrt(dx * dx + dy * dy), x = q.x + dx, y = q.y + dy;
+        if (d > r + 0.5 || bayer(x, y) >= vis) continue;
+        if (d > r - 0.7) put(x, y, dx + dy < -3 ? COL.GLOW : COL.FOAM);           // the film, lit on the upper left
+        else if (dx === -2 && dy === -2) put(x, y, COL.GLOW);                    // a glint
+      }
+    }
+    for (const [dx, dy] of [[0, -2], [0, 0], [0, 1], [0, 2]]) if (bayer(q.x + dx, q.y + dy) < vis) put(q.x + dx, q.y + dy, COL.GLOW);   // the i
+    curio.box = [q.x - r - 2, q.y - r - 2, q.x + r + 3, q.y + r + 3];
+  }
+  if (curio.card) {
+    const f = curio.card.fact, lines = wrap(f.text, 38), src = f.source ? wrap('SOURCE: ' + f.source, 38).slice(0, 2) : [];
+    const h = 22 + lines.length * 7 + (src.length ? 4 + src.length * 7 : 0), x0 = P.x, y0 = curio.card.top ? 26 : H - 40 - h, x1 = x0 + P.w;
+    fillRect(x0, y0, P.w, h, PAGE_INK);
+    for (let x = x0 + 1; x < x1 - 1; x++) { put(x, y0, COL.SLATE); put(x, y0 + h - 1, COL.SLATE); }
+    for (let y = y0 + 1; y < y0 + h - 1; y++) { put(x0, y, COL.SLATE); put(x1 - 1, y, COL.SLATE); }
+    const k = KIND_TOPIC.indexOf(f.topic), gi = k >= 0 ? k : f.topic === 'cyano' ? FORMS.length : f.topic === 'tricho' ? FORMS.length + 1 : -1;
+    let tx = x0 + 6;
+    if (gi >= 0) { guideIcon(gi, tx, y0 + 5, false); tx += 10; }
+    ink(tx, y0 + 6, TOPIC_NAME[f.topic] || fontSafe(f.topic), COL.FOAM);
+    inkRight(x1 - 7, y0 + 6, 'X', COL.SLATE);
+    dotted(x0 + 6, x1 - 7, y0 + 14, COL.SLATE);
+    let y = y0 + 18;
+    for (const line of lines) { ink(x0 + 6, y, line, COL.SHAFT); y += 7; }
+    if (src.length) { y += 3; for (const line of src) { ink(x0 + 6, y, line, COL.SLATE); y += 7; } }
+    curio.box = [x0, y0, x1, y0 + h];
+  }
+}
+// Kept in day colours at every hour, as the notebook is
+function inkCurio() {
+  if (!curio.box) return;
+  const [x0, y0, x1, y1] = curio.box, ib = view.ibuf, buf = view.buf;
+  for (let y = Math.max(0, y0); y < Math.min(H, y1); y++) for (let x = Math.max(0, x0); x < Math.min(W, x1); x++) buf[y * W + x] = PAL32[ib[y * W + x]];
 }
 
 // ---- The pages ----
@@ -6641,7 +6736,7 @@ function drawNotebook(w) {
   hit(x1 - 28, fy - 5, 28, 15, () => turnPage(1));
   for (let i = 0; i < PAGES.length; i++) {
     fillRect(dx0 + i * 6 + 2, fy + 2, 2, 2, i === notebook.page ? COL.FOAM : COL.SLATE);
-    hit(dx0 + i * 6, fy - 3, 6, 11, () => { notebook.page = i; notebook.tip = -1; });
+    hit(dx0 + i * 6, fy - 3, 6, 11, () => { notebook.page = i; });
   }
   if (notebook.page !== PAGES.length - 1 || !notebook.open) notebook.confirm = false;   // a question left unanswered is withdrawn
   [drawDayPage, drawCensusPage, drawSpeciesPage, drawWaterPage, drawColumnPage, drawMigrationPage, drawLedgerPage][notebook.page](w, P.y + 19);
@@ -7286,7 +7381,8 @@ function setupInput() {
     else if (d && d.id === e.pointerId && notebook.open) { notebookRelease(d, p); input.down = null; }
     else if (d && d.id === e.pointerId) {
       const tap = d.moved <= PARAMS.touch.tapMove && performance.now() - d.t < PARAMS.touch.tapMs;
-      if (tap && onGlyph(p) && d.hud > 0) openNotebook(true);   // the glyph answers only while it can be seen
+      if (tap && curioRelease(p)) { /* the curiosity bubble or its card took the tap */ }
+      else if (tap && onGlyph(p) && d.hud > 0) openNotebook(true);   // the glyph answers only while it can be seen
       else if (tap) {   // a tap scatters the cells
         const q = toWorld(input.pointers.get(e.pointerId) || d);
         world.inputs.push({ kind: 'tap', x: q.x, y: q.y });
@@ -7718,6 +7814,7 @@ function startBench() {
 
 async function init() {
   const opts = readOptions();
+  loadFacts();   // the curiosities (render only)
   seedLabel = opts.label;
   let found = null;
   if (opts.kept && window.indexedDB) {

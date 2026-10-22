@@ -439,7 +439,7 @@ const PARAMS = {
       hum: { every: 8, dur: 18, gain: 0.045, freqDay: 150, freqNight: 75 },
       plume: { every: 5, dur: 11, gain: 0.07, freq: 70, freqEnd: 150, q: 3 },
       school: { every: 2.4, dur: 2.4, gain: 0.05, freq: 260, freqEnd: 950, q: 1.2, followers: 3, lagMax: 0.35, followGain: 0.5, spread: 0.5 },   // followers: more fish whooshing past just behind, softer, spread
-      bubble: { gain: 0.035, perSecond: 10, rise: 1.8, durMin: 0.04, durMax: 0.12, freqMin: 500, freqMax: 1600, seepFreq: 260 },
+      bubble: { gain: 0.035, perSecond: 3, chance: 0.45, rise: 1.8, durMin: 0.04, durMax: 0.12, freqMin: 500, freqMax: 1600, seepFreq: 260 },
     },
     // Krill crackle: tiny clicks in short trains, denser with the visible swarm but saturating (half: krill for
     // half the top rate), panned to the swarm. A soft fizz, never a wall.
@@ -632,8 +632,11 @@ const PARAMS = {
     // Cyanobacteria as drawn: a speck chance per pixel rising from biomass from (none) over full more, up to density,
     // thinned by zoom (they are tiny); the specks twinkle (a new pattern twinkle times per s). Plume texture (render
     // only): a streaky noise grainX x grainY units (fine: share of a finer layer), drifting with the current, lets specks
-    // show only between patchFrom and patchTo of it, so a bloom breaks into drifting filaments and patches.
-    cyano: { from: 0.02, full: 0.12, density: 0.28, twinkle: 0.7, grainX: 16, grainY: 7, fine: 0.35, patchFrom: 0.42, patchTo: 0.78 },
+    // show only between patchFrom and patchTo of it, so a bloom breaks into drifting filaments and patches. From
+    // clumpFrom x zoom (author: more vivid close up, like conglomerates) the patches also hold colonies: on a lattice
+    // spacing units apart drifting with the texture, a clump chance up to clumps, each 3-7 round cells within clumpR
+    // units, shaded, swaying sway units.
+    cyano: { from: 0.02, full: 0.12, density: 0.36, bright: 0.55, clumpFrom: 2, spacing: 2.4, clumps: 0.5, clumpR: 0.6, sway: 0.4, twinkle: 0.7, grainX: 16, grainY: 7, fine: 0.35, patchFrom: 0.42, patchTo: 0.78 },
     // Trichodesmium as drawn: golden-brown colonies on a lattice (spacing units, drifting sideways with the current), shown
     // where the field holds from..full (chance up to share): tufts (filaments side by side) or puffs (puff of them:
     // filaments radiating from a centre), len units long, loose (splay: rad between neighbours; wave: their waving as a
@@ -679,7 +682,7 @@ const PARAMS = {
     // keep: notes remembered (the last minute or so); share: s the instruments' shares count over; circleR: the pitch
     // circle's radius (px); scope: the spectrum's band (Hz), bars, FFT size (fine enough for the low notes: 5.9 Hz per bin at
     // 48 kHz) and the loudness it spans (dB).
-    music: { keep: 480, share: 60, circleR: 26, scope: { lo: 60, hi: 12000, bars: 39, fft: 8192, smooth: 0.6, minDb: -95, maxDb: -25 } },
+    music: { keep: 480, share: 60, circleR: 26, scope: { lo: 60, hi: 12000, bars: 39, fft: 8192, smooth: 0.6, minDb: -95, maxDb: -25, tilt: 4.5 } },
     surfaceRows: 4,   // the surface water the recorder and the day page read: the top grid rows (about a tenth of the column)
     // Real units (sources in the Notebook section). depthM: the column in metres (light falls to e^-atten at the
     // floor: Kd 0.067 per m for a clear stratified shelf); o2mL: oxygen saturation at 15 C and 35 psu in mL/L, the
@@ -3604,7 +3607,7 @@ function bubbleSound(x, size, seep) {
   const B = PARAMS.audio.ambience.bubble, ctx = audio.ctx, now = ctx.currentTime;
   bubbleBudget = Math.min(B.perSecond, bubbleBudget + (now - bubbleBudgetAt) * B.perSecond);
   bubbleBudgetAt = now;
-  if (bubbleBudget < 1) return;
+  if (bubbleBudget < 1 || (!seep && ambRng.next() > B.chance)) return;   // sparse (author): most bubbles pop unheard
   bubbleBudget -= 1;
   const t0 = now + 0.02 + ambRng.next() * 0.05, dur = B.durMin + (B.durMax - B.durMin) * ambRng.next();
   const f0 = seep ? B.seepFreq * (0.8 + 0.4 * ambRng.next()) : B.freqMax - (B.freqMax - B.freqMin) * size;
@@ -4394,8 +4397,42 @@ function drawCyano(w, t) {
       if (patch <= 0) continue;
       const ka = clamp((a - L.from) / L.full, 0, 1), kb = clamp((b - L.from) / L.full, 0, 1);
       const pa = ka * ka * patch * L.density / z, pb = kb * kb * patch * L.density / z;   // dense water shows far more than thin
-      if (h < pa) ib[row + px] = syn + (h < pa * 0.4 ? BRIGHT : HIGHLIGHT);
-      else if (h < pa + pb) ib[row + px] = pro + (h < pa + pb * 0.4 ? BRIGHT : HIGHLIGHT);
+      if (h < pa) ib[row + px] = syn + (h < pa * L.bright ? BRIGHT : HIGHLIGHT);
+      else if (h < pa + pb) ib[row + px] = pro + (h < pa + pb * L.bright ? BRIGHT : HIGHLIGHT);
+    }
+  }
+  if (z >= L.clumpFrom) drawCyanoClumps(w, t, L, syn, pro);
+}
+
+// Close up, the dense patches hold colonies: little conglomerates of round cells, lit on the upper left, on a lattice
+// that drifts with the plume texture (so they follow its filaments and patches) and sways a little
+function drawCyanoClumps(w, t, L, syn, pro) {
+  const z = cam.zoom, S = L.spacing, f = w.fields;
+  const i0 = Math.floor((cam.x - 2 - cyDrift.x) / S), i1 = Math.ceil((cam.x + W / z + 2 - cyDrift.x) / S);
+  const j0 = Math.floor((cam.y - 2 - cyDrift.y) / S), j1 = Math.ceil((cam.y + H / z + 2 - cyDrift.y) / S);
+  for (let j = j0; j <= j1; j++) {
+    for (let i = i0; i <= i1; i++) {
+      const id = Math.imul(i, 92821) ^ Math.imul(j, 68917), h = (k) => hash01(id * 13 + k);
+      const lx = (i + h(1) - 0.5) * S, ly = (j + h(2) - 0.5) * S;                 // where it sits in the texture
+      const wx = lx + cyDrift.x + L.sway * Math.sin(t * 0.3 + h(3) * TAU), wy = ly + cyDrift.y + L.sway * Math.sin(t * 0.23 + h(4) * TAU);
+      if (wy < SURFACE_MAX || wy > H - PARAMS.world.floor) continue;
+      const a = sampleField(f.syn, wx, wy), b = sampleField(f.pro, wx, wy);
+      if (a + b < L.from) continue;
+      const n = (1 - L.fine) * valueNoise(lx / L.grainX, ly / L.grainY) + L.fine * valueNoise(lx / (L.grainX * 0.4), ly / (L.grainY * 0.5));
+      const ka = clamp((a - L.from) / L.full, 0, 1), kb = clamp((b - L.from) / L.full, 0, 1), ka2 = ka * ka, kb2 = kb * kb;
+      if (h(5) >= (ka2 + kb2) * smoothstep(L.patchFrom, L.patchTo, n) * L.clumps) continue;
+      const rb = h(6) * (ka2 + kb2) < ka2 ? syn : pro, R = L.clumpR * (0.6 + 0.8 * h(7)), m = 3 + Math.floor(h(8) * 5);
+      for (let k = 0; k < m; k++) {   // its cells, packed around the middle
+        const ang = h(10 + k) * TAU, d = k ? R * (0.35 + 0.6 * h(20 + k)) : 0, rc = R * (0.3 + 0.15 * h(30 + k));
+        const cx = toSX(wx + Math.cos(ang) * d), cy = toSY(wy + Math.sin(ang) * d), pr = Math.max(0.6, rc * z);
+        for (let dy = -Math.ceil(pr); dy <= Math.ceil(pr); dy++) {
+          for (let dx = -Math.ceil(pr); dx <= Math.ceil(pr); dx++) {
+            const q = Math.sqrt(dx * dx + dy * dy);
+            if (q > pr) continue;
+            put(cx + dx, cy + dy, rb + (dx + dy > pr * 0.5 ? BASE : q < pr * 0.55 && dx + dy <= 0 ? BRIGHT : HIGHLIGHT));
+          }
+        }
+      }
     }
   }
 }
@@ -7739,6 +7776,7 @@ function drawSpectrum(y, gh) {
   const N = PARAMS.notebook, M = N.music, P = N.page, x1 = P.x + P.w;
   const S = M.scope, bx = P.x + 6, bw = Math.floor((P.w - 12) / S.bars);
   ink(P.x + 6, y, 'SPECTRUM', COL.SHAFT);
+  inkRight(x1 - 7, y, '+' + S.tilt + ' DB/OCTAVE', COL.SLATE);
   const g0 = y + 8, base = g0 + gh;
   dotted(bx, x1 - 7, base, COL.SLATE);
   const on = musicHeard() && audio.scope, bins = audio.scopeBins;
@@ -7749,7 +7787,7 @@ function drawSpectrum(y, gh) {
     const i0 = Math.min(nb - 1, Math.floor(f0 / nyq * nb)), i1 = Math.min(nb, Math.max(i0 + 1, Math.ceil(f1 / nyq * nb)));
     let v = 0;
     for (let i = i0; i < i1; i++) v = Math.max(v, bins[i]);
-    const hgt = Math.round(v / 255 * gh);
+    const fc = Math.sqrt(f0 * f1), hgt = Math.round(clamp(v / 255 + (v ? S.tilt * Math.log2(fc / 1000) / (S.maxDb - S.minDb) : 0), 0, 1) * gh);   // tilted, as analysers are
     for (let j = 0; j < hgt; j++) {
       const q = j / gh, idx = q > 0.75 ? COL.FOAM : q > 0.4 ? rampBase(LIGHTBLUE) + HIGHLIGHT : rampBase(BLUE) + HIGHLIGHT;
       for (let k = 0; k < bw - 1; k++) put(bx + b * bw + k, base - 1 - j, idx);

@@ -234,7 +234,19 @@ const PARAMS = {
                 turnIfAte: 25, passes: 3 },                                 // a rich pass makes the school turn back for more
     salps: { rate: 1 / 160, speedMin: 1.5, speedMax: 2.6, barrelsMin: 4, barrelsMax: 8, spacing: 6.5, tilt: 0.3,
              reach: 4.5, eat: 0.25, sway: 2, excreted: 0.3, pellets: 0.5 },  // salp pellets sink fast
-    sunfish: { rate: 1 / 90, speed: 4.5, turn: 1.2, r: 18, bite: 7, stay: 150, baskY: 30, baskSpeed: 0.35 },   // comes for salps, never eats cells; basks at the surface after
+    sunfish: { rate: 1 / 90, speed: 4.5, turn: 1.2, r: 18, bite: 7, stay: 150, baskY: 30, baskSpeed: 0.35 },   // comes for salps and jellies, never eats cells; basks at the surface after
+    // Jellyfish (moon jellies) and comb jellies (approved local rule, author): they eat zooplankton, so they come where
+    // the grazer field is rich (its mean over the upper half of the column between zFrom and zFull), in warm water
+    // (surface warmFrom..warmFull degrees) that is calm (fading as the wind passes calm), as jelly blooms do; never on a
+    // timer. A group of countMin..countMax drifts slowly across (speed units/s, spread units around its centre); each
+    // eats the grazers within reach (eat per s of the field there, fading with distance, never below its floor), which
+    // frees the phytoplankton beneath them: a trophic cascade. Moon jellies (r units across the bell) pulse every
+    // pulseMin..pulseMax s, rising lift units and sinking back between pulses; comb jellies glide on their comb rows.
+    // The sunfish comes for both, as it does for salps.
+    jellies: { rate: 1 / 200, zFrom: 0.35, zFull: 1, warmFrom: 18.5, warmFull: 21, calm: 0.45, countMin: 3, countMax: 6,
+               speedMin: 0.6, speedMax: 1.1, r: 9, spread: 26, reach: 12, eat: 0.05, pulseMin: 1.6, pulseMax: 2.6, lift: 1.5 },
+    combs: { rate: 1 / 240, zFrom: 0.35, zFull: 1, warmFrom: 18, warmFull: 21, calm: 0.45, countMin: 4, countMax: 8,
+             speedMin: 1, speedMax: 1.8, r: 4.5, spread: 22, reach: 7, eat: 0.04, pulseMin: 3, pulseMax: 5, lift: 0.6 },
   },
   // Rule 6: phase coupling (Kuramoto). dtheta/dt = 2pi*omega + coupling*K*mean(sin(theta_j - theta_i))
   // over living neighbours within radius. K in rad/s: kin (one mutation apart in omega) lock, strangers drift.
@@ -316,7 +328,7 @@ const PARAMS = {
     },
     // Startle: cells brushed by a passing school (or a salp chain or the sunfish) flash and blurt a short, high,
     // staccato note an octave up. Chance per second inside the visitor's reach (+reach units), one per refractory s.
-    startle: { reach: 8, rate: { sardines: 2.5, salps: 0.8, sunfish: 1.2, hand: 3 }, refractory: 3, attack: 0.004, release: 0.22, octaves: 1 },
+    startle: { reach: 8, rate: { sardines: 2.5, salps: 0.8, sunfish: 1.2, jellies: 0.5, combs: 0.3, hand: 3 }, refractory: 3, attack: 0.004, release: 0.22, octaves: 1 },
     // Grazers muffle: where the grazer field is dense, notes are duller and shorter, so heavy grazing sounds
     // smothered before the die-off (field from..full; at full the cutoff and release shrink by these shares).
     muffle: { from: 0.3, full: 1.5, cutoff: 0.6, release: 0.5 },
@@ -377,6 +389,13 @@ const PARAMS = {
               cut: 1700, twin: 2.003, twinGain: 0.16, wet: 0.6, pan: 0.6 },
       sunfish: { everyMin: 12, everyMax: 20, dur: 4.2, attack: 0.5, glideAt: 1.3, glide: 0.6, gain: 0.06, octave: 3,
                  cut: 760, sub: 0.5, wet: 0.45, pan: 0.5, baskGain: 0.55 },
+      // Jellies (author: "very angelical, like a strumming harp, with a reverb shimmer tail"): a moon jelly's bell pulse
+      // strums a harp arpeggio up the water's scale (steps above the root around octave, spacing s apart; at most one
+      // strum every gap s), each string plucked (decay s, a lowpass closing from cut) with a shimmer an octave up
+      // that swells into the reverb only (shimmer x the gain, over shimmerDecay s). Comb jellies play harp harmonics:
+      // a few high notes down the scale, softer and sparser. Through the music bus.
+      jellies: { gap: 0.9, octave: 4, steps: [0, 4, 7, 12, 16], spacing: 0.065, gain: 0.045, decay: 2.8, cut: 3200, shimmer: 0.4, shimmerDecay: 5.5, wet: 0.7, pan: 0.6 },
+      combs: { gap: 2.6, octave: 6, steps: [12, 7, 4], spacing: 0.11, gain: 0.018, decay: 1.8, cut: 6000, shimmer: 0.6, shimmerDecay: 4.5, wet: 0.85, pan: 0.6 },
     },
     // Cyanobacteria's shimmer (author): faint, sparkling grains (a sine, attack/release s), tiny high notes from the scale
     // in octave (and one up now and then), at up to rate per s, rising with the cyanobacteria on screen (mean biomass
@@ -409,7 +428,7 @@ const PARAMS = {
     // Echoes wander: the delay time drifts with the water's own motion (rate rad per water-second, depth as a share)
     flutter: { rate: 0.13, rate2: 0.047, depth: 0.05 },
     weather: { update: 0.5, dark: 1100, bright: 3400, echoCalm: 0.45, echoStorm: 0.12, sendCalm: 0.16, sendStorm: 0.05,
-               roomClear: 0.24, roomBloom: 0.45, bloomFull: 300, shadow: { sardines: 0.55, sunfish: 0.35, salps: 0.2 } },
+               roomClear: 0.24, roomBloom: 0.45, bloomFull: 300, shadow: { sardines: 0.55, sunfish: 0.35, salps: 0.2, jellies: 0.12, combs: 0.06 } },
     reverbSeconds: 4.5, reverbSend: 0.3, reverbDark: 0.6,
     delayTime: 0.43, delayFeedback: 0.3, delaySend: 0.1, delayCutoff: 1400,
     pan: 0.7, lookahead: 0.03, maxNodes: 20, muteRamp: 0.4,
@@ -2086,8 +2105,11 @@ function updateVisitors(w, dt) {
   let biomass = 0, my = 0;
   for (let i = 0; i < cells.length; i++) if (!cells[i].dying) { biomass += cells[i].biomass; my += cells[i].y * cells[i].biomass; }
   const attract = smoothstep(V.attractLo, V.attractHi, biomass);
-  let school = null, salp = null, fish = null;
-  for (const v of w.visitors) { if (v.kind === 'sardines') school = v; else if (v.kind === 'salps') salp = v; else fish = v; }
+  let school = null, salp = null, fish = null, jelly = null, comb = null;
+  for (const v of w.visitors) {
+    if (v.kind === 'sardines') school = v; else if (v.kind === 'salps') salp = v; else if (v.kind === 'sunfish') fish = v;
+    else if (v.kind === 'jellies') jelly = v; else if (v.kind === 'combs') comb = v;
+  }
 
   if (!school && attract > 0 && rng.chance(V.sardines.rate * attract * dt)) {
     const S = V.sardines, dir = rng.chance(0.5) ? 1 : -1;
@@ -2104,10 +2126,22 @@ function updateVisitors(w, dt) {
       vx: dir * rng.range(S.speedMin, S.speedMax), vy: rng.range(-0.3, 0.3), age: 0, alive: new Array(n).fill(true),
     });
   }
-  if (salp && !fish && rng.chance(V.sunfish.rate * dt)) {
-    const side = salp.x < W / 2 ? 1 : -1;   // comes in from the far side, toward the salps
+  for (const [kind, here] of [['jellies', jelly], ['combs', comb]]) {   // jelly blooms: grazers to eat, warm and calm water
+    const J = V[kind];
+    if (here || !rng.chance(J.rate * jellyDraw(w, J) * dt)) continue;
+    const dir = rng.chance(0.5) ? 1 : -1, n = J.countMin + rng.int(J.countMax - J.countMin + 1), members = [];
+    for (let i = 0; i < n; i++) {
+      members.push({ dx: rng.range(-1, 1) * J.spread, dy: rng.range(-0.6, 0.6) * J.spread, size: rng.range(0.75, 1.2),
+                     period: rng.range(J.pulseMin, J.pulseMax), ph: rng.next(), tint: rng.int(2), alive: true });
+    }
+    w.visitors.push({ kind, id: w.nextVisitorId++, dir, x: dir > 0 ? -J.spread - 15 : W + J.spread + 15, y: rng.range(50, H * 0.55),
+                      vx: dir * rng.range(J.speedMin, J.speedMax), vy: 0, age: 0, members });
+  }
+  const prey = salp || jelly || comb;
+  if (prey && !fish && rng.chance(V.sunfish.rate * dt)) {
+    const side = prey.x < W / 2 ? 1 : -1;   // comes in from the far side, toward its prey
     w.visitors.push({ kind: 'sunfish', id: w.nextVisitorId++, dir: -side, x: side > 0 ? W + V.sunfish.r + 12 : -V.sunfish.r - 12,
-                      y: clamp(salp.y + 25, 40, H - 70), vx: 0, vy: 0, age: 0, leaving: false });
+                      y: clamp(prey.y + 25, 40, H - 70), vx: 0, vy: 0, age: 0, leaving: false });
   }
 
   let k = 0;
@@ -2116,7 +2150,8 @@ function updateVisitors(w, dt) {
     let gone;
     if (v.kind === 'sardines') gone = moveSchool(w, v, dt);
     else if (v.kind === 'salps') gone = moveSalps(w, v, dt);
-    else gone = moveSunfish(w, v, salp, dt);
+    else if (v.kind === 'sunfish') gone = moveSunfish(w, v, dt);
+    else gone = moveJellies(w, v, dt);
     if (!gone) w.visitors[k++] = v;
   }
   w.visitors.length = k;
@@ -2171,19 +2206,71 @@ function moveSalps(w, v, dt) {
   return !v.alive.some((a) => a) || (v.dir > 0 ? tail > W + 10 : tail < -10);
 }
 
-// The sunfish sculls toward the nearest salp barrel and bites it off; then it drifts away
-function moveSunfish(w, v, salp, dt) {
-  const F = PARAMS.visitors.sunfish;
+// How strongly jellies are drawn in now: grazers to eat in the upper water, warm and calm water (0..1)
+function jellyDraw(w, J) {
+  const { cols, rows } = PARAMS.grid, Z = w.fields.graz, half = rows >> 1;
+  let z = 0;
+  for (let k = 0; k < half * cols; k++) z += Z[k];
+  return smoothstep(J.zFrom, J.zFull, z / (half * cols)) * smoothstep(J.warmFrom, J.warmFull, surfaceTemp(w)) * (1 - smoothstep(J.calm, J.calm + 0.2, w.wind));
+}
+
+// Where a jelly is: its place in the group, a slow sway, and the pulse (a quick rise, then sinking back)
+function jellyPulse(v, m) {
+  const p = v.age / m.period + m.ph;
+  return p - Math.floor(p);   // 0 at the start of a contraction
+}
+function jellyAt(v, m) {
+  const J = PARAMS.visitors[v.kind], p = jellyPulse(v, m), bob = J.lift * (smoothstep(0, 0.3, p) - p);
+  return { x: v.x + m.dx + 2 * dsin(v.age * 0.13 + m.ph * TAU), y: v.y + m.dy - bob };
+}
+
+// A group of jellies drifts across, each eating the grazers around it
+function moveJellies(w, v, dt) {
+  const J = PARAMS.visitors[v.kind], G = PARAMS.grazing, Z = w.fields.graz, { cols, rows } = PARAMS.grid;
+  v.x += v.vx * dt;
+  v.y = clamp(v.y + 0.5 * dsin(v.age * 0.05 + v.id) * dt, 40, H * 0.65);
+  for (const m of v.members) {
+    if (!m.alive) continue;
+    const p = jellyAt(v, m), reach = J.reach * m.size;
+    const i0 = Math.max(0, Math.floor((p.x - reach) / GRID_W)), i1 = Math.min(cols - 1, Math.floor((p.x + reach) / GRID_W));
+    const j0 = Math.max(0, Math.floor((p.y - reach) / GRID_H)), j1 = Math.min(rows - 1, Math.floor((p.y + reach) / GRID_H));
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) {
+        const dx = (i + 0.5) * GRID_W - p.x, dy = (j + 0.5) * GRID_H - p.y, d = Math.sqrt(dx * dx + dy * dy);
+        if (d >= reach) continue;
+        const k = j * cols + i;
+        Z[k] = Math.max(G.floor, Z[k] * (1 - J.eat * (1 - d / reach) * dt));
+      }
+    }
+  }
+  const edge = J.spread + J.r * 2 + 10;
+  return !v.members.some((m) => m.alive) || (v.dir > 0 ? v.x > W + edge : v.x < -edge);
+}
+
+// What the sunfish eats: salp barrels and jellies, each a point that a bite removes
+function sunfishPrey(w) {
+  const out = [];
+  for (const p of w.visitors) {
+    if (p.kind === 'salps') {
+      for (let b = 0; b < p.alive.length; b++) if (p.alive[b]) { const q = salpBarrel(p, b); out.push({ x: q.x, y: q.y, v: p, i: b }); }
+    } else if (p.kind === 'jellies' || p.kind === 'combs') {
+      p.members.forEach((m, i) => { if (m.alive) { const q = jellyAt(p, m); out.push({ x: q.x, y: q.y, v: p, i }); } });
+    }
+  }
+  return out;
+}
+
+// The sunfish sculls toward the nearest salp barrel or jelly and bites it off; then it drifts away
+function moveSunfish(w, v, dt) {
+  const F = PARAMS.visitors.sunfish, prey = sunfishPrey(w);
   // Leaving: rise to bask just under the surface, drifting slowly toward the edge
   let tx = v.dir > 0 ? W + F.r + 40 : -F.r - 40, ty = F.baskY;
-  if (!v.leaving && salp && v.age < F.stay) {
+  if (!v.leaving && prey.length && v.age < F.stay) {
     let best = 1e9;
-    for (let b = 0; b < salp.alive.length; b++) {
-      if (!salp.alive[b]) continue;
-      const p = salpBarrel(salp, b), d = Math.abs(p.x - v.x) + Math.abs(p.y - v.y);
+    for (const p of prey) {
+      const d = Math.abs(p.x - v.x) + Math.abs(p.y - v.y);
       if (d < best) { best = d; tx = p.x - v.dir * F.r * 0.9; ty = p.y; }
     }
-    if (best === 1e9) v.leaving = true;
   } else v.leaving = true;
   const dx = tx - v.x, dy = ty - v.y, d = Math.sqrt(dx * dx + dy * dy) + 1e-6, sp = v.leaving ? F.speed * F.baskSpeed : F.speed;
   v.vx += (dx / d * sp - v.vx) * F.turn * dt;
@@ -2191,12 +2278,11 @@ function moveSunfish(w, v, salp, dt) {
   if (v.vx > 0.4) v.dir = 1; else if (v.vx < -0.4) v.dir = -1;
   v.x += v.vx * dt;
   v.y = clamp(v.y + v.vy * dt, F.baskY, H - PARAMS.world.floor - 30);
-  if (!v.leaving && salp) {
+  if (!v.leaving) {
     const mx = v.x + v.dir * F.r * 0.9;
-    for (let b = 0; b < salp.alive.length; b++) {
-      if (!salp.alive[b]) continue;
-      const p = salpBarrel(salp, b);
-      if (Math.abs(p.x - mx) < F.bite && Math.abs(p.y - v.y) < F.bite) salp.alive[b] = false;
+    for (const p of prey) {
+      if (Math.abs(p.x - mx) >= F.bite || Math.abs(p.y - v.y) >= F.bite) continue;
+      if (p.v.kind === 'salps') p.v.alive[p.i] = false; else p.v.members[p.i].alive = false;
     }
   }
   return v.leaving && (v.x > W + F.r + 25 || v.x < -F.r - 25);
@@ -2697,6 +2783,15 @@ function brushedBy(v, c) {
     for (let b = 0; b < v.alive.length; b++) {
       if (!v.alive[b]) continue;
       const q = salpBarrel(v, b), dx = c.x - q.x, dy = c.y - q.y;
+      if (dx * dx + dy * dy < reach * reach) return true;
+    }
+    return false;
+  }
+  if (v.kind === 'jellies' || v.kind === 'combs') {   // brushed by a jelly's tentacles
+    const reach = Vs[v.kind].r + r;
+    for (const m of v.members) {
+      if (!m.alive) continue;
+      const q = jellyAt(v, m), dx = c.x - q.x, dy = c.y - q.y;
       if (dx * dx + dy * dy < reach * reach) return true;
     }
     return false;
@@ -3392,7 +3487,8 @@ function scaleNote(m, octave, semis) {
   return 12 * (octave + 1) + m.root + best + 12 * Math.floor(semis / 12);
 }
 
-const visitorNext = { school: 0, sunfish: 0, grain: 0, triGrain: 0, salp: 0, salpStep: 0, salpId: -1 };
+const visitorNext = { school: 0, sunfish: 0, grain: 0, triGrain: 0, salp: 0, salpStep: 0, salpId: -1, jellies: 0, combs: 0 };
+const jellyBeats = new Map();   // visitor id x 64 + jelly -> its last pulse count, to hear each new contraction
 
 // Cyanobacteria's shimmer: grains scheduled at random, thicker where more is on screen
 function audioCyano(w) {
@@ -3453,6 +3549,20 @@ function audioVisitors(w) {
       visitorNext.salp = Math.max(visitorNext.salp, t) + Sp.step;
     }
   }
+  for (const v of w.visitors) {   // a jelly's bell pulse strums the harp (one strum at a time per kind)
+    if ((v.kind !== 'jellies' && v.kind !== 'combs') || !onScreen(v, 30)) continue;
+    const Jv = V[v.kind];
+    v.members.forEach((m, i) => {
+      if (!m.alive) return;
+      const n = Math.floor(v.age / m.period + m.ph), key = v.id * 64 + i, last = jellyBeats.get(key);
+      jellyBeats.set(key, n);
+      if (last === undefined || n <= last || t < visitorNext[v.kind]) return;
+      const p = jellyAt(v, m), at = t + PARAMS.audio.lookahead, steps = v.kind === 'jellies' ? Jv.steps : Jv.steps.slice(0, 2 + (i % 2));
+      steps.forEach((semis, k) => harpNote(scaleNote(w.music, Jv.octave, semis), at + k * Jv.spacing * (0.85 + 0.3 * ambRng.next()), Jv, p.x / W * 2 - 1));
+      visitorNext[v.kind] = t + Jv.gap;
+    });
+  }
+  if (jellyBeats.size > 512) jellyBeats.clear();
   const fish = w.visitors.find((v) => v.kind === 'sunfish' && onScreen(v, 10));
   if (fish && t >= visitorNext.sunfish) {
     const F = V.sunfish, m = w.music;
@@ -3535,6 +3645,37 @@ function salpNote(midi, t0, panX) {
   dry.connect(audio.bus); wet.connect(audio.wet);
   for (const x of [o, o2]) { x.start(t0); x.stop(end + 0.05); }
   o.onended = () => { for (const node of [o, o2, g2, filt, env, pan, dry, wet]) if (node) node.disconnect(); };
+}
+
+// One harp string: a plucked triangle with a bright octave partial, a lowpass closing as it rings, and a shimmer an
+// octave up that swells slowly into the reverb only (the angelic tail)
+function harpNote(midi, t0, J, panX) {
+  const ctx = audio.ctx, hz = 440 * Math.pow(2, (midi - 69) / 12), end = t0 + J.decay, tail = t0 + J.shimmerDecay;
+  const o = ctx.createOscillator(), o2 = ctx.createOscillator(), g2 = ctx.createGain(), filt = ctx.createBiquadFilter();
+  const env = ctx.createGain(), dry = ctx.createGain(), wet = ctx.createGain(), pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+  const sh = ctx.createOscillator(), shEnv = ctx.createGain();
+  o.type = 'triangle'; o.frequency.value = hz;
+  o2.frequency.value = hz * 2; g2.gain.value = 0.25;
+  sh.frequency.value = hz * 2;
+  filt.type = 'lowpass'; filt.Q.value = 0.6;
+  filt.frequency.setValueAtTime(J.cut, t0);
+  filt.frequency.exponentialRampToValueAtTime(J.cut * 0.3, end);
+  env.gain.setValueAtTime(0.0001, t0);
+  env.gain.linearRampToValueAtTime(J.gain, t0 + 0.004);
+  env.gain.exponentialRampToValueAtTime(0.0001, end);
+  shEnv.gain.setValueAtTime(0.0001, t0);
+  shEnv.gain.linearRampToValueAtTime(J.gain * J.shimmer, t0 + J.shimmerDecay * 0.25);
+  shEnv.gain.exponentialRampToValueAtTime(0.0001, tail);
+  dry.gain.value = 1 - J.wet; wet.gain.value = J.wet;
+  o.connect(filt); o2.connect(g2); g2.connect(filt); filt.connect(env);
+  let out = env;
+  if (pan) { pan.pan.value = clamp(panX, -1, 1) * J.pan; env.connect(pan); out = pan; }
+  out.connect(dry); out.connect(wet);
+  dry.connect(audio.bus); wet.connect(audio.wet);
+  sh.connect(shEnv); shEnv.connect(audio.wet);   // the shimmer lives in the reverb
+  for (const x of [o, o2]) { x.start(t0); x.stop(end + 0.05); }
+  sh.start(t0); sh.stop(tail + 0.05);
+  sh.onended = () => { for (const node of [o, o2, g2, filt, env, pan, dry, wet, sh, shEnv]) if (node) node.disconnect(); };
 }
 
 // The sunfish's call: a warm low tone (a filtered saw over a sine) that glides up a fifth
@@ -4811,6 +4952,13 @@ function updateGlow(w) {
           const p = salpBarrel(v, b), dx = c.x - p.x, dy = c.y - p.y;
           hit = dx * dx + dy * dy < r * r;
         }
+      } else if (v.kind === 'jellies' || v.kind === 'combs') {
+        const r = V[v.kind].r + G.touch;
+        for (const m of v.members) {
+          if (!m.alive || hit) continue;
+          const q = jellyAt(v, m), dx = c.x - q.x, dy = c.y - q.y;
+          hit = dx * dx + dy * dy < r * r;
+        }
       } else {
         const r = V.sunfish.r + G.touch, dx = c.x - v.x, dy = c.y - v.y;
         hit = dx * dx + dy * dy < r * r;
@@ -4987,6 +5135,8 @@ function fillShape(cx, cy, rx, ry, angle, colour) {
 function drawVisitors(w, ta) {
   for (const v of w.visitors) {
     if (v.kind === 'salps') drawSalps(v, ta);
+    else if (v.kind === 'jellies') drawMoonJellies(v, ta);
+    else if (v.kind === 'combs') drawCombJellies(v, ta);
   }
   for (const v of w.visitors) {
     if (v.kind === 'sardines') drawSardines(v, ta);
@@ -5061,6 +5211,89 @@ function drawSardines(v, ta) {
 }
 
 // Salp chain: translucent barrels with muscle bands and a coloured gut nucleus; pellets sink from them
+// Moon jellies: a translucent bell (only its rim and a few dithered pixels drawn, so the water shows through), four
+// violet-pink gonad rings inside it, a fringe of fine tentacles at the margin and four frilly oral arms trailing below.
+// The bell squeezes narrow and tall as it pulses (the sim's pulse) and relaxes wide.
+function drawMoonJellies(v, ta) {
+  const J = PARAMS.visitors.jellies;
+  for (let i = 0; i < v.members.length; i++) {
+    const m = v.members[i];
+    if (!m.alive) continue;
+    const p = jellyAt(v, m), ph = jellyPulse(v, m), c = ph < 0.3 ? Math.sin(Math.PI * ph / 0.3) : 0;
+    const R = J.r * m.size, rx = R * (1 - 0.16 * c), ry = R * 0.55 * (1 + 0.3 * c), gon = rampBase(m.tint ? VIOLET : ROSE), h = v.id * 31 + i;
+    const margin = p.y + ry * 0.12;
+    // oral arms: four frilly ribbons trailing down from the centre
+    for (let a = 0; a < 4; a++) {
+      let x = p.x + (a - 1.5) * R * 0.12, y = margin;
+      const len = R * (1 + 0.15 * a % 2);
+      for (let s = 0; s < len; s += 0.5) {
+        const nx = p.x + (a - 1.5) * R * 0.12 * (1 + s / len) + Math.sin(ta * 0.9 + s * 0.5 + a + h) * R * 0.08, ny = margin + s;
+        worldLine(x, y, nx, ny, s % 2 < 1 ? gon + HIGHLIGHT : COL.SHAFT);
+        if (Math.floor(s * 2) % 3 === 0) put(toSX(nx + (a < 2 ? -1 : 1) * 0.6), toSY(ny), gon + BASE);   // the frills
+        x = nx; y = ny;
+      }
+    }
+    // marginal tentacles: a fringe of fine threads, waving, fading toward their tips
+    for (let k = 0; k <= 16; k++) {
+      const u = -1 + k / 8, tx = p.x + u * rx * 0.98;
+      for (let s = 0; s < R * 0.7; s += 0.5) {
+        const x = tx + Math.sin(ta * 1.3 + k + s * 0.4) * 0.6 * (s / R), y = margin + s;
+        if (wb(toSX(x), toSY(y)) < 0.7 - s / R) put(toSX(x), toSY(y), COL.SHAFT);
+      }
+    }
+    // the bell: a dome, lit on top, the gonads glowing through it
+    fillShape(p.x, p.y, rx, ry, 0, (u, q, x, y) => {
+      if (q > 0.22) return -1;
+      const d = u * u + q * q;
+      if (d > 1) return -1;
+      if (d > 0.78) return q < -0.35 ? COL.FOAM : COL.SHAFT;                                 // the rim
+      for (const gu of [-0.55, -0.18, 0.18, 0.55]) {                                       // four gonad rings
+        const gd = Math.sqrt((u - gu) * (u - gu) * 3 + (q + 0.25) * (q + 0.25) * 4);
+        if (gd > 0.22 && gd < 0.36) return gd < 0.29 ? gon + BRIGHT : gon + HIGHLIGHT;
+      }
+      if (q < -0.6 && u < 0) return wb(x, y) < 0.5 ? COL.GLOW : -1;                        // a sheen on top
+      return wb(x, y) < 0.16 ? COL.SHAFT : -1;                                             // clear jelly
+    });
+  }
+}
+
+// Comb jellies: a small clear oval with eight comb rows whose beating plates split the light into travelling rainbow
+// waves (not bioluminescence: diffraction), and two long tentacles trailing behind with fine side branches
+function drawCombJellies(v, ta) {
+  const J = PARAMS.visitors.combs;
+  for (let i = 0; i < v.members.length; i++) {
+    const m = v.members[i];
+    if (!m.alive) continue;
+    const p = jellyAt(v, m), R = J.r * m.size, rx = R * 0.72, ry = R, h = v.id * 17 + i, back = -v.dir;
+    // tentacles: two long lines trailing behind, with side branches, swaying
+    for (const side of [-1, 1]) {
+      let x = p.x + side * rx * 0.6, y = p.y + ry * 0.1;
+      for (let s = 0; s < R * 3.2; s += 0.6) {
+        const nx = p.x + side * rx * 0.6 + back * s, ny = p.y + ry * 0.1 + s * 0.35 + Math.sin(ta * 0.8 + s * 0.35 + h + side) * 1.2;
+        if (wb(toSX(nx), toSY(ny)) < 0.8 - s / (R * 4)) worldLine(x, y, nx, ny, COL.SHAFT);
+        if (Math.floor(s / 0.6) % 3 === 0) put(toSX(nx), toSY(ny + 0.9), COL.SLATE);   // side branches
+        x = nx; y = ny;
+      }
+    }
+    // the body: clear, its rim faint
+    fillShape(p.x, p.y, rx, ry, 0, (u, q, x, y) => {
+      const d = u * u + q * q;
+      if (d > 1) return -1;
+      if (d > 0.82) return q < -0.3 ? COL.FOAM : COL.SHAFT;
+      return wb(x, y) < 0.12 ? COL.SHAFT : -1;
+    });
+    // comb rows: rainbow waves travelling along them
+    for (let row = 0; row < 5; row++) {
+      const u = -0.8 + row * 0.4;
+      for (let t = -0.85; t <= 0.85; t += 0.12) {
+        const x = p.x + u * rx * Math.sqrt(1 - t * t), y = p.y + t * ry, wave = Math.floor((t * 5 - ta * 4 + row) * 1.5);
+        if (wave % 3 === 0) continue;
+        put(toSX(x), toSY(y), IRID_SET[mod(wave + row * 2 + h, IRID_SET.length)]);
+      }
+    }
+  }
+}
+
 function drawSalps(v, ta) {
   const L = PARAMS.look.salp, gold = rampBase(GOLD);
   for (let b = 0; b < v.alive.length; b++) {
@@ -5784,7 +6017,8 @@ const CAUSES = [
 const causeCol = (i) => (CAUSES[i].key === 'hypoxia' ? NB.HYPOXIA : NB.DEATHS + i);
 const VISITOR_INK = [
   { kind: 'sardines', name: 'SARDINES', ramp: LIGHTBLUE }, { kind: 'salps', name: 'SALPS', ramp: EMERALD },
-  { kind: 'sunfish', name: 'SUNFISH', ramp: GOLD },
+  { kind: 'sunfish', name: 'SUNFISH', ramp: GOLD }, { kind: 'jellies', name: 'JELLYFISH', ramp: ROSE },
+  { kind: 'combs', name: 'COMB JELLIES', ramp: VIOLET },
 ];
 const PAGES = ['THE DAY', 'CENSUS', 'SPECIES', 'THE WATER', 'THE COLUMN', 'MIGRATION', 'LEDGER'];
 const SEA_STATES = ['CALM', 'BREEZE', 'WINDY', 'STORM'];
@@ -6892,7 +7126,7 @@ function drawLedgerPage(w, y) {
   // Deaths per minute, stacked by cause, nights dark behind
   cy += 10;
   ink(P.x + 6, cy, 'DEATHS PER MINUTE', COL.SHAFT);
-  const cy0 = cy + 8, ch = PAGE_END() - 51 - cy0;   // down to the visitors and NEW WATER below it
+  const cy0 = cy + 8, ch = PAGE_END() - 58 - cy0;   // down to the visitors and NEW WATER below it
   chartBackground(cols, cy0, ch);
   let top = 1;
   for (let c = 0; c < CW; c++) { let s = 0; for (let q = 0; q < NC; q++) s += cols.deaths[c * NC + q]; top = Math.max(top, s); }
@@ -6921,13 +7155,14 @@ function drawLedgerPage(w, y) {
     put(x, vy, rb + BRIGHT);
     for (let k = 1; k < 6; k++) put(x, vy + k, rb + HIGHLIGHT);
   }
-  let lx = P.x + 6;
+  let lx = P.x + 6, ly = vy + 10;
   VISITOR_INK.forEach((k, i) => {
     const text = k.name + ' ' + counts[i];
-    ink(lx, vy + 10, text, rampBase(k.ramp) + HIGHLIGHT);
+    if (lx + textWidth(text) > x1 - 7) { lx = P.x + 6; ly += 7; }
+    ink(lx, ly, text, rampBase(k.ramp) + HIGHLIGHT);
     lx += textWidth(text) + 9;
   });
-  drawNewWater(vy + 26);
+  drawNewWater(ly + 16);
 }
 
 // NEW WATER: ends this world and seeds a new one, but only after a YES (kept world only)

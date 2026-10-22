@@ -60,7 +60,7 @@ short list of local rules, and everything else comes out of how they interact:
   lifting them into the water wakes them, and the bloom's lineages come back.
 - **Grazers and visitors.** A field of grazers grows where cells are dense and starves away
   slowly, which ends blooms and lets the water recover; you see it as hopping copepods and krill where they feed. Big blooms draw in sardine schools and salp chains,
-  and the salps draw in an ocean sunfish. The school hums a soft chord, the salps play a gentle sequenced tune
+  and the salps draw in an ocean sunfish. In warm, calm water rich in grazers, moon jellies and rainbow-rippling comb jellies drift through, eating the grazers, and the sunfish comes for them too; each jelly pulse strums a soft harp. The school hums a soft chord, the salps play a gentle sequenced tune
   (one note per barrel), and the sunfish calls.
 - **Succession.** As in the real ocean, no group keeps the water for long:
   - **Silicate:** diatoms need silica for their glass. It stays in the shell until the cell dies, then mostly

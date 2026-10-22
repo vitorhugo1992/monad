@@ -913,5 +913,381 @@
   "topic": "surface",
   "text": "River water is lighter than seawater, so a lens of fresh water can float on the sea and seal off the water below.",
   "source": "Simpson and Sharples 2012, Introduction to the Physical and Biological Oceanography of Shelf Seas, Cambridge University Press"
+ },
+ {
+  "topic": "column",
+  "why": true,
+  "when": [
+   "winter",
+   "mixed"
+  ],
+  "text": "In winter the surface cools until it is as heavy as the water beneath, and the whole column turns over. Nutrients that gathered near the seabed all summer are stirred back up toward the light.",
+  "source": "Simpson and Sharples 2012, Introduction to the Physical and Biological Oceanography of Shelf Seas, Cambridge University Press"
+ },
+ {
+  "topic": "diatoms",
+  "why": true,
+  "when": [
+   "winter",
+   "lead:diatoms"
+  ],
+  "text": "Diatoms lead in winter because the stirring that tumbles cells through the dark costs them nothing: they cannot swim anyway, and they grow whenever mixing carries them up into the light.",
+  "source": "Margalef 1978, Oceanologica Acta 1:493-509"
+ },
+ {
+  "topic": "column",
+  "why": true,
+  "when": [
+   "winter"
+  ],
+  "text": "Winter water is rich but dark: nutrients are plentiful after the mixing, but the days are short, the sun is low and cells are stirred deep, so most growth waits for spring.",
+  "source": "Sverdrup 1953, Journal du Conseil 18:287-295"
+ },
+ {
+  "topic": "column",
+  "why": true,
+  "when": [
+   "spring"
+  ],
+  "text": "In spring the days lengthen and the sun climbs. Once the surface warms enough to stop mixing so deep, cells stay in the light long enough to grow faster than they are lost, and the year's first big bloom can start.",
+  "source": "Sverdrup 1953, Journal du Conseil 18:287-295"
+ },
+ {
+  "topic": "diatoms",
+  "why": true,
+  "when": [
+   "spring",
+   "lead:diatoms"
+  ],
+  "text": "Diatoms usually win the spring bloom: the winter mixing has left plenty of silica for their glass walls, and they do not mind the stirring that still churns the young spring water.",
+  "source": "Egge and Aksnes 1992, Marine Ecology Progress Series 83:281-289"
+ },
+ {
+  "topic": "nutrients",
+  "why": true,
+  "when": [
+   "stratified",
+   "lead:diatoms"
+  ],
+  "text": "A diatom bloom can strip the surface of silica, which only diatoms need. When it runs short, their growth stalls and other algae take the water.",
+  "source": "Egge and Aksnes 1992, Marine Ecology Progress Series 83:281-289"
+ },
+ {
+  "topic": "column",
+  "why": true,
+  "when": [
+   "summer",
+   "stratified"
+  ],
+  "text": "In summer the sun warms the surface into a light layer floating on cold bottom water. The boundary, the thermocline, is so stable that the wind barely mixes across it, so the nutrients below stay out of reach of the sunlit cells above.",
+  "source": "Simpson and Sharples 2012, Introduction to the Physical and Biological Oceanography of Shelf Seas, Cambridge University Press"
+ },
+ {
+  "topic": "nutrients",
+  "why": true,
+  "when": [
+   "summer",
+   "stratified"
+  ],
+  "text": "In layered summer water the best place to live is often just above the thermocline, where a little light meets nutrients leaking up from below. Many cells gather there in a chlorophyll layer hidden beneath the surface.",
+  "source": "Cullen 2015, Annual Review of Marine Science 7:207-239"
+ },
+ {
+  "topic": "dinos",
+  "why": true,
+  "when": [
+   "stratified",
+   "lead:dinos"
+  ],
+  "text": "Dinoflagellates bloom in calm, layered water. Turbulence upsets their swimming and their cell division, so storms favour diatoms and calm favours them.",
+  "source": "Margalef 1978, Oceanologica Acta 1:493-509"
+ },
+ {
+  "topic": "dinos",
+  "why": true,
+  "when": [
+   "summer",
+   "lead:dinos"
+  ],
+  "text": "Summer belongs to swimmers: with the surface stripped of nutrients, dinoflagellates that can swim down toward the nutrients and back up to the light have the edge over cells that just drift.",
+  "source": "Smayda and Reynolds 2001, Journal of Plankton Research 23:447-461"
+ },
+ {
+  "topic": "dinos",
+  "why": true,
+  "when": [
+   "night"
+  ],
+  "text": "Many dinoflagellates swim down at night toward the richer water below and rise again at dawn to photosynthesise: a daily commute between light above and nutrients below.",
+  "source": "Eppley, Holm-Hansen and Strickland 1968, Journal of Phycology 4:333-340"
+ },
+ {
+  "topic": "night",
+  "why": true,
+  "when": [
+   "night"
+  ],
+  "text": "Phytoplankton cannot photosynthesise in the dark. At night they live on what they stored by day and slow their metabolism down, on a daily clock of their own.",
+  "source": "Falkowski and Raven 2007, Aquatic Photosynthesis, Princeton University Press"
+ },
+ {
+  "topic": "column",
+  "why": true,
+  "when": [
+   "storm"
+  ],
+  "text": "A storm churns the surface layer deeper and mixes nutrient-rich water up from below. Diatoms ride out the churn; dinoflagellates struggle in it.",
+  "source": "Margalef 1978, Oceanologica Acta 1:493-509"
+ },
+ {
+  "topic": "column",
+  "why": true,
+  "when": [
+   "autumn"
+  ],
+  "text": "In autumn the surface cools and the storms return, breaking up the summer layers. Nutrients mixed up from below often feed a second, smaller bloom before the dark of winter.",
+  "source": "Longhurst 2007, Ecological Geography of the Sea, Academic Press"
+ },
+ {
+  "topic": "deadzone",
+  "why": true,
+  "when": [
+   "hypoxia"
+  ],
+  "text": "A dead zone is a bloom's afterlife: dead cells sink and bacteria use up oxygen rotting them. The layering keeps fresh oxygen from the surface away from the bottom water until a storm or the winter mixes it again.",
+  "source": "Diaz and Rosenberg 2008, Science 321:926-929 (doi:10.1126/science.1156401)"
+ },
+ {
+  "topic": "deadzone",
+  "why": true,
+  "when": [
+   "summer",
+   "hypoxia"
+  ],
+  "text": "Off the mouth of the Changjiang (Yangtze) River, river nutrients feed summer blooms whose sinking remains strip the bottom water of oxygen, under a lid of light river water: in August 1999 the dead zone covered about 13,700 square km.",
+  "source": "Li et al. 2002, Science in China Series D 45:1137-1146"
+ },
+ {
+  "topic": "tricho",
+  "why": true,
+  "when": [
+   "lead:tricho"
+  ],
+  "text": "Filamentous cyanobacteria win in warm, calm water poor in nutrients because they make their own nitrogen from the air. Where other algae starve, they have fertiliser to spare.",
+  "source": "Capone et al. 1997, Science 276:1221-1229"
+ },
+ {
+  "topic": "tricho",
+  "why": true,
+  "when": [
+   "scum"
+  ],
+  "text": "Gas vesicles float the filaments up. In calm weather they gather into a scum at the top, catching the light first and shading everyone below: a way to win the race for light.",
+  "source": "Walsby 1994, Microbiological Reviews 58:94-144"
+ },
+ {
+  "topic": "cocco",
+  "why": true,
+  "when": [
+   "lead:cocco"
+  ],
+  "text": "Coccolithophores bloom when the water is calm, bright and poor in nutrients, often after the diatoms have used up the silica. They grow slowly, but take up scarce nutrients very efficiently.",
+  "source": "Tyrrell and Merico 2004, in Coccolithophores: From Molecular Processes to Global Impact, Springer, pp. 75-97"
+ },
+ {
+  "topic": "cocco",
+  "why": true,
+  "when": [
+   "milky"
+  ],
+  "text": "The milky turquoise of a coccolithophore bloom is sunlight bouncing off millions of loose chalk plates, shed by the cells as they grow and die.",
+  "source": "Tyrrell and Merico 2004, in Coccolithophores: From Molecular Processes to Global Impact, Springer, pp. 75-97"
+ },
+ {
+  "topic": "cocco",
+  "why": true,
+  "when": [
+   "milky",
+   "crash"
+  ],
+  "text": "Coccolithophore blooms often end suddenly when their own virus spreads through the crowded cells: in experiments it caused a quarter to all of the deaths as blooms collapsed.",
+  "source": "Bratbak, Egge and Heldal 1993, Marine Ecology Progress Series 93:39-48"
+ },
+ {
+  "topic": "crypto",
+  "why": true,
+  "when": [
+   "lead:crypto"
+  ],
+  "text": "Cryptophytes carry phycobilins, red and blue pigments that catch the green light chlorophyll misses. That lets them grow in dim water beneath a bloom or deeper down, where others go hungry for light.",
+  "source": "Falkowski and Raven 2007, Aquatic Photosynthesis, Princeton University Press"
+ },
+ {
+  "topic": "cyano",
+  "why": true,
+  "when": [
+   "lead:cyano"
+  ],
+  "text": "The tiny cyanobacteria win when nutrients are scarce: the smaller a cell, the more surface it has for its volume, so they soak up the last traces of nutrients better than anyone.",
+  "source": "Partensky, Hess and Vaulot 1999, Microbiology and Molecular Biology Reviews 63:106-127"
+ },
+ {
+  "topic": "green",
+  "why": true,
+  "when": [
+   "lead:green"
+  ],
+  "text": "Green flagellates are small and can swim, following the light by day and the nutrients at night. When the water calms and the diatoms run short of silica, they are ready to take over.",
+  "source": "Reynolds 2006, The Ecology of Phytoplankton, Cambridge University Press"
+ },
+ {
+  "topic": "viruses",
+  "why": true,
+  "when": [
+   "crash"
+  ],
+  "text": "When one kind of cell crowds the water, its viruses spread fastest, because the hosts are close together. This kill-the-winner effect cuts blooms down and leaves room for rarer species.",
+  "source": "Thingstad 2000, Limnology and Oceanography 45:1320-1328"
+ },
+ {
+  "topic": "grazers",
+  "why": true,
+  "when": [
+   "bloom"
+  ],
+  "text": "Grazers multiply more slowly than algae, so a bloom outruns them at first. When their numbers catch up they eat it down: that lag is why blooms rise and crash.",
+  "source": "Behrenfeld and Boss 2014, Annual Review of Marine Science 6:167-194"
+ },
+ {
+  "topic": "surface",
+  "why": true,
+  "when": [
+   "runoff"
+  ],
+  "text": "River water is fresh, so it floats on the salty sea as a lens. The lens resists the wind's mixing, while the nutrients it carries feed the cells living in it.",
+  "source": "Simpson and Sharples 2012, Introduction to the Physical and Biological Oceanography of Shelf Seas, Cambridge University Press"
+ },
+ {
+  "topic": "nutrients",
+  "why": true,
+  "when": [
+   "upwelling"
+  ],
+  "text": "A strong wind can drive deep water up toward the surface. It is cold and rich in nutrients, so the sunlit water it reaches often greens with a bloom soon after.",
+  "source": "Mann and Lazier 2006, Dynamics of Marine Ecosystems, Blackwell"
+ },
+ {
+  "topic": "tides",
+  "why": true,
+  "when": [
+   "tide"
+  ],
+  "text": "Spring tides, at new and full moon, run fastest and stir the water from the seabed up. They lift mud and settled particles back into the water and break up the layering near the bottom.",
+  "source": "Simpson and Sharples 2012, Introduction to the Physical and Biological Oceanography of Shelf Seas, Cambridge University Press"
+ },
+ {
+  "topic": "floor",
+  "why": true,
+  "when": [
+   "cysts"
+  ],
+  "text": "Resting cysts wait in the mud of the seabed. They wake only where there is oxygen, so a dead zone keeps them asleep, and the seed bank on the floor outlasts the bad times.",
+  "source": "Anderson, Taylor and Armbrust 1987, Limnology and Oceanography 32:340-351"
+ },
+ {
+  "topic": "centric",
+  "why": true,
+  "text": "Diatoms are heavy with glass and cannot swim. They rely on mixing to keep them in the light, which is why they do best in stirred water and sink out when it calms.",
+  "source": "Smayda 1970, Oceanography and Marine Biology Annual Review 8:353-414"
+ },
+ {
+  "topic": "centric",
+  "why": true,
+  "text": "Many centric diatoms make resting spores when nutrients run out at the end of a bloom. The spores sink, wait, and seed the next bloom when mixing brings them back up.",
+  "source": "McQuoid and Hobson 1996, Journal of Phycology 32:889-902"
+ },
+ {
+  "topic": "centric",
+  "why": true,
+  "text": "Linked into a chain, diatoms are too big for the smallest grazers to swallow: a refuge in size, though a fish or a salp swallows a chain just as easily as a single cell.",
+  "source": "Smetacek 1999, Protist 150:25-32"
+ },
+ {
+  "topic": "pennate",
+  "why": true,
+  "text": "Long, thin cells sink more slowly than round ones of the same volume, because their shape drags through the water. Linking into colonies slows them further.",
+  "source": "Padisak, Soroczki-Pinter and Rezner 2003, Hydrobiologia 500:243-257"
+ },
+ {
+  "topic": "alexandrium",
+  "why": true,
+  "text": "Alexandrium grows slowly, so it cannot win by speed. It wins by poisoning its grazers, by swimming in calm water, and by waiting out the bad months as a cyst.",
+  "source": "Smayda 1997, Limnology and Oceanography 42:1137-1153"
+ },
+ {
+  "topic": "dinophysis",
+  "why": true,
+  "text": "Dinophysis cannot make chloroplasts of its own. It feeds on a ciliate that has itself eaten cryptophytes and keeps their chloroplasts working, so it grows only where its prey thrives.",
+  "source": "Park et al. 2006, Aquatic Microbial Ecology 45:101-106"
+ },
+ {
+  "topic": "tripos",
+  "why": true,
+  "text": "Tripos has long horns that drag through the water like a parachute, slowing its sinking, so it can stay in the calm, sunlit upper water of summer with little effort.",
+  "source": "Padisak, Soroczki-Pinter and Rezner 2003, Hydrobiologia 500:243-257"
+ },
+ {
+  "topic": "prorocentrum",
+  "why": true,
+  "text": "Prorocentrum thrives in coastal water enriched by rivers and land, and its blooms are spreading as coasts receive more nutrients.",
+  "source": "Heil, Glibert and Fan 2005, Harmful Algae 4:449-470"
+ },
+ {
+  "topic": "nutrients",
+  "why": true,
+  "text": "Small cells win when nutrients are scarce, because the smaller the cell, the more surface it has for its volume to take nutrients in. Big cells do better in dim water, where they burn their stores more slowly.",
+  "source": "Litchman and Klausmeier 2008, Annual Review of Ecology, Evolution and Systematics 39:615-639"
+ },
+ {
+  "topic": "cocco",
+  "why": true,
+  "text": "Making chalk plates costs a coccolithophore energy. Their main payoff may be armour: plates seem to make the cells harder for grazers to eat.",
+  "source": "Monteiro et al. 2016, Science Advances 2:e1501822"
+ },
+ {
+  "topic": "crypto",
+  "why": true,
+  "text": "Cryptophytes have no armour and are favourite food for grazers. What keeps them going is light: they grow in dim water other algae cannot use.",
+  "source": "Reynolds 2006, The Ecology of Phytoplankton, Cambridge University Press"
+ },
+ {
+  "topic": "cyano",
+  "why": true,
+  "text": "Two cousins share the water by depth: Synechococcus, pink with phycoerythrin, likes bright surface water, while Prochlorococcus, the smallest photosynthetic cell known, is tuned to dim light deeper down.",
+  "source": "Partensky, Hess and Vaulot 1999, Microbiology and Molecular Biology Reviews 63:106-127"
+ },
+ {
+  "topic": "tricho",
+  "why": true,
+  "text": "Filamentous cyanobacteria need warm water, above about 20 degrees, which is why they bloom in summer and fade away in winter.",
+  "source": "Capone et al. 1997, Science 276:1221-1229"
+ },
+ {
+  "topic": "column",
+  "why": true,
+  "text": "Light fades fast with depth: in this coastal sea only about 1% of the sunlight reaches the 60 m floor. Every cell is caught between light from above and nutrients from below.",
+  "source": "Kirk 2011, Light and Photosynthesis in Aquatic Ecosystems, Cambridge University Press"
+ },
+ {
+  "topic": "deadzone",
+  "why": true,
+  "text": "Warm water holds less oxygen, and bacteria rot dead cells faster when it is warm, so dead zones are a late-summer problem.",
+  "source": "Diaz and Rosenberg 2008, Science 321:926-929 (doi:10.1126/science.1156401)"
+ },
+ {
+  "topic": "jellies",
+  "why": true,
+  "text": "Jellyfish blooms are tied to warm water: warmth speeds their growth and the budding of young jellies, so they swarm most in summer.",
+  "source": "Purcell 2005, Journal of the Marine Biological Association of the UK 85:461-476"
  }
 ]

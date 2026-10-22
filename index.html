@@ -88,9 +88,11 @@ const PARAMS = {
   // lysed by its own phages, hardest where dense (phage x C^2/(C^2 + phageHalf^2)). Never quite gone: a trace drifts in
   // from the open ocean (floor, counted as imported). Slow swirling currents (speed units/s, stronger in wind; wave:
   // their size in units; turn: how fast the pattern changes) carry the fields every advectEvery ticks, so blooms drift
-  // as plumes; diffusion spreads them.
+  // as plumes; diffusion spreads them. respire and grazed (a share of the grazers' pressure) tuned 2026-10-22 (author:
+  // summer and early autumn should let them reign in calm, rich water): with the seasons' shorter days, their upkeep
+  // (0.004) had eaten all their growth and they sat on the trace all year; grazers take them less readily than cells.
   cyano: {
-    growth: 0.025, half: 0.04, max: 1.5, respire: 0.004, q: 0.65, phage: 0.04, phageHalf: 0.8, floor: 0.002, diffusion: 0.15,
+    growth: 0.025, half: 0.04, max: 1.5, respire: 0.0025, grazed: 0.7, q: 0.65, phage: 0.04, phageHalf: 0.8, floor: 0.002, diffusion: 0.15,
     syn: { dim: 0 }, pro: { dim: 1.5 },
     speed: 1.2, windSpeed: 2.5, wave: 70, turn: 0.004, advectEvery: 15,
     grazedRecycled: 0.7, lysedRecycled: 0.9,
@@ -1946,7 +1948,7 @@ function cyanobacteria(w, dt) {
       const grow = want > 0 ? takeNode(f.nut, k, want * Cy.q) / Cy.q : 0;
       const B = f.bio[k], Z = f.graz[k];
       const resp = Cy.respire * c * dt;
-      const eaten = G.rate * Z * K * B / (B * B + K * K) * c * dt;
+      const eaten = G.rate * Cy.grazed * Z * K * B / (B * B + K * K) * c * dt;
       const lysed = Cy.phage * c * c / (c * c + h2) * c * dt;
       const back = (resp + eaten * Cy.grazedRecycled + lysed * Cy.lysedRecycled) * Cy.q;
       f.nut[k] += back;

@@ -226,7 +226,10 @@ function roundTrip(seed) {
     }
     step(b);
   }
-  return { same: isDeepStrictEqual(sim.snapshotWorld(a), sim.snapshotWorld(b)), sum: sim.worldChecksum(a) === sim.worldChecksum(b), saveMs, bytes };
+  // Compared as restored worlds: a restore builds cysts in the cells' shape (extra default fields), so the unbroken
+  // run is passed through one restore too, which changes no value
+  const same = (x) => sim.snapshotWorld(sim.restoreWorld(structuredClone(sim.snapshotWorld(x))));
+  return { same: isDeepStrictEqual(same(a), same(b)), sum: sim.worldChecksum(a) === sim.worldChecksum(b), saveMs, bytes };
 }
 const trip = roundTrip(firstSeed);
 const n = results.length;

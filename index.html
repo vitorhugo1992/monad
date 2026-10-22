@@ -38,7 +38,7 @@ const PARAMS = {
   // Diel cycle. Phase 0 is sunrise; the sun is up for dayFrac of the cycle, light = sqrt(sin) (sharp twilights).
   // ?day=5|10|30 picks the day length in minutes.
   // At night cells rest (circadian clock): upkeep and ageing slow to `rest` as the sun goes down.
-  diel: { dayLength: 300, dayMinutes: [5, 10, 30], start: 0.08, dayFrac: 0.65, moon: 0.01, rest: 0.12 },
+  diel: { dayLength: 300, dayMinutes: [5, 10, 30], start: 0.08, dayFrac: 0.65, moon: 1e-6, rest: 0.12 },   // moon: half-moon light, a millionth of noon (Gaston et al. 2013): too faint to grow on
   // Wind: a slow seeded weather process. Its target changes at random intervals (calm spells common,
   // storms rarer) and the wind eases toward it. It roughens the water and drives upwelling.
   wind: { tau: 40, gapMin: 60, gapMax: 180, start: 0.2 },
@@ -131,15 +131,18 @@ const PARAMS = {
   // silica x that) along its way, counted as imported, with silt: silt shades the water below (siltShade per unit),
   // sinks (siltSink units/s) and settles out (siltTau s). It rains while the lens spreads.
   runoff: { storm: 0.55, rate: 0.02, refractory: 400, amount: 30, silica: 0.8, speed: 2.5, depth: 30, silt: 25, siltShade: 0.5, siltSink: 0.6, siltTau: 150 },
-  // Oxygen (approved local rule): made where nutrients are taken up (photosynthesis, per unit of nutrient) and used
+  // Oxygen (approved local rule): made where nutrients are taken up (photosynthesis, per unit of nutrient: Redfield's
+  // 138 O2 per 16 N, with nutrient 1 read as about 8 uM nitrate and 1 oxygen as saturation, 254 umol/kg) and used
   // where they are returned (respiration and decomposition, the same per unit), so it piles up in the lit layer and runs
   // short where dead matter rots. The surface row breathes with the air toward saturation (aerate per s, faster in wind:
   // windAerate); warm water holds less (saturation 1 - satT x (T - air temperature)). It diffuses slowly (diffusion); shelf
-  // water renews the bottom layer (vent per s at the floor, toward deep), as it does the heat.
+  // water renews the bottom layer (vent per s at the floor, toward deep), as it does the heat. At Redfield's ratio rotting
+  // uses little oxygen, so the shelf water that renews the bottom layer arrives already low (deep 0.4, 2.3 mL/L, as on
+  // hypoxia-prone shelves) and slowly: tuned for dead zones a few % of the time (2026-10-22).
   // Below hypoxic cells suffocate (kill per s at anoxic and below), grazers die back (grazerDie per s) and sardines
   // steer away. With 1 = saturation (about 5.8 mL/L, 8 mg/L, in seawater at 15 degrees), hypoxic 0.35 is the usual
   // definition of hypoxia, 2 mL/L or 2.8 mg/L (Diaz & Rosenberg 2008); anoxic 0.08 is severe hypoxia, about 0.6 mg/L.
-  oxygen: { per: 1, diffusion: 0.008, deep: 0.8, vent: 0.0022, aerate: 0.02, windAerate: 0.1, satT: 0.02, hypoxic: 0.35, anoxic: 0.08, kill: 0.04, grazerDie: 0.01 },
+  oxygen: { per: 0.27, diffusion: 0.008, deep: 0.4, vent: 0.0008, aerate: 0.02, windAerate: 0.1, satT: 0.02, hypoxic: 0.35, anoxic: 0.08, kill: 0.04, grazerDie: 0.01 },
   // Marine snow (approved local rule): what sinks out of the water (dead cells, pellets, the lost share of the eaten
   // and the lysed) falls as a detritus field (sink units/s) that rots on the way (rot per s) and settles on the floor as
   // a deposit (one pool per column) that rots slowly (bed per s), feeding the bottom water and using its oxygen. Without
@@ -199,14 +202,14 @@ const PARAMS = {
   // Rule 4: death
   death: { fadeTicks: 60, recycled: 0.6 },                   // the rest sinks out to the bottom row
   // Resting cysts (approved local rule: encystment): the forms that make resting stages (kinds: green algae's resting
-  // zygotes, Alexandrium and Tripos dinocysts, centric diatoms' resting spores) turn into a cyst while alive when
+  // zygotes, Alexandrium dinocysts, centric diatoms' resting spores; not marine Tripos, which hardly encysts) turn into a cyst while alive when
   // nutrients (or, for diatoms, silica) have run short for a while: their sufficiency N/(N + halfSat) (x the silica
   // limitation of growth for glass), smoothed over hungerTau s, below hungry, at up to rate per s when it is down to
   // starving. The cyst keeps all the cell's nutrients and silica and sinks (sink units/s) to the floor. After dormancy it germinates only in oxygenated water (anoxia keeps cysts dormant,
   // so cyst beds outlast dead zones) with nutrients: slowly on the floor (germFloor per s), faster when a strong tide
   // has lifted it into the water (germRate). It dies after viability s.
   cyst: {
-    kinds: [0, 1, 3, 5], rate: 0.001, hungry: 0.75, starving: 0.55, hungerTau: 60,
+    kinds: [0, 1, 5], rate: 0.001, hungry: 0.75, starving: 0.55, hungerTau: 60,
     sink: 6,
     dormancyMin: 1800, dormancyMax: 3600,
     germRate: 1 / 60, germFloor: 1 / 3600, germNutrient: 0.35, germEnergy: 0.4,
@@ -363,7 +366,10 @@ const PARAMS = {
     // a slow, warm low note gliding up a fifth (everyMin..everyMax s apart); basking at the surface it calls softer and
     // an octave higher. Both go through the music bus (the music button silences them).
     visitorVoices: {
-      school: { every: 4.5, dur: 10, attack: 3, gain: 0.018, octave: 4, cut: 2400, detune: 7, wet: 0.55, pan: 0.6 },
+      school: { every: 4.5, dur: 10, attack: 3, gain: 0.018, octave: 4, cut: 2400, detune: 7, wet: 0.55, pan: 0.6,
+                // a crowd (author: the sense of a numerous school): the chord comes again a moment later from other fish,
+                // short echoes taps s behind (each jittered by up to jitter s), softer by fade each, spread across the stereo
+                crowd: { taps: [0.05, 0.11, 0.18], jitter: 0.03, fade: 0.6, spread: 0.5 } },
       // The salp chain (author): a gentle, smooth sequenced melody while it is on screen, one step per barrel along the
       // chain (step s apart, then rest steps of silence before it loops); each barrel's note is a scale step from the last
       // (steps), within low..high degrees of the root around octave. A barrel the sunfish has bitten off leaves a hole.
@@ -383,7 +389,7 @@ const PARAMS = {
       swell: { everyCalm: 6, everyStorm: 2.2, durCalm: 10, durStorm: 5, gainCalm: 0.012, gainStorm: 0.09, freqCalm: 320, freqStorm: 1300 },
       hum: { every: 8, dur: 18, gain: 0.045, freqDay: 150, freqNight: 75 },
       plume: { every: 5, dur: 11, gain: 0.07, freq: 70, freqEnd: 150, q: 3 },
-      school: { every: 2.4, dur: 2.4, gain: 0.05, freq: 260, freqEnd: 950, q: 1.2 },
+      school: { every: 2.4, dur: 2.4, gain: 0.05, freq: 260, freqEnd: 950, q: 1.2, followers: 3, lagMax: 0.35, followGain: 0.5, spread: 0.5 },   // followers: more fish whooshing past just behind, softer, spread
       bubble: { gain: 0.035, perSecond: 10, rise: 1.8, durMin: 0.04, durMax: 0.12, freqMin: 500, freqMax: 1600, seepFreq: 260 },
     },
     // Krill crackle: tiny clicks in short trains, denser with the visible swarm but saturating (half: krill for
@@ -593,6 +599,10 @@ const PARAMS = {
     krill: { hungry: 0, foodFull: 0.8, fedTau: 2.5, zFrom: 0.3, zSpan: 0.6, coverage: 0.25, len: 6.5, thick: 0.15, curl: 0.12, flick: 0.35,
              amber: 0.3, darker: 0.4,   // shares of krill with an orange body, and a tone darker
              feelers: 0.95, legBeat: 3, swimBeat: 9, glide: 0.45, wander: 8, dartEvery: 4.5, dartDist: 7, dartTime: 0.6 },
+    // Copepods: the grazer field's commonest animals, drawn with the krill where the field is dense and fed (up to per
+    // a node, coverage x its presence each): len world units, hopping every hopEvery s by hop units in hopTime s,
+    // sinking slowly between hops (sink units/s, drift within wander)
+    copepods: { per: 3, coverage: 0.5, len: 2.4, hopEvery: 2.2, hop: 3, hopTime: 0.18, sink: 0.4, wander: 6 },
   },
   murk: { from: 0.8, full: 3 },         // bloom biomass summed down the upper column: rays fade in murky water
   hud: { x: 4, y: 290, line: 7, visibleMs: 6000, fadeMs: 2000, epitaphFade: 20, listenY: 200, listenVis: 1, music: { x: 150, y: 5 }, bar: { w: 80, h: 3 } },   // music: the music button, left of the notebook glyph; bar: the catch-up progress bar   // epitaph fades in over 20 simulated s; listen: the solid TAP TO LISTEN hint
@@ -1530,7 +1540,8 @@ function steer(w, c, dt) {
   c.vy += kick.ky * ks;
 
   // Brighter than preferred -> swim down (+y); dimmer -> swim up. Bounded ratio, no log.
-  const night = 1 - smoothstep(D.darkLo, D.darkHi, w.surfaceLight), settle = 1 - PARAMS.elder.settle * c.elder;   // elders barely swim
+  // Night descent is swimming: diatoms (glass) don't swim, they only regulate their buoyancy, so they hold their depth
+  const night = (1 - smoothstep(D.darkLo, D.darkHi, w.surfaceLight)) * (1 - c.glassW), settle = 1 - PARAMS.elder.settle * c.elder;   // elders barely swim
   if (night < 1) {
     const L = sampleField(w.fields.light, c.x, c.y), T = c.targetLight * w.surfaceLight;
     c.vy += (1 - night) * D.phototaxis * (L - T) / (L + T + 1e-9) * settle * dt;
@@ -3268,8 +3279,8 @@ function audioWeather(w, now) {
 
 // ---- Ambience ----
 // A noise event: a stretch of the noise buffer through a filter (optionally sweeping), swelling and fading once
-function noiseEvent(dur, peak, type, freq, q, panX, freqEnd) {
-  const ctx = audio.ctx, t0 = ctx.currentTime + 0.05, end = t0 + dur;
+function noiseEvent(dur, peak, type, freq, q, panX, freqEnd, delay = 0) {
+  const ctx = audio.ctx, t0 = ctx.currentTime + 0.05 + delay, end = t0 + dur;
   const src = ctx.createBufferSource();
   src.buffer = audio.noise;
   src.loop = true;
@@ -3366,6 +3377,10 @@ function audioAmbience(w) {
   if (school && t >= ambNext.school) {           // a school's whoosh as it sweeps by
     const S = Am.school, up = r() < 0.5;
     noiseEvent(S.dur, S.gain, 'bandpass', up ? S.freq : S.freqEnd, S.q, school.x / W * 2 - 1, up ? S.freqEnd : S.freq);
+    for (let k = 0; k < S.followers; k++) {   // the rest of the school, a beat behind and around
+      const lag = (0.3 + 0.7 * r()) * S.lagMax, pan = school.x / W * 2 - 1 + (r() - 0.5) * 2 * S.spread, f = 0.85 + 0.3 * r();
+      noiseEvent(S.dur * (0.6 + 0.3 * r()), S.gain * S.followGain * (0.6 + 0.4 * r()), 'bandpass', (up ? S.freq : S.freqEnd) * f, S.q, pan, (up ? S.freqEnd : S.freq) * f, lag);
+    }
     ambNext.school = t + S.every * (0.7 + 0.6 * r());
   }
 }
@@ -3474,8 +3489,20 @@ function schoolChord(midis, panX) {
   if (pan) { pan.pan.value = clamp(panX, -1, 1) * S.pan; env.connect(pan); out = pan; }
   out.connect(dry); out.connect(wet);
   dry.connect(audio.bus); wet.connect(audio.wet);
+  // the crowd: the same swell a moment later from other fish, softer, from either side
+  const crowd = [], C = S.crowd;
+  C.taps.forEach((tap, k) => {
+    const d = ctx.createDelay(1), g = ctx.createGain(), p = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+    d.delayTime.value = tap + C.jitter * ambRng.next();
+    g.gain.value = Math.pow(C.fade, k + 1);
+    env.connect(d); d.connect(g);
+    let o = g;
+    if (p) { p.pan.value = clamp(panX * S.pan + (k % 2 ? 1 : -1) * C.spread * (0.5 + 0.5 * ambRng.next()), -1, 1); g.connect(p); o = p; }
+    o.connect(dry); o.connect(wet);
+    crowd.push(d, g, p);
+  });
   for (const o of oscs) { o.start(t0); o.stop(end + 0.05); }
-  oscs[0].onended = () => { for (const node of [...oscs, filt, env, pan, dry, wet]) if (node) node.disconnect(); };
+  oscs[0].onended = () => setTimeout(() => { for (const node of [...oscs, filt, env, pan, dry, wet, ...crowd]) if (node) node.disconnect(); }, 400);   // after the echoes ring out
 }
 
 // The salp's tune: a walk of scale steps along its barrels, fixed by the chain (a stateless hash, so the music never
@@ -5270,6 +5297,57 @@ function drawKrill(w, ta) {
   }
 }
 
+// Copepods: small translucent crustaceans, the grazers' commonest face (with the single-celled grazers no one can see):
+// a teardrop body with an orange oil drop and a red eye, long antennae spread at rest and swept back as they hop, a
+// thin tail with two bristles. They hang, sink a little and hop. Drawn where the grazer field is dense and fed, as the
+// krill are; at zoom 1 a pale speck.
+function drawCopepods(w, ta) {
+  const L = PARAMS.look.copepods, K = PARAMS.look.krill, { cols, rows } = PARAMS.grid, Z = w.fields.graz, z = cam.zoom;
+  const x0 = cam.x - 6, y0 = cam.y - 6, x1 = cam.x + W / z + 6, y1 = cam.y + H / z + 6;
+  const amber = rampBase(AMBER), red = rampBase(ROSE), green = rampBase(GREEN);
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      const node = j * cols + i, pres = clamp((Z[node] - K.zFrom) / K.zSpan, 0, 1) * L.coverage * krillFed[node];
+      for (let m = 0; m < L.per; m++) {
+        const h = node * 53 + m * 7 + 3;
+        if (hash01(h) >= pres) continue;
+        // where it is: a slow wander, sinking between hops, then a hop to a new spot
+        const every = L.hopEvery * (0.7 + 0.6 * hash01(h + 1)), ph = ta / every + hash01(h + 2), n = Math.floor(ph), f = ph - n;
+        const e = smoothstep(0, 1, f * every / L.hopTime), ang = (hash01(h * 5 + n) - 0.5) * 2.4 - Math.PI / 2;   // hops mostly upward
+        const hx = Math.cos(ang) * L.hop * e, hy = Math.sin(ang) * L.hop * e + L.sink * Math.max(0, f * every - L.hopTime);
+        const bx = L.wander * (hash01(h * 5 + n + 3) - 0.5) * 2, by = L.wander * (hash01(h * 5 + n + 4) - 0.5);
+        const cx = (i + 0.5) * GRID_W + bx + hx, cy = (j + 0.5) * GRID_H + by + hy - L.sink * every * 0.5;
+        if (cx < x0 || cx > x1 || cy < y0 || cy > y1) continue;
+        const len = L.len * (0.8 + 0.4 * hash01(h + 6));
+        if (len * z < 3) { put(toSX(cx), toSY(cy), hash01(h + 7) < 0.3 ? amber + HIGHLIGHT : COL.SHAFT); continue; }
+        // heading: along the hop, head first; at rest it hangs head up, tilted its own way
+        const hopping = e > 0 && e < 1, head = hopping ? ang : -Math.PI / 2 + (hash01(h + 8) - 0.5) * 1.2;
+        const ux = Math.cos(head), uy = Math.sin(head), px = -uy, py = ux;
+        // antennae from the head: spread wide at rest, swept back along the body while hopping
+        const sweep = hopping ? 0.25 : 1.25, al = len * 1.4;
+        for (const side of [-1, 1]) {
+          const ax = cx + ux * len * 0.45, ay = cy + uy * len * 0.45;
+          const dx = ux * Math.cos(sweep) * -1 + px * side * Math.sin(sweep), dy = uy * Math.cos(sweep) * -1 + py * side * Math.sin(sweep);
+          worldLine(ax, ay, ax + (hopping ? dx : px * side * 0.9 + ux * 0.15) * al, ay + (hopping ? dy : py * side * 0.9 + uy * 0.15) * al, COL.SHAFT);
+        }
+        // tail (urosome) and its two bristles
+        const tx = cx - ux * len * 0.45, ty = cy - uy * len * 0.45, ex = tx - ux * len * 0.45, ey = ty - uy * len * 0.45;
+        worldLine(tx, ty, ex, ey, COL.SHAFT);
+        for (const side of [-1, 1]) worldLine(ex, ey, ex - ux * len * 0.25 + px * side * len * 0.12, ey - uy * len * 0.25 + py * side * len * 0.12, COL.SLATE);
+        // body: a translucent teardrop, lit on the back, an oil drop and a gut inside, a red eye at the front
+        fillShape(cx, cy, len * 0.48, len * 0.22, head, (u, v, x, y) => {
+          const r = u < 0 ? (u * u) / 1 + v * v / (0.55 + 0.45 * (1 + u)) : u * u + v * v;   // tapering behind
+          if (r > 1) return -1;
+          if (u > 0.5 && Math.abs(v) < 0.45) return red + BASE;                          // the naupliar eye
+          if (u > -0.2 && u < 0.35 && Math.abs(v) < 0.4) return amber + HIGHLIGHT;      // oil drop
+          if (u < -0.2 && Math.abs(v) < 0.3) return green + BASE;                        // gut
+          return r > 0.65 ? COL.SHAFT : wb(x, y) < 0.5 ? COL.FOAM : COL.SHAFT;
+        });
+      }
+    }
+  }
+}
+
 // ---- Seafloor scavengers ----
 // Decoration only: they never touch the simulation. They come where detritus has recently fallen
 // (w.fallen), linger to pick at it, then walk on and out of the column.
@@ -5624,6 +5702,7 @@ function composeFrame(w, now) {
   drawCysts(w);
   updateCrawlers(w);
   drawCrawlers(t);
+  drawCopepods(w, ta);
   drawKrill(w, ta);
   drawThreads(w);
   drawCells(w, t);
@@ -6484,8 +6563,8 @@ const GUIDE = [
   { sub: 'GLASS BOAT', text: 'A GLASS CELL SHAPED LIKE A BOAT, WITH A SLIT, THE RAPHE, DOWN ITS MIDDLE. SOME BUILD STAR-SHAPED COLONIES JOINED AT ONE END, AS ASTERIONELLOPSIS DOES. LIKE ALL DIATOMS IT NEEDS SILICA, AND ITS GLASS SHIMMERS LIKE A PHOTONIC CRYSTAL.' },   // Round, Crawford & Mann 1990, The Diatoms
   { sub: 'CHALK-PLATED HAPTOPHYTE', text: 'A TINY CELL WRAPPED IN CHALK PLATES, THE COCCOLITHS. IN A BLOOM THE SHED PLATES TURN THE SEA MILKY TURQUOISE. IT GROWS SLOWLY BUT THRIVES IN POOR, CALM WATER. THE PLATES WEIGH IT DOWN AND MAY SHIELD IT FROM GRAZERS. ITS OWN VIRUS CAN END A BLOOM.' },   // Holligan et al. 1993; Bratbak et al. 1993; Monteiro et al. 2016
   { sub: 'SLIPPER FLAGELLATE', text: 'A SLIPPER-SHAPED CELL WITH TWO UNEQUAL FLAGELLA FROM A FURROW AT THE FRONT, AND NO ARMOUR. EXTRA PIGMENTS, PHYCOBILINS FROM PINK TO BLUE, CATCH THE DIM LIGHT OF DEEPER WATER. DINOPHYSIS HUNTS IT FOR ITS CHLOROPLASTS.' },   // Hoef-Emden & Archibald 2016, Handbook of the Protists
-  { sub: 'SYNECHOCOCCUS, PROCHLOROCOCCUS', text: 'BACTERIA THAT PHOTOSYNTHESISE, ABOUT ONE THOUSANDTH OF A MILLIMETRE ACROSS: TOO SMALL TO SEE ONE BY ONE, A HAZE OF SPECKS. SYNECHOCOCCUS IS PINK-ORANGE AND LIKES BRIGHT WATER; PROCHLOROCOCCUS IS BLUE-GREEN AND WORKS IN DIM WATER. BOTH WIN IN POOR, CALM WATER, AND EACH HAS ITS OWN VIRUSES.' },   // Flombaum et al. 2013; Partensky et al. 1999
-  { sub: 'TRICHODESMIUM-LIKE', text: 'COLONIES OF HAIR-LIKE FILAMENTS, SEA SAWDUST. THEY FIX NITROGEN FROM THE AIR AND FERTILISE POOR WATER WHEN THEY DIE. GAS VESICLES FLOAT THEM UP; IN CALM, WARM WATER THEY GATHER IN A GOLDEN SCUM AT THE SURFACE. THEY NEED WATER OF ABOUT 20 C AND UP, AND FEW GRAZERS EAT THEM.' },   // Capone et al. 1997, Science 276:1221
+  { sub: 'SYNECHOCOCCUS, PROCHLOROCOCCUS', text: 'BACTERIA THAT PHOTOSYNTHESISE, ABOUT ONE THOUSANDTH OF A MILLIMETRE ACROSS: IN THE WATER ONLY A HAZE OF SPECKS, HERE ONE CELL OF EACH. SYNECHOCOCCUS IS PINK-ORANGE AND LIKES BRIGHT WATER; PROCHLOROCOCCUS IS BLUE-GREEN AND WORKS IN DIM WATER. BOTH WIN IN POOR, CALM WATER, AND EACH HAS ITS OWN VIRUSES.' },   // Flombaum et al. 2013; Partensky et al. 1999
+  { sub: 'TRICHODESMIUM-LIKE', text: 'COLONIES OF HAIR-LIKE FILAMENTS, SEA SAWDUST; HERE ONE FILAMENT, A CHAIN OF CELLS. THEY FIX NITROGEN FROM THE AIR AND FERTILISE POOR WATER WHEN THEY DIE. GAS VESICLES FLOAT THEM UP; IN CALM, WARM WATER THEY GATHER IN A GOLDEN SCUM AT THE SURFACE. THEY NEED WATER OF ABOUT 20 C AND UP, AND FEW GRAZERS EAT THEM.' },   // Capone et al. 1997, Science 276:1221
 ];
 // Example cells for the guide, one per form: a lineage found by trying sprite seeds until the form comes out
 // (render only: they never enter the world)
@@ -6528,22 +6607,50 @@ function drawSpecimen(c, cx, cy, rpx, tick) {
     }
   }
 }
-// The cyanobacteria as the water shows them: a haze of specks, pink-orange and blue-green, twinkling slowly
-function drawCyanoSpecimen(x0, y0, w, h, tick) {
-  for (let k = 0; k < 170; k++) {
-    const x = x0 + Math.floor(hash01(k * 3 + 1) * w), y = y0 + Math.floor(hash01(k * 3 + 2) * h), tw = hash01(k * 5 + Math.floor(tick * TICK_DT * 0.7 + hash01(k) * 4));
-    put(x, y, rampBase(k % 2 ? ROSE : EMERALD) + (tw < 0.3 ? HIGHLIGHT : BRIGHT));
+// A bacterial cell seen close up, lit from the upper left: an oval cell wall, rings of thylakoid membrane just inside
+// it, and carboxysome specks in the middle (a cyanobacterium has no nucleus and no chloroplast: the cell is one)
+function drawBacterium(cx, cy, rx, ry, ramp, tick, seed) {
+  const rb = rampBase(ramp);
+  for (let y = Math.floor(cy - ry) - 1; y <= cy + ry + 1; y++) {
+    for (let x = Math.floor(cx - rx) - 1; x <= cx + rx + 1; x++) {
+      const u = (x + 0.5 - cx) / rx, v = (y + 0.5 - cy) / ry, d = Math.sqrt(u * u + v * v);
+      if (d > 1) continue;
+      const lit = -(u + v) * 0.7;   // the upper left catches the light
+      let t;
+      if (d > 0.88) t = lit > 0.2 ? BRIGHT : lit < -0.3 ? SHADOW : HIGHLIGHT;   // the cell wall
+      else if ((d > 0.66 && d < 0.73) || (d > 0.5 && d < 0.56)) t = HIGHLIGHT;   // thylakoid rings
+      else if (d < 0.4 && hash01(seed + x * 31 + y * 17) < 0.12) t = SHADOW;      // carboxysomes
+      else t = bayer(x, y) < 0.5 + lit * 0.4 ? BASE : HIGHLIGHT;
+      put(x, y, rb + t);
+    }
   }
 }
-// The filamentous ones: a tuft of filaments lying loosely side by side, splaying toward the ends, swaying
+// The cyanobacteria, one cell each: Synechococcus, a short pink-orange rod; Prochlorococcus, a smaller round
+// blue-green cell (about a thousandth of a millimetre: far smaller than any cell in the water, drawn large)
+function drawCyanoSpecimen(x0, y0, w, h, tick) {
+  const cy = y0 + (h >> 1), wob = dsin(tick * TICK_DT * 0.6) * 0.6;
+  const a = x0 + Math.round(w * 0.26), b = x0 + Math.round(w * 0.76);
+  drawBacterium(a, cy + wob, 19, 11, ROSE, tick, 11);
+  drawBacterium(b, cy - wob, 11, 11, EMERALD, tick, 23);
+  ink(a - (textWidth('SYNECHOCOCCUS') >> 1), y0 + h - 6, 'SYNECHOCOCCUS', COL.SLATE);
+  ink(b - (textWidth('PROCHLOROCOCCUS') >> 1), y0 + h - 6, 'PROCHLOROCOCCUS', COL.SLATE);
+}
+// The filamentous ones: one trichome, a chain of short disc-shaped cells (wider than long) with dark cross walls,
+// speckled with gas vesicles, gently curved and swaying; the end cells rounded
 function drawTrichoSpecimen(cx, cy, tick) {
-  const rb = rampBase(TRI_RAMP), sway = dsin(tick * TICK_DT * 0.8);
-  for (let k = 0; k < 11; k++) {
-    const off = (k - 5) * 1.6, len = 30 + hash01(k * 11) * 10, tilt = (k - 5) * 0.035;
-    for (let s = -len / 2; s <= len / 2; s += 0.5) {
-      const u = s / (len / 2), x = Math.round(cx + s), y = Math.round(cy + off + off * 0.5 * u * u + tilt * s + sway * u * u * 1.5);
-      if (Math.floor(s + k * 3) % 9 === 0) continue;   // trichome pieces
-      put(x, y, rb + (k < 4 ? BRIGHT : k < 8 ? HIGHLIGHT : BASE));
+  const rb = rampBase(TRI_RAMP), n = 15, cw = 8, half = 5, sway = dsin(tick * TICK_DT * 0.7);
+  const x0 = cx - (n * cw) / 2;
+  for (let i = 0; i < n; i++) {
+    for (let px = 0; px < cw; px++) {
+      const x = Math.round(x0 + i * cw + px), s = (x - cx) / (n * cw / 2), mid = cy + Math.round(s * s * 6 * sway);   // a gentle curve
+      const fromEnd = i === 0 ? px : i === n - 1 ? cw - 1 - px : cw, hh = fromEnd < 4 ? Math.round(half * Math.sqrt(1 - Math.pow((3.5 - fromEnd) / 4, 2))) : half;   // rounded ends
+      for (let dy = -hh; dy <= hh; dy++) {
+        const y = mid + dy, v = dy / half;
+        let t = v < -0.6 ? BRIGHT : v > 0.6 ? SHADOW : bayer(x, y) < 0.5 ? HIGHLIGHT : BASE;
+        if (px === 0 && i > 0) t = Math.abs(v) > 0.8 ? SHADOW : OUTLINE;              // the cross wall
+        else if (Math.abs(v) < 0.6 && hash01(x * 13 + y * 7) < 0.1) t = BRIGHT;        // gas vesicles
+        put(x, y, rb + t);
+      }
     }
   }
 }

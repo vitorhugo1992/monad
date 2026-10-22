@@ -15,7 +15,8 @@
 Pixel-art phytoplankton drift, grow, divide, synchronise and die in a dark water column, and every note you hear
 comes from one of them. Diatoms sing like glockenspiels and vibraphones, dinoflagellates like wood and plucked
 strings, green algae like a felt piano, coccolithophores like a celesta and cryptophytes like a kalimba. Blooms swell into chords; die-offs fall silent. You can just watch
-it, like a tide pool, or put your hand in the water.
+it, like a tide pool, or put your hand in the water. The water is a warm-temperate shelf sea in summer, about 60 m
+deep, like the East China Sea.
 
 ## The idea: emergence, not authorship
 
@@ -54,11 +55,11 @@ short list of local rules, and everything else comes out of how they interact:
   oxygen and become a dead zone.
 - **Death and recycling.** Cells die of starvation, old age or lack of oxygen, and their nutrients return to the
   water or sink as marine snow.
-- **Resting cysts.** When the nutrients run out at the end of a bloom, some kinds (green algae, *Alexandrium* and
-  *Tripos*, centric diatoms) turn into dormant cysts that sink to the seabed. After days of rest, a spring tide
+- **Resting cysts.** When the nutrients run out at the end of a bloom, some kinds (green algae, *Alexandrium*,
+  centric diatoms) turn into dormant cysts that sink to the seabed. After days of rest, a spring tide
   lifting them into the water wakes them, and the bloom's lineages come back.
-- **Grazers and visitors.** An invisible field of grazers grows where cells are dense and starves away
-  slowly, which ends blooms and lets the water recover. Big blooms draw in sardine schools and salp chains,
+- **Grazers and visitors.** A field of grazers grows where cells are dense and starves away
+  slowly, which ends blooms and lets the water recover; you see it as hopping copepods and krill where they feed. Big blooms draw in sardine schools and salp chains,
   and the salps draw in an ocean sunfish. The school hums a soft chord, the salps play a gentle sequenced tune
   (one note per barrel), and the sunfish calls.
 - **Succession.** As in the real ocean, no group keeps the water for long:

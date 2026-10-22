@@ -2,7 +2,7 @@
 
 # MONAD
 
-**A water column of living phytoplankton that plays its own ambient music. Nobody composes it.**
+**A water column of living phytoplankton that plays its own ambient music.**
 
 ### [Open MONAD](https://vitorhugo1992.github.io/monad/) · tap the water to listen
 

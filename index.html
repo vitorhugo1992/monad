@@ -5352,8 +5352,8 @@ function drawCombJellies(v, ta) {
     // comb rows: rainbow waves travelling along them
     for (let row = 0; row < 5; row++) {
       const u = -0.8 + row * 0.4;
-      for (let t = -0.85; t <= 0.85; t += 0.12) {
-        const x = p.x + u * rx * Math.sqrt(1 - t * t), y = p.y + t * ry, wave = Math.floor((t * 5 - ta * 4 + row) * 1.5);
+      for (let t = -0.85; t <= 0.85; t += Math.min(0.12, 0.8 / (ry * cam.zoom))) {   // a pixel apart however close the camera
+        const x = p.x + u * rx * Math.sqrt(1 - t * t), y = p.y + t * ry, wave = Math.floor(t * 7.5 - ta * 6 + row * 1.5);
         if (wave % 3 === 0) continue;
         put(toSX(x), toSY(y), IRID_SET[mod(wave + row * 2 + h, IRID_SET.length)]);
       }

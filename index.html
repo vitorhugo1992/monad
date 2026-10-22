@@ -250,7 +250,7 @@ const PARAMS = {
                 turnIfAte: 25, passes: 3 },                                 // a rich pass makes the school turn back for more
     salps: { rate: 1 / 160, speedMin: 1.5, speedMax: 2.6, barrelsMin: 4, barrelsMax: 8, spacing: 6.5, tilt: 0.3,
              reach: 4.5, eat: 0.25, sway: 2, excreted: 0.3, pellets: 0.5 },  // salp pellets sink fast
-    sunfish: { rate: 1 / 90, speed: 4.5, turn: 1.2, r: 18, bite: 7, stay: 150, baskY: 30, baskSpeed: 0.35 },   // comes for salps and jellies, never eats cells; basks at the surface after
+    sunfish: { rate: 1 / 90, speed: 4.5, turn: 1.2, face: 4, r: 18, bite: 7, stay: 150, baskY: 30, baskSpeed: 0.35 },   // comes for salps and jellies, never eats cells; basks at the surface after
     // Jellyfish (moon jellies) and comb jellies (approved local rule, author): they eat zooplankton, so they come where
     // the grazer field is rich (its mean over the upper half of the column between zFrom and zFull), in warm water
     // (surface warmFrom..warmFull degrees) that is calm (fading as the wind passes calm), as jelly blooms do; never on a
@@ -621,6 +621,10 @@ const PARAMS = {
   look: {
     sardine: { len: 17, height: 2.4, tailBeat: 8, spread: 0.92, drift: 2.5, shine: 0.12, shineRate: 4, turnFlash: 1.2 },
     salp: { rx: 3.3, ry: 2.3, pellets: 5, pelletFall: 7, pelletSpan: 70 },
+    // Jellies (render only): lean (rad per unit/s of drift, at most 0.3) and sway (rad) tilt them; trail: how far
+    // tentacles and arms stream behind per unit/s of drift; lag: how far (of a pulse) one side of the bell squeezes
+    // before the other; ripple: the bell margin's travelling ripple; squish: a comb jelly's breathing
+    jelly: { lean: 0.18, sway: 0.12, trail: 0.35, lag: 0.04, ripple: 0.07, squish: 0.06, combLean: 0.4 },
     sunfish: { rx: 16, ry: 18, fin: 17, finBase: 5.5, sweep: 6, finBeat: 1.4, finTurn: 0.7, bob: 0.8, pectoral: 2.6, gulp: 1.8 },
     // Krill are the grazer field made visible: giants next to the cells, so only a sparse share of the swarm is drawn
     // hungry: share still drawn where there is no food (swarms move off empty water); foodFull: biomass per node
@@ -648,16 +652,16 @@ const PARAMS = {
     // Rain while runoff spreads: drops per s on the whole surface, each a ring spreading for ring s; bubble: share that
     // leave a bubble (which chirps: rain heard from under the water)
     rain: { drops: 30, ring: 0.45, ringR: 2.5, bubble: 0.2 },
-    krill: { hungry: 0, foodFull: 0.8, fedTau: 2.5, zFrom: 0.3, zSpan: 0.6, coverage: 0.25, len: 6.5, thick: 0.15, curl: 0.12, flick: 0.35,
+    krill: { hungry: 0, foodFull: 0.8, fedTau: 2.5, zFrom: 0.3, zSpan: 0.6, coverage: 0.25, len: 7.5, thick: 0.15, curl: 0.12, flick: 0.35,
              amber: 0.3, darker: 0.4,   // shares of krill with an orange body, and a tone darker
              feelers: 0.95, legBeat: 3, swimBeat: 9, glide: 0.45, wander: 8, dartEvery: 4.5, dartDist: 7, dartTime: 0.6 },
     // Copepods: the grazer field's commonest animals, drawn with the krill where the field is dense and fed (up to per
     // a node, coverage x its presence each): len world units, hopping every hopEvery s by hop units in hopTime s,
     // sinking slowly between hops (sink units/s, drift within wander)
-    copepods: { per: 3, coverage: 0.5, len: 5, hopEvery: 2.2, hop: 3, hopTime: 0.18, sink: 0.4, wander: 6 },
+    copepods: { per: 2, coverage: 0.25, len: 4.5, hopEvery: 2.2, hop: 3, hopTime: 0.18, sink: 0.4, wander: 6 },
   },
   murk: { from: 0.8, full: 3 },         // bloom biomass summed down the upper column: rays fade in murky water
-  hud: { x: 4, y: 290, line: 7, visibleMs: 6000, fadeMs: 2000, epitaphFade: 20, listenY: 200, listenVis: 1, music: { x: 150, y: 5 }, bar: { w: 80, h: 3 } },   // music: the music button, left of the notebook glyph; bar: the catch-up progress bar   // epitaph fades in over 20 simulated s; listen: the solid TAP TO LISTEN hint
+  hud: { x: 4, y: 290, line: 7, visibleMs: 6000, fadeMs: 2000, epitaphFade: 20, listenY: 200, listenVis: 1, music: { x: 150, y: 5 }, bar: { w: 80, h: 3 }, skip: { w: 31, h: 11, reach: 5 } },   // music: the music button, left of the notebook glyph; bar: the catch-up progress bar; skip: the button beside it (reach: extra px a finger may miss by)   // epitaph fades in over 20 simulated s; listen: the solid TAP TO LISTEN hint
   debug: { syncEvery: 15, sampleEvery: 100, historyLength: 180, frameSamples: 120, graphY: 172, graphH: 48, mapX: 126, mapY: 6, mapCell: 2 },
   // Field notebook: the world's records behind one small glyph (top right, fades with the HUD). Observation only:
   // a row every sampleEvery simulated s for the whole life (when maxSamples fill up, every other row is dropped and
@@ -675,7 +679,7 @@ const PARAMS = {
     // keep: notes remembered (the last minute or so); share: s the instruments' shares count over; circleR: the pitch
     // circle's radius (px); scope: the spectrum's band (Hz), bars, FFT size (fine enough for the low notes: 5.9 Hz per bin at
     // 48 kHz) and the loudness it spans (dB).
-    music: { keep: 480, share: 60, circleR: 30, scope: { lo: 60, hi: 12000, bars: 39, fft: 8192, smooth: 0.6, minDb: -95, maxDb: -25 } },
+    music: { keep: 480, share: 60, circleR: 26, scope: { lo: 60, hi: 12000, bars: 39, fft: 8192, smooth: 0.6, minDb: -95, maxDb: -25 } },
     surfaceRows: 4,   // the surface water the recorder and the day page read: the top grid rows (about a tenth of the column)
     // Real units (sources in the Notebook section). depthM: the column in metres (light falls to e^-atten at the
     // floor: Kd 0.067 per m for a clear stratified shelf); o2mL: oxygen saturation at 15 C and 35 psu in mL/L, the
@@ -699,7 +703,7 @@ const PARAMS = {
   // once until the camera zooms out again. Facts marked why explain the ecology behind what is seen (author): now of
   // the bubbles tell why something happening now happens (facts whose 'when' conditions hold), and a topic's why
   // facts come first whyFirst of the time.
-  curio: { first: 40, everyMin: 90, everyMax: 180, life: 25, r: 5, rise: 1.2, sway: 2.5, zoomFrom: 3, zoomDelay: 10, now: 0.5, whyFirst: 0.7,
+  curio: { first: 30, everyMin: 50, everyMax: 100, life: 30, r: 5, rise: 1.2, sway: 2.5, zoomFrom: 3, zoomDelay: 10, now: 0.5, whyFirst: 0.7,
            corners: [[16, 120], [164, 120], [16, 250], [164, 230]] },
   persist: { db: 'monad', every: 30, chunkRows: 1024, version: 8,
     // Catching up: the time away is lived again, exactly, up to maxAway (s); beyond it the water rests. A worker runs
@@ -1819,12 +1823,13 @@ function advancePhase(w, c, dt) {
   else if (c.theta < 0) c.theta += TAU;
 }
 
-// Chain links break slowly at random; then every cell learns the length of its chain
+// Chain links break slowly at random, and a chain is one species: a cell a mutation has carried into another
+// form lets go of its neighbours. Then every cell learns the length of its chain
 function updateChains(w, dt) {
   const cells = w.cells, p = PARAMS.chain.breakRate * dt;
   for (let i = 0; i < cells.length; i++) {
     const c = cells[i];
-    if (c.lb && w.rng.chance(p)) { c.lb.la = null; c.lb = null; }
+    if (c.lb && (w.rng.chance(p) || kindOf(c.lb) !== kindOf(c))) { c.lb.la = null; c.lb = null; }
   }
   for (let i = 0; i < cells.length; i++) {
     const c = cells[i];
@@ -2278,7 +2283,7 @@ function updateVisitors(w, dt) {
   if (prey && !fish && rng.chance(V.sunfish.rate * dt)) {
     const side = prey.x < W / 2 ? 1 : -1;   // comes in from the far side, toward its prey
     w.visitors.push({ kind: 'sunfish', id: w.nextVisitorId++, dir: -side, x: side > 0 ? W + V.sunfish.r + 12 : -V.sunfish.r - 12,
-                      y: clamp(prey.y + 25, 40, H - 70), vx: 0, vy: 0, age: 0, leaving: false });
+                      y: clamp(prey.y + 25, 40, H - 70), vx: 0, vy: 0, age: 0, leaving: false, aim: null });
   }
 
   let k = 0;
@@ -2402,17 +2407,26 @@ function moveSunfish(w, v, dt) {
   const F = PARAMS.visitors.sunfish, prey = sunfishPrey(w);
   // Leaving: rise to bask just under the surface, drifting slowly toward the edge
   let tx = v.dir > 0 ? W + F.r + 40 : -F.r - 40, ty = F.baskY;
+  let aim = null;
   if (!v.leaving && prey.length && v.age < F.stay) {
-    let best = 1e9;
-    for (const p of prey) {
-      const d = Math.abs(p.x - v.x) + Math.abs(p.y - v.y);
-      if (d < best) { best = d; tx = p.x - v.dir * F.r * 0.9; ty = p.y; }
+    // It keeps to one prey until it is eaten (switching between near ones, and aiming its mouth from whichever way it
+    // faced, once made it twist left and right), coming at it from the side it is on, facing it
+    aim = v.aim && prey.find((p) => p.v.id === v.aim.id && p.i === v.aim.i);
+    if (!aim) {
+      let best = 1e9;
+      for (const p of prey) {
+        const d = Math.abs(p.x - v.x) + Math.abs(p.y - v.y);
+        if (d < best) { best = d; aim = p; }
+      }
+      v.aim = { id: aim.v.id, i: aim.i };
     }
+    tx = aim.x + (v.x < aim.x ? -1 : 1) * F.r * 0.9; ty = aim.y;
   } else v.leaving = true;
   const dx = tx - v.x, dy = ty - v.y, d = Math.sqrt(dx * dx + dy * dy) + 1e-6, sp = v.leaving ? F.speed * F.baskSpeed : F.speed;
   v.vx += (dx / d * sp - v.vx) * F.turn * dt;
   v.vy += (dy / d * F.speed - v.vy) * F.turn * dt;
-  if (v.vx > 0.4) v.dir = 1; else if (v.vx < -0.4) v.dir = -1;
+  if (aim) { if (aim.x - v.x > F.face) v.dir = 1; else if (aim.x - v.x < -F.face) v.dir = -1; }
+  else if (v.vx > 0.4) v.dir = 1; else if (v.vx < -0.4) v.dir = -1;
   v.x += v.vx * dt;
   v.y = clamp(v.y + v.vy * dt, F.baskY, H - PARAMS.world.floor - 30);
   if (!v.leaving) {
@@ -3518,7 +3532,14 @@ function logHeard(n, at) {
   let inst = 'drone', top = 0;
   if (mix) for (const k in mix) if (mix[k] > top) { top = mix[k]; inst = k; }
   heard.notes.push({ t: at, end: at + (n.attack + n.release) * 1000, midi: n.midi, pc: n.pc,
-                     ramp: hueRamp(n.c), form: n.c.kind, inst });
+                     ramp: hueRamp(n.c), form: n.c.kind, inst, startled: n.startled });
+  if (heard.notes.length > PARAMS.notebook.music.keep) heard.notes.splice(0, heard.notes.length - PARAMS.notebook.music.keep);
+}
+// A visitor's voice, heard: inst names it (school, sunfish, salp, harp), in the visitor's colour, no form
+function logVisitor(inst, ramp, midis, delay, dur) {
+  if (!musicHeard()) return;
+  const at = performance.now() + (PARAMS.audio.lookahead + delay) * 1000;
+  for (const midi of midis) heard.notes.push({ t: at, end: at + dur * 1000, midi, pc: mod(midi, 12), ramp, form: -1, inst, startled: false });
   if (heard.notes.length > PARAMS.notebook.music.keep) heard.notes.splice(0, heard.notes.length - PARAMS.notebook.music.keep);
 }
 
@@ -3723,7 +3744,9 @@ function audioVisitors(w) {
   const school = w.visitors.find((v) => v.kind === 'sardines' && onScreen(v, 20));
   if (school && t >= visitorNext.school) {
     const S = V.school, m = w.music;
-    schoolChord([scaleNote(m, S.octave, 0), scaleNote(m, S.octave, 7), scaleNote(m, S.octave, 14)], school.x / W * 2 - 1);
+    const chord = [scaleNote(m, S.octave, 0), scaleNote(m, S.octave, 7), scaleNote(m, S.octave, 14)];
+    schoolChord(chord, school.x / W * 2 - 1);
+    logVisitor('school', LIGHTBLUE, chord, 0, S.dur);
     voiceRing(LIGHTBLUE, school.x, school.y, PARAMS.visitors.sardines.ry);
     visitorNext.school = t + S.every;
   }
@@ -3733,7 +3756,7 @@ function audioVisitors(w) {
     if (salp.id !== visitorNext.salpId) { visitorNext.salpId = salp.id; visitorNext.salpStep = 0; visitorNext.salp = t; }
     while (visitorNext.salp <= t + 0.05) {
       const k = visitorNext.salpStep % (n + Sp.rest), at = Math.max(visitorNext.salp, t) + PARAMS.audio.lookahead;
-      if (k < n && salp.alive[k]) { const q = salpBarrel(salp, k); salpNote(salpMelody(w.music, salp.id, k), at, q.x / W * 2 - 1); voiceRing(EMERALD, q.x, q.y, 3); }
+      if (k < n && salp.alive[k]) { const q = salpBarrel(salp, k); const midi = salpMelody(w.music, salp.id, k); salpNote(midi, at, q.x / W * 2 - 1); logVisitor('salp', EMERALD, [midi], at - t - PARAMS.audio.lookahead, Sp.attack + Sp.release); voiceRing(EMERALD, q.x, q.y, 3); }
       visitorNext.salpStep++;
       visitorNext.salp = Math.max(visitorNext.salp, t) + Sp.step;
     }
@@ -3748,7 +3771,11 @@ function audioVisitors(w) {
       if (last === undefined || n <= last || t < visitorNext[v.kind] || ambRng.next() > Jv.chance) return;   // only now and then (author: not on every pulse)
       const p = jellyAt(v, m), at = t + PARAMS.audio.lookahead, steps = v.kind === 'jellies' ? Jv.steps : Jv.steps.slice(0, 2 + (i % 2));
       const r = ambRng.next(), oct = Jv.octave - (r < Jv.drop[0] ? 0 : r < Jv.drop[0] + Jv.drop[1] ? 1 : 2);   // sometimes an octave or two lower
-      steps.forEach((semis, k) => harpNote(scaleNote(w.music, oct, semis), at + k * Jv.spacing * (0.85 + 0.3 * ambRng.next()), Jv, p.x / W * 2 - 1, k === steps.length - 1));
+      steps.forEach((semis, k) => {
+        const midi = scaleNote(w.music, oct, semis), dk = k * Jv.spacing * (0.85 + 0.3 * ambRng.next());
+        harpNote(midi, at + dk, Jv, p.x / W * 2 - 1, k === steps.length - 1);
+        logVisitor('harp', v.kind === 'jellies' ? (m.tint ? VIOLET : ROSE) : VIOLET, [midi], dk, Jv.decay);
+      });
       voiceRing(v.kind === 'jellies' ? (m.tint ? VIOLET : ROSE) : -1, p.x, p.y, PARAMS.visitors[v.kind].r * m.size);
       visitorNext[v.kind] = t + Jv.gap + (Jv.gapMax - Jv.gap) * ambRng.next();   // a random rest before the next
     });
@@ -3758,7 +3785,9 @@ function audioVisitors(w) {
   if (fish && t >= visitorNext.sunfish) {
     const F = V.sunfish, m = w.music;
     if (visitorNext.sunfish > 0) {
-      sunfishCall(scaleNote(m, F.octave + (fish.leaving ? 1 : 0), 0), scaleNote(m, F.octave + (fish.leaving ? 1 : 0), 7), fish.leaving ? F.baskGain : 1, fish.x / W * 2 - 1);
+      const from = scaleNote(m, F.octave + (fish.leaving ? 1 : 0), 0);
+      sunfishCall(from, scaleNote(m, F.octave + (fish.leaving ? 1 : 0), 7), fish.leaving ? F.baskGain : 1, fish.x / W * 2 - 1);
+      logVisitor('sunfish', GOLD, [from], 0, F.dur);
       voiceRing(GOLD, fish.x, fish.y, PARAMS.visitors.sunfish.r);
     }
     visitorNext.sunfish = t + F.everyMin + (F.everyMax - F.everyMin) * ambRng.next();
@@ -5423,90 +5452,133 @@ function drawSardines(v, ta) {
   }
 }
 
-// Salp chain: translucent barrels with muscle bands and a coloured gut nucleus; pellets sink from them
-// Moon jellies: a translucent bell (only its rim and a few dithered pixels drawn, so the water shows through), four
-// violet-pink gonad rings inside it, a fringe of fine tentacles at the margin and four frilly oral arms trailing below.
-// The bell squeezes narrow and tall as it pulses (the sim's pulse) and relaxes wide.
+// Moon jellies: a translucent bell (the water seen a shade brighter through it, a lit rim and sheen, faint radial
+// canals), four horseshoe gonads as soft crescents around its centre, a fringe of fine tentacles at the margin and
+// four frilly oral arms. Each is shaped its own way: lopsided, its crown off-centre, its margin rippling. The pulse
+// squeezes the bell narrow and tall, one side a moment before the other, and it relaxes wide and floppy. It leans
+// with its drift and a slow sway of its own; tentacles and arms stream behind and lag, bending most at their tips.
 function drawMoonJellies(v, ta) {
-  const J = PARAMS.visitors.jellies;
+  const J = PARAMS.visitors.jellies, L = PARAMS.look.jelly;
+  const squeeze = (f) => { const q = mod(f, 1); return q < 0.3 ? Math.sin(Math.PI * q / 0.3) : 0; };
   for (let i = 0; i < v.members.length; i++) {
     const m = v.members[i];
     if (!m.alive) continue;
-    const p = jellyAt(v, m), ph = jellyPulse(v, m), c = ph < 0.3 ? Math.sin(Math.PI * ph / 0.3) : 0;
-    const R = J.r * m.size, rx = R * (1 - 0.16 * c), ry = R * 0.55 * (1 + 0.3 * c), gon = rampBase(m.tint ? VIOLET : ROSE), h = v.id * 31 + i;
-    const margin = p.y + ry * 0.12;
-    // oral arms: four frilly ribbons trailing down from the centre
+    const p = jellyAt(v, m), ph = jellyPulse(v, m), h = v.id * 31 + i, gon = rampBase(m.tint ? VIOLET : ROSE);
+    const c = squeeze(ph), wL = 1 - 0.16 * squeeze(ph - L.lag), wR = 1 - 0.16 * squeeze(ph + L.lag);   // one side leads
+    const R = J.r * m.size, ry = R * 0.55 * (1 + 0.3 * c);
+    const lop = (hash01(h + 1) - 0.5) * 0.24, crown = (hash01(h + 2) - 0.5) * 0.3, spin = hash01(h + 3) * TAU;
+    const lean = clamp(v.vx * L.lean, -0.3, 0.3) + L.sway * (0.7 * Math.sin(ta * 0.23 + h) + 0.3 * Math.sin(ta * 0.61 + h * 1.7));
+    const ca = Math.cos(lean), sa = Math.sin(lean), drift = v.vx * L.trail;
+    const at = (U, Q) => ({ x: p.x + U * R * ca - Q * ry * sa, y: p.y + U * R * sa + Q * ry * ca });   // bell frame -> world
+    const margin = (U) => 0.2 + L.ripple * Math.sin(U * 5 + ta * 2.2 + h) * (1 - 0.5 * c);           // floppy, rippling
+    // oral arms: four frilly ribbons from under the centre, each its own length, streaming and twisting
     for (let a = 0; a < 4; a++) {
-      let x = p.x + (a - 1.5) * R * 0.12, y = margin;
-      const len = R * (1 + 0.15 * a % 2);
-      for (let s = 0; s < len; s += 0.5) {
-        const nx = p.x + (a - 1.5) * R * 0.12 * (1 + s / len) + Math.sin(ta * 0.9 + s * 0.5 + a + h) * R * 0.08, ny = margin + s;
-        worldLine(x, y, nx, ny, s % 2 < 1 ? gon + HIGHLIGHT : COL.SHAFT);
-        if (Math.floor(s * 2) % 3 === 0) put(toSX(nx + (a < 2 ? -1 : 1) * 0.6), toSY(ny), gon + BASE);   // the frills
+      const o = at((a - 1.5) * 0.09, 0.15), len = R * (0.8 + 0.5 * hash01(h * 3 + a)), side = a < 2 ? -1 : 1;
+      let x = o.x, y = o.y;
+      for (let s = 0.5; s < len; s += 0.5) {
+        const f = s / len;
+        const nx = o.x + side * R * 0.1 * f - drift * s * f + Math.sin(ta * 0.8 + s * 0.45 + a * 1.9 + h) * R * 0.1 * f;
+        const ny = o.y + s * (1 - 0.1 * f);
+        worldLine(x, y, nx, ny, mod(Math.floor(s * 2), 3) ? gon + HIGHLIGHT : COL.SHAFT);
+        const fr = Math.sin(s * 1.6 + a + ta * 0.7) * (0.5 + 0.6 * f);   // ruffles, side to side along the arm
+        if (Math.abs(fr) > 0.3) { const fx = toSX(nx + fr), fy = toSY(ny); put(fx, fy, wb(fx, fy) < 0.6 ? gon + BASE : gon + HIGHLIGHT); }
         x = nx; y = ny;
       }
     }
-    // marginal tentacles: a fringe of fine threads, waving, fading toward their tips
-    for (let k = 0; k <= 16; k++) {
-      const u = -1 + k / 8, tx = p.x + u * rx * 0.98;
-      for (let s = 0; s < R * 0.7; s += 0.5) {
-        const x = tx + Math.sin(ta * 1.3 + k + s * 0.4) * 0.6 * (s / R), y = margin + s;
-        if (wb(toSX(x), toSY(y)) < 0.7 - s / R) put(toSX(x), toSY(y), COL.SHAFT);
+    // marginal tentacles: a fringe of fine threads of uneven length, hanging, trailing and waving, fading to the tips
+    const nT = 18 + Math.floor(hash01(h + 4) * 8);
+    for (let k = 0; k <= nT; k++) {
+      const U = -1 + 2 * k / nT, o = at(U * (U < 0 ? wL : wR) * 0.97, margin(U));
+      const len = R * (0.45 + 0.4 * hash01(h * 7 + k)) * (1 - 0.25 * c);
+      for (let s = 0; s < len; s += 0.5) {
+        const f = s / len, x = o.x - drift * s * f + Math.sin(ta * 1.3 + k * 1.7 + s * 0.4) * 0.7 * f, y = o.y + s * (1 - 0.15 * f);
+        if (wb(toSX(x), toSY(y)) < 0.75 - 0.6 * f) put(toSX(x), toSY(y), COL.SHAFT);
       }
     }
-    // the bell: a dome, lit on top, the gonads glowing through it
-    fillShape(p.x, p.y, rx, ry, 0, (u, q, x, y) => {
-      if (q > 0.22) return -1;
-      const d = u * u + q * q;
-      if (d > 1) return -1;
-      if (d > 0.78) return q < -0.35 ? COL.FOAM : COL.SHAFT;                                 // the rim
-      for (const gu of [-0.55, -0.18, 0.18, 0.55]) {                                       // four gonad rings
-        const gd = Math.sqrt((u - gu) * (u - gu) * 3 + (q + 0.25) * (q + 0.25) * 4);
-        if (gd > 0.22 && gd < 0.36) return gd < 0.29 ? gon + BRIGHT : gon + HIGHLIGHT;
+    // the bell
+    fillShape(p.x, p.y, R * 1.2, ry * 1.3, lean, (u, q, x, y) => {
+      const U0 = u * 1.2, Q = q * 1.3;
+      if (Q > margin(U0)) return -1;
+      const U = U0 / (U0 < 0 ? wL : wR) - crown * Math.max(0, -Q), r = Math.sqrt(U * U + Q * Q) + 1e-6;
+      const rb = 1 + lop * U / r + L.ripple * 0.6 * Math.sin(3 * Math.atan2(Q, U) + ta * 0.9 + h);
+      if (r > rb) return -1;
+      const under = view.ibuf[y * W + x];
+      if (r > rb * 0.9) return Q < -0.35 ? COL.FOAM : wb(x, y) < 0.7 ? COL.SHAFT : LIGHT_UP[under];   // the rim
+      if (Q > margin(U0) - 0.08) return wb(x, y) < 0.5 ? COL.SHAFT : LIGHT_UP[under];                  // the margin
+      // gonads: four horseshoes in a ring around the centre, seen from the side (the near two clearer), open outward
+      for (let k = 0; k < 4; k++) {
+        const phi = spin + k * Math.PI / 2 + 0.15 * Math.sin(ta * 0.3 + k), cp = Math.cos(phi), sp = Math.sin(phi);
+        const du = U - 0.38 * cp, dq = (Q + 0.34 - 0.13 * sp) * 2, dr = Math.sqrt(du * du + dq * dq) + 1e-6;
+        const rr = 0.2 * (1 + 0.15 * Math.sin(Math.atan2(dq, du) * 2 + k + h)), band = Math.abs(dr - rr);
+        if (band > 0.07 || (du * cp + dq * sp) / dr > 0.55) continue;
+        if (sp > 0) return band < 0.035 ? gon + BRIGHT : wb(x, y) < 0.6 ? gon + HIGHLIGHT : LIGHT_UP[under];
+        return wb(x, y) < 0.5 ? gon + BASE : LIGHT_UP[under];
       }
-      if (q < -0.6 && u < 0) return wb(x, y) < 0.5 ? COL.GLOW : -1;                        // a sheen on top
-      return wb(x, y) < 0.16 ? COL.SHAFT : -1;                                             // clear jelly
+      if (r > rb * 0.72 && r < rb * 0.82 && U < -0.1 && Q < -0.3) return wb(x, y) < 0.5 ? LIGHT_UP[LIGHT_UP[under]] : LIGHT_UP[under];   // a sheen
+      if (Q < 0) {   // radial canals: meridians running from the crown to the margin
+        const cl = Math.sqrt(Math.max(1e-3, 1 - Q * Q / (rb * rb))), sl = U / (rb * cl);
+        if (Math.abs(sl) < 1) {
+          const g = mod(Math.asin(sl) + spin, Math.PI / 8);
+          if (Math.min(g, Math.PI / 8 - g) < 0.05 / cl && wb(x, y) < 0.6) return LIGHT_UP[under];
+        }
+      }
+      return wb(x, y) < 0.18 + 0.3 * Math.max(0, -Q - 0.2) ? LIGHT_UP[under] : -1;   // clear jelly, thickest at the crown
     });
   }
 }
 
-// Comb jellies: a small clear oval with eight comb rows whose beating plates split the light into travelling rainbow
-// waves (not bioluminescence: diffraction), and two long tentacles trailing behind with fine side branches
+// Comb jellies: a clear egg, leaning mouth-first into its drift and breathing a little, with eight comb rows whose
+// beating plates split the light into travelling rainbow waves (not bioluminescence: diffraction) as it slowly rolls,
+// a bright statocyst at the top, a faint gut, and two long tentacles streaming behind from their pockets
 function drawCombJellies(v, ta) {
-  const J = PARAMS.visitors.combs;
+  const J = PARAMS.visitors.combs, L = PARAMS.look.jelly;
   for (let i = 0; i < v.members.length; i++) {
     const m = v.members[i];
     if (!m.alive) continue;
-    const p = jellyAt(v, m), R = J.r * m.size, rx = R * 0.72, ry = R, h = v.id * 17 + i, back = -v.dir;
-    // tentacles: two long lines trailing behind, with side branches, swaying
+    const p = jellyAt(v, m), R = J.r * m.size, h = v.id * 17 + i, back = -v.dir;
+    const breathe = 1 + L.squish * Math.sin(ta * 1.1 + h), rx = R * 0.72 * breathe, ry = R / breathe;
+    const lean = -v.dir * L.combLean + L.sway * (0.7 * Math.sin(ta * 0.31 + h) + 0.3 * Math.sin(ta * 0.73 + h * 1.3));
+    const ca = Math.cos(lean), sa = Math.sin(lean), roll = ta * 0.15 + hash01(h + 1) * TAU, egg = 0.1 + 0.08 * hash01(h + 2);
+    const at = (U, Q) => ({ x: p.x + U * rx * ca - Q * ry * sa, y: p.y + U * rx * sa + Q * ry * ca });
+    // tentacles: from two pockets either side, streaming behind with fine side branches, swaying
     for (const side of [-1, 1]) {
-      let x = p.x + side * rx * 0.6, y = p.y + ry * 0.1;
-      for (let s = 0; s < R * 3.2; s += 0.6) {
-        const nx = p.x + side * rx * 0.6 + back * s, ny = p.y + ry * 0.1 + s * 0.35 + Math.sin(ta * 0.8 + s * 0.35 + h + side) * 1.2;
-        if (wb(toSX(nx), toSY(ny)) < 0.8 - s / (R * 4)) worldLine(x, y, nx, ny, COL.SHAFT);
+      const o = at(side * 0.5, -0.1), len = R * (2.6 + hash01(h * 5 + side + 1));
+      let x = o.x, y = o.y;
+      for (let s = 0.6; s < len; s += 0.6) {
+        const f = s / len, nx = o.x + back * s + side * 1.5 * f + Math.sin(ta * 0.8 + s * 0.35 + h + side) * 1.2 * f;
+        const ny = o.y + s * 0.35 + Math.sin(ta * 0.5 + s * 0.2 + side * 2) * 1.5 * f;
+        if (wb(toSX(nx), toSY(ny)) < 0.8 - f * 0.7) worldLine(x, y, nx, ny, COL.SHAFT);
         if (Math.floor(s / 0.6) % 3 === 0) put(toSX(nx), toSY(ny + 0.9), COL.SLATE);   // side branches
         x = nx; y = ny;
       }
     }
-    // the body: clear, its rim faint
-    fillShape(p.x, p.y, rx, ry, 0, (u, q, x, y) => {
-      const d = u * u + q * q;
-      if (d > 1) return -1;
-      if (d > 0.82) return q < -0.3 ? COL.FOAM : COL.SHAFT;
-      return wb(x, y) < 0.12 ? COL.SHAFT : -1;
+    // the body: an egg, wider toward the mouth, its outline wobbling; the water seen through it
+    fillShape(p.x, p.y, rx * 1.15, ry * 1.1, lean, (u, q, x, y) => {
+      const U = u * 1.15, Q = q * 1.1, Ue = U / (1 + egg * Q), r = Math.sqrt(Ue * Ue + Q * Q) + 1e-6;
+      const rb = 1 + 0.04 * Math.sin(3 * Math.atan2(Q, Ue) + ta * 1.3 + h);
+      if (r > rb) return -1;
+      const under = view.ibuf[y * W + x];
+      if (r > rb * 0.86) return Q < -0.3 ? COL.FOAM : wb(x, y) < 0.7 ? COL.SHAFT : LIGHT_UP[under];
+      if (Q < -0.82 && Math.abs(Ue) < 0.12) return COL.GLOW;                                          // statocyst
+      if (Math.abs(Ue) < 0.06 && Q > -0.3 && wb(x, y) < 0.5) return COL.SHAFT;                         // gut
+      const pk = (Math.abs(Ue) - 0.45) * 3, pq = (Q + 0.1) * 2;
+      if (pk * pk + pq * pq < 0.12 && wb(x, y) < 0.5) return COL.SHAFT;                                // tentacle pockets
+      return wb(x, y) < 0.15 ? LIGHT_UP[under] : -1;
     });
-    // comb rows: rainbow waves travelling along them
-    for (let row = 0; row < 5; row++) {
-      const u = -0.8 + row * 0.4;
+    // comb rows: eight meridians, the near ones seen, rainbow waves running along them as it rolls
+    for (let row = 0; row < 8; row++) {
+      const lam = roll + row * Math.PI / 4, sl = Math.sin(lam);
+      if (Math.cos(lam) < 0.15) continue;   // on the far side
       for (let t = -0.85; t <= 0.85; t += Math.min(0.12, 0.8 / (ry * cam.zoom))) {   // a pixel apart however close the camera
-        const x = p.x + u * rx * Math.sqrt(1 - t * t), y = p.y + t * ry, wave = Math.floor(t * 7.5 - ta * 6 + row * 1.5);
+        const q = at(sl * 0.92 * Math.sqrt(1 - t * t) * (1 + egg * t), t), wave = Math.floor(t * 7.5 - ta * 6 + row * 1.5);
         if (wave % 3 === 0) continue;
-        put(toSX(x), toSY(y), IRID_SET[mod(wave + row * 2 + h, IRID_SET.length)]);
+        put(toSX(q.x), toSY(q.y), IRID_SET[mod(wave + row * 2 + h, IRID_SET.length)]);
       }
     }
   }
 }
 
+// Salp chain: translucent barrels with muscle bands and a coloured gut nucleus; pellets sink from them
 function drawSalps(v, ta) {
   const L = PARAMS.look.salp, gold = rampBase(GOLD);
   for (let b = 0; b < v.alive.length; b++) {
@@ -6078,7 +6150,18 @@ function drawHud(w, now) {
       }
     }
     if (catchup.rested > 0) drawText(Hd.x, Hd.y - Hd.line * 3, 'RESTED ' + duration(catchup.rested), rampBase(ROSE) + HIGHLIGHT, vis);
-    drawText(Hd.x + B.w + 6, by - 1, catchup.skip ? 'SKIPPING' : 'TAP TO SKIP', COL.FOAM, vis);
+    if (catchup.skip) drawText(Hd.x + B.w + 6, by - 1, 'SKIPPING', COL.FOAM, vis);
+    else {   // a framed SKIP button, so the tap that starts the sound doesn't also skip
+      const r = skipButton();
+      for (let x = r.x; x < r.x + r.w; x++) {
+        for (let y = r.y; y < r.y + r.h; y++) {
+          const edge = x === r.x || y === r.y || x === r.x + r.w - 1 || y === r.y + r.h - 1;
+          if (edge && (x === r.x || x === r.x + r.w - 1) && (y === r.y || y === r.y + r.h - 1)) continue;   // rounded corners
+          put(x, y, edge ? COL.FOAM : COL.WATER);
+        }
+      }
+      drawText(r.x + 4, r.y + 3, 'SKIP >', COL.FOAM, 1);
+    }
   }
   drawText(Hd.x, Hd.y, 'SEED ' + seedLabel, COL.FOAM, vis);
   drawText(Hd.x, Hd.y + Hd.line, 'T ' + clock(w.tick * TICK_DT), COL.FOAM, vis);
@@ -6108,6 +6191,15 @@ function onNewWater(p) {
   const Hd = PARAMS.hud, y = Hd.y + Hd.line * 3;
   return !!keeper.db && world.extinctTick >= 0 && (world.tick - world.extinctTick) * TICK_DT >= Hd.epitaphFade &&
     p.x < Hd.x + 92 && p.y >= y - 4 && p.y < y + 9;
+}
+// The recap's SKIP button, right of the progress bar
+function skipButton() {
+  const Hd = PARAMS.hud, S = Hd.skip;
+  return { x: Hd.x + Hd.bar.w + 5, y: Hd.y - Hd.line * 2 - 3, w: S.w, h: S.h };
+}
+function onSkipButton(p) {
+  const r = skipButton(), m = PARAMS.hud.skip.reach;
+  return p.x >= r.x - m && p.x < r.x + r.w + m && p.y >= r.y - m && p.y < r.y + r.h + m;
 }
 const onMusicGlyph = (p) => p.x >= PARAMS.hud.music.x - 3 && p.x < PARAMS.hud.music.x + 8 && p.y >= PARAMS.hud.music.y - 4 && p.y < PARAMS.hud.music.y + 11;
 
@@ -7538,6 +7630,9 @@ function drawNewWater(y) {
 // heard log, page side): with the music off the pages stay drawn, but empty. ----
 const INSTRUMENTS = [['piano', 'FELT PIANO'], ['pad', 'PAD'], ['wood', 'MARIMBA'], ['string', 'PLUCKED STRING'], ['glock', 'GLOCKENSPIEL'],
   ['vibe', 'VIBRAPHONE'], ['celesta', 'CELESTA'], ['kalimba', 'KALIMBA'], ['drone', 'DRONE (ELDERS)']];
+// The visitors' voices (author: predators belong beside the instruments): sardines' chord, the sunfish's call, the
+// salps' line, the jellies' harp
+const VISITOR_VOICES = [['school', 'SARDINES', LIGHTBLUE], ['sunfish', 'SUNFISH', GOLD], ['salp', 'SALPS', EMERALD], ['harp', 'JELLY HARP', ROSE]];
 const MUSIC_FROM = 7;                             // the chapter's first page
 const musicHeard = () => audio.started && !audio.muted;
 // A dotted line between two page points
@@ -7587,7 +7682,8 @@ function drawMusicPage(w, y) {
 
   // The voices in use (of the budget's 16) and the onsets heard in the last 10 s
   let vy = ccy + R + 13;
-  const sounding = heard.notes.filter((n) => n.t <= now && now < n.end).length, recent = heard.notes.filter((n) => n.t <= now && now - n.t < 10000).length;
+  const cellNotes = heard.notes.filter((n) => n.form >= 0);   // the visitors' voices are outside the budget
+  const sounding = cellNotes.filter((n) => n.t <= now && now < n.end).length, recent = cellNotes.filter((n) => n.t <= now && now - n.t < 10000).length;
   ink(P.x + 6, vy, 'VOICES', COL.SHAFT);
   for (let i = 0; i < PARAMS.voices.max; i++) {
     const vx = P.x + 34 + i * 5, lit = i < sounding;
@@ -7605,7 +7701,8 @@ function drawMusicPage(w, y) {
   for (const n of heard.notes) {
     if (n.t <= since || n.t > now) continue;
     count[n.inst] = (count[n.inst] || 0) + 1;
-    (forms[n.inst] = forms[n.inst] || new Array(FORMS.length).fill(0))[n.form]++;
+    if (n.form >= 0) (forms[n.inst] = forms[n.inst] || new Array(FORMS.length).fill(0))[n.form]++;
+    if (n.startled) { count.startled = (count.startled || 0) + 1; (forms.startled = forms.startled || new Array(FORMS.length).fill(0))[n.form]++; }
     total++;
   }
   for (const [k, name] of INSTRUMENTS) {
@@ -7614,8 +7711,24 @@ function drawMusicPage(w, y) {
     if (forms[k]) forms[k].map((v, f) => [v, f]).filter(([v]) => v).sort((a, b) => b[0] - a[0]).slice(0, 3)
       .forEach(([, f], i) => drawIcon(P.x + 66 + i * 9, vy - 1, f, !lit));
     bar(P.x + 96, vy + 1, x1 - 7 - (P.x + 96), total ? c / total : 0, GOLD);
-    vy += 9;
+    vy += 8;
   }
+  // The visitors' own voices, in their colours, and the prey they startle (startle notes, also counted above)
+  dotted(P.x + 6, x1 - 7, vy, COL.SLATE);
+  vy += 5;
+  VISITOR_VOICES.forEach(([k, name, ramp], i) => {
+    const x = P.x + 6 + (i % 2) * 79, yy = vy + (i >> 1) * 8, c = count[k] || 0;
+    const lit = heard.notes.some((n) => n.inst === k && n.t <= now && now < n.end);
+    ink(x, yy, name, lit ? rampBase(ramp) + BRIGHT : c ? rampBase(ramp) + HIGHLIGHT : COL.SLATE);
+    bar(x + 44, yy + 1, 30, total ? c / total : 0, ramp);
+  });
+  vy += 17;
+  const st = count.startled || 0, stLit = heard.notes.some((n) => n.startled && n.t <= now && now < n.end);
+  ink(P.x + 6, vy, 'STARTLED', stLit ? COL.FOAM : st ? COL.SHAFT : COL.SLATE);
+  if (forms.startled) forms.startled.map((v, f) => [v, f]).filter(([v]) => v).sort((a, b) => b[0] - a[0]).slice(0, 3)
+    .forEach(([, f], i) => drawIcon(P.x + 66 + i * 9, vy - 1, f, !stLit));
+  bar(P.x + 96, vy + 1, x1 - 7 - (P.x + 96), total ? st / total : 0, ROSE);
+  vy += 9;
   dotted(P.x + 6, x1 - 7, vy, COL.SLATE);
   drawSpectrum(vy + 5, PAGE_END() - vy - 22);
   if (!musicHeard()) musicSilence(ccy - 2);
@@ -7747,7 +7860,10 @@ function setupInput() {
     const d = input.down;
     const p = input.pointers.get(e.pointerId) || d;
     const tapped = d && d.id === e.pointerId && d.moved <= PARAMS.touch.tapMove && performance.now() - d.t < PARAMS.touch.tapMs;
-    if (tapped && catchup.phase && !catchup.bench && !notebook.open) { skipCatchup(); input.down = null; }   // the recap: a tap skips it
+    if (tapped && catchup.phase && !catchup.bench && !notebook.open) {   // the recap: only its button skips it, other taps only wake the sound
+      if (onSkipButton(p)) skipCatchup();
+      input.down = null;
+    }
     else if (tapped && onNewWater(p) && !notebook.open) { seedNewWater(); input.down = null; }
     else if (tapped && onMusicGlyph(p) && (d.hud > 0 || notebook.open)) { setMuted(!audio.muted); input.down = null; }   // the music button
     else if (d && d.id === e.pointerId && notebook.open) { notebookRelease(d, p); input.down = null; }
@@ -7767,7 +7883,7 @@ function setupInput() {
     input.pointers.delete(e.pointerId);
     if (input.pointers.size < 2) input.pinch = null;
   };
-  el.addEventListener('pointerup', (e) => { startAudio(); release(e); });
+  el.addEventListener('pointerup', (e) => { startAudio(); keepAwake(); release(e); });
   el.addEventListener('pointercancel', release);
 
   el.addEventListener('wheel', (e) => {
@@ -8138,9 +8254,21 @@ function resumeAfterGap() {
   if (gap > PARAMS.persist.gap) catchUp(gap);
 }
 
+// Keep the screen on while the water is in view, as a game or a video does (the system lets go when it is hidden)
+const wakeLock = { lock: null, asking: false };
+function keepAwake() {
+  if (wakeLock.lock || wakeLock.asking || document.hidden || !navigator.wakeLock) return;
+  wakeLock.asking = true;
+  navigator.wakeLock.request('screen').then((l) => {
+    wakeLock.lock = l;
+    l.addEventListener('release', () => { wakeLock.lock = null; });
+  }).catch(() => { /* refused (battery saver, no gesture yet): the next tap asks again */ }).finally(() => { wakeLock.asking = false; });
+}
+
 function onVisibility() {
   lastTime = 0;
   if (!document.hidden) {
+    keepAwake();
     if (audio.ctx && audio.ctx.state !== 'running' && audio.started) audio.ctx.resume();
     resumeAfterGap();
     return;
@@ -8240,6 +8368,7 @@ async function init() {
     window.addEventListener('pagehide', saveWorld);
   }
   document.addEventListener('visibilitychange', onVisibility);
+  keepAwake();
   lastLive = Date.now();
   if ('serviceWorker' in navigator && window.isSecureContext && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
   debug.on = opts.debug;

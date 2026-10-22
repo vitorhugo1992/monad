@@ -80,8 +80,7 @@ register (the surface sings high, the deep sings low), and a strict voice budget
 expected. The oldest cells living in the deep become elders that drone, and the oldest elder holds the key;
 when it dies, the whole water may modulate.
 
-The author studies phytoplankton, so the biology is meant to carry weight: size allometry, Margalef's mandala
-(turbulence against dinoflagellates), a lagged grazer response, the biological pump, resting cysts, diel
+The biology is meant to carry weight: size allometry, Margalef's mandala, a lagged grazer response, the biological pump, resting cysts, diel
 vertical migration, silica limitation, viral lysis and the viral shunt, kleptoplasty, a seed bank of
 newcomers, nitrogen fixation, stratification and tidal mixing, and hypoxia.
 

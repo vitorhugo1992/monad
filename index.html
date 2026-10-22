@@ -36,10 +36,21 @@ const PARAMS = {
   light: { surface: 1.0, atten: 4.0, shade: 0.06 },  // e-folding depth = a quarter of the column
   // shade (approved local rule, self-shading): light below also fades by e^(-shade x living biomass above it in the
   // column), cells and cyanobacteria, so a dense surface bloom dims the water beneath it and limits its own depth
-  // Diel cycle. Phase 0 is sunrise; the sun is up for dayFrac of the cycle, light = sqrt(sin) (sharp twilights).
-  // ?day=5|10|30 picks the day length in minutes.
+  // Diel cycle. Phase 0 is sunrise; the sun is up for the day's share of the cycle (it follows the season), light =
+  // sqrt(sin) (sharp twilights). ?day=5|10|30 picks the day length in minutes.
   // At night cells rest (circadian clock): upkeep and ageing slow to `rest` as the sun goes down.
-  diel: { dayLength: 300, dayMinutes: [5, 10, 30], start: 0.08, dayFrac: 0.65, moon: 1e-6, rest: 0.12 },   // moon: half-moon light, a millionth of noon (Gaston et al. 2013): too faint to grow on
+  diel: { dayLength: 300, dayMinutes: [5, 10, 30], start: 0.08, moon: 1e-6, rest: 0.12 },   // moon: half-moon light, a millionth of noon (Gaston et al. 2013): too faint to grow on
+  // Seasons (approved local rules, author, 2026-10-22): a true year of yearDays game days (~30 real hours at 5-min
+  // days; the moon and the tides keep their true periods). The setting is a warm-temperate shelf sea at ~30 N. Each
+  // part follows the day of the year (day 0 = 1 January; the summer solstice on day solstice): daylight lasts
+  // dayHours[0] h at the winter solstice to dayHours[1] h at the summer one; the winter noon sun has sun of its summer
+  // strength; the surface gives its heat to the air, from air[0] to air[1] degrees, coldest lag days after the winter
+  // solstice (the sea's thermal lag); the wind's targets are r^calm, calm from calm[0] (the winter monsoon: stormier)
+  // to calm[1] (summer: calmer, storms rarer), following the air; storm runoff is rain[0]..rain[1] times as likely,
+  // wettest on rainDay (the summer flood season). A world starts on a day set by its seed; ?season= picks the middle
+  // of a season (starts), and a world saved before the seasons wakes on day old (midsummer), as it had been summer.
+  season: { yearDays: 365, solstice: 172, dayHours: [10.3, 14.0], sun: 0.55, air: [7, 18], lag: 42, calm: [0.9, 1.5],
+            rain: [0.3, 1.7], rainDay: 190, starts: { winter: 15, spring: 105, summer: 197, autumn: 288 }, old: 197 },
   // Wind: a slow seeded weather process. Its target changes at random intervals (calm spells common,
   // storms rarer) and the wind eases toward it. It roughens the water and drives upwelling.
   wind: { tau: 40, gapMin: 60, gapMax: 180, start: 0.2 },
@@ -99,7 +110,9 @@ const PARAMS = {
   // the surface row loses heat toward the air (cool per s, faster in wind: windCool), deep water is cold (deep; the
   // bottom layer is renewed by cold shelf water: vent per s at the floor, fading upward like the tide's stirring; the
   // seabed itself takes no heat). Heat diffuses slowly (diffusion, nodes^2/s): left alone the water stratifies.
-  // Growth speeds up when warm: x q10^((T - ref)/10) for cells (q10) and cyanobacteria (cyanoQ10).
+  // Growth speeds up when warm: x q10^((T - ref)/10) for cells (q10) and cyanobacteria (cyanoQ10). The air the surface
+  // gives its heat to follows the season (season.air); air here is only oxygen's reference (1 = saturated at air
+  // degrees). surface: the surface's warmth at birth at the height of summer (a world born colder starts colder).
   temperature: { deep: 10, surface: 19, air: 15, heat: 0.026, cool: 0.001, windCool: 0.015, ref: 18, q10: 1.6, cyanoQ10: 2.2, diffusion: 0.008, vent: 0.002 },
   // Vertical mixing (approved local rules), nodes^2/s: base everywhere; the wind's stirring (at full wind, squared)
   // fading with depth over depth of the column; and the tide's over the seabed (author: tidal stirring makes a bottom
@@ -127,7 +140,7 @@ const PARAMS = {
   // stratifies the column as warm over cold does, and the two resist mixing together.
   salinity: { shelf: 35, fresh: 200, exchange: 0.0008, haline: 3.8 },
   // Storm runoff (approved local rule): rain on the land washes nutrients and silt into the sea. During a storm (wind
-  // above storm), now and then (rate per s at full storm, at least refractory s apart) a lens of muddy fresh water
+  // above storm), now and then (rate per s at full storm, times the season's rain, at least refractory s apart) a lens of muddy fresh water
   // spreads from the coast across the surface (speed units/s, depth units thick), releasing amount nutrients (and
   // silica x that) along its way, counted as imported, with silt: silt shades the water below (siltShade per unit),
   // sinks (siltSink units/s) and settles out (siltTau s). It rains while the lens spreads.
@@ -565,6 +578,7 @@ const PARAMS = {
   // Palette keyframes over the diel phase (0 = sunrise), crossfaded by dithering
   timeOfDay: {
     keys: [[0, 'dawn'], [0.1, 'day'], [0.5, 'day'], [0.6, 'evening'], [0.69, 'night'], [0.93, 'night'], [1, 'dawn']],
+    keysDay: 0.65,                      // the keys are placed for a sun up 0.65 of the cycle; other days stretch them
     moonLight: 0.3,                     // rays and caustics at night, as a fraction of noon
   },
   plume: { specks: 46, sediment: 0.4 }, // resuspended specks rising in a nutrient pulse
@@ -662,7 +676,7 @@ const PARAMS = {
   // px/s. The facts live in facts.json (sourced; updated by reviewed pushes) and are cached offline.
   curio: { first: 40, everyMin: 90, everyMax: 180, life: 25, r: 5, rise: 1.2, sway: 2.5,
            corners: [[16, 120], [164, 120], [16, 250], [164, 230]] },
-  persist: { db: 'monad', every: 30, chunkRows: 1024, version: 7,
+  persist: { db: 'monad', every: 30, chunkRows: 1024, version: 8,
     // Catching up: the time away is lived again, exactly, up to maxAway (s); beyond it the water rests. A worker runs
     // it out of sight and shows a frame every show s (a silent time-lapse); the last tail simulated s play on the page,
     // from tailSpeed x slowing to real time, so the recap glides into the live world. bench: s measured by ?bench.
@@ -858,7 +872,8 @@ for (const name of Object.keys(TIME_PALETTES)) {
 const KINDS = 9;   // green algae, the four dinoflagellate forms, centric and pennate diatoms, coccolithophores, cryptophytes
 const GRID_W = W / PARAMS.grid.cols, GRID_H = H / PARAMS.grid.rows;
 
-function createFields() {
+// warm: how far into summer the world is born (0 the coldest day, 1 the warmest), for the surface's starting warmth
+function createFields(warm = 1) {
   const { cols, rows } = PARAMS.grid, N = PARAMS.nutrients, n = cols * rows;
   const f = {
     light: new Float64Array(n), profile: new Float64Array(rows), nut: new Float64Array(n), scratch: new Float64Array(n),
@@ -873,7 +888,7 @@ function createFields() {
     det: new Float64Array(n), sed: new Float64Array(cols), silt: new Float64Array(n),   // marine snow; the floor deposit per column; runoff silt
     warm: new Float64Array(n), warmCy: new Float64Array(n), warmSnow: new Float64Array(n),   // warmth factors for cells, cyanobacteria, rotting
   };
-  const Si = PARAMS.silica, T = PARAMS.temperature, O = PARAMS.oxygen;
+  const Si = PARAMS.silica, T = PARAMS.temperature, O = PARAMS.oxygen, top = T.deep + (T.surface - T.deep) * warm;
   for (let j = 0; j < rows; j++) {
     const depth = (j + 0.5) / rows, cline = smoothstep(N.clineTop, N.clineBottom, depth);
     f.profile[j] = PARAMS.light.surface * dexp(-PARAMS.light.atten * depth);
@@ -882,7 +897,7 @@ function createFields() {
     for (let i = 0; i < cols; i++) {
       const k = j * cols + i;
       f.nut[k] = nut; f.si[k] = si;
-      f.temp[k] = T.surface + (T.deep - T.surface) * cline;
+      f.temp[k] = top + (T.deep - top) * cline;
       f.o2[k] = 1 + (O.deep - 1) * cline;
     }
   }
@@ -901,17 +916,44 @@ function updateWarmth(f) {
   }
 }
 
-// Surface light over the diel cycle (phase 0 = sunrise): sqrt of a half sine, then moonlight by the moon's lit share
-// (half lit gives diel.moon, a full moon 1.8 times that, a new moon a fifth)
-function surfaceLightAt(phase, lit = 0.5) {
-  const D = PARAMS.diel, moon = D.moon * (0.2 + 1.6 * lit);
-  if (phase >= D.dayFrac) return moon;
-  return moon + (1 - moon) * Math.sqrt(dsin(Math.PI * phase / D.dayFrac));
+// Surface light over the diel cycle (phase 0 = sunrise): sqrt of a half sine up to the noon sun's strength while the
+// sun is up (frac of the cycle), then moonlight by the moon's lit share (half lit gives diel.moon, a full moon 1.8
+// times that, a new moon a fifth)
+function surfaceLightAt(phase, lit, frac, sun) {
+  const moon = PARAMS.diel.moon * (0.2 + 1.6 * lit);
+  if (phase >= frac) return moon;
+  return moon + (sun - moon) * Math.sqrt(dsin(Math.PI * phase / frac));
 }
 
 function dayPhase(w) {
   const p = w.tick * TICK_DT / w.dayLength + PARAMS.diel.start;
   return p - Math.floor(p);
+}
+
+// The day of the year, 0..yearDays (0 = 1 January), from the world's age and the day it was born on
+function yearDay(w) {
+  const Y = PARAMS.season.yearDays, d = w.tick * TICK_DT / w.dayLength + PARAMS.diel.start + w.yearStart;
+  return d - Math.floor(d / Y) * Y;
+}
+// The day a seed starts its world on (golden-ratio-like spread over the year)
+const seedYearStart = (seed) => { const p = seed * 0.7548776662466927; return Math.floor((p - Math.floor(p)) * PARAMS.season.yearDays); };
+// Its season, by months as the northern shelf has them: winter (Dec-Feb), spring, summer, autumn
+const SEASONS = ['WINTER', 'SPRING', 'SUMMER', 'AUTUMN'];
+const seasonOf = (day) => Math.floor((day + 31) % PARAMS.season.yearDays / (PARAMS.season.yearDays / 4));
+// 0..1 between the year's extremes: 0 on day low, 1 half a year later
+function yearWave(day, low) {
+  return 0.5 - 0.5 * dsin(TAU * (day - low) / PARAMS.season.yearDays + Math.PI / 2);
+}
+const seasonSun = (day) => yearWave(day, PARAMS.season.solstice - PARAMS.season.yearDays / 2);   // 0 at the winter solstice
+const seasonWarmth = (day) => yearWave(day, PARAMS.season.solstice - PARAMS.season.yearDays / 2 + PARAMS.season.lag);   // 0 on the coldest day
+// The season now (local rules: day length, the noon sun, the air, the wind's calm, the rain), every tick
+function updateSeason(w) {
+  const S = PARAMS.season, d = yearDay(w), sunny = seasonSun(d), warm = seasonWarmth(d);
+  w.dayFrac = (S.dayHours[0] + (S.dayHours[1] - S.dayHours[0]) * sunny) / 24;
+  w.sun = S.sun + (1 - S.sun) * sunny;
+  w.air = S.air[0] + (S.air[1] - S.air[0]) * warm;
+  w.calm = S.calm[0] + (S.calm[1] - S.calm[0]) * warm;
+  w.rain = S.rain[0] + (S.rain[1] - S.rain[0]) * yearWave(d, S.rainDay - S.yearDays / 2);
 }
 
 // e^-x for x >= 0 from a table (dexp at every 1/64, read linearly; under 0.003% off): the light field needs one per node
@@ -1343,11 +1385,13 @@ function buildHash(w) {
   for (let m = 0; m < n; m++) hs.items[hs.fill[keys[m]]++] = cells[m];
 }
 
-function createWorld(seed, founderCount, dayLength) {
+// yearStart: the day of the year the world is born on (by default its seed's)
+function createWorld(seed, founderCount, dayLength, yearStart = seedYearStart(seed)) {
   const F = PARAMS.founders, rng = makeRng(seed);
   const w = {
-    seed, rng, tick: 0, nextId: 1, fields: createFields(), cells: [], cysts: [], hash: createHash(), upwelled: 0, initialInventory: 0,
+    seed, rng, tick: 0, nextId: 1, fields: createFields(seasonWarmth(yearStart + PARAMS.diel.start)), cells: [], cysts: [], hash: createHash(), upwelled: 0, initialInventory: 0,
     dayLength: dayLength || PARAMS.diel.dayLength, surfaceLight: 1,
+    yearStart, dayFrac: 0.5, sun: 1, air: 15, calm: 1.5, rain: 1,   // the season now (see updateSeason)
     pulses: [], lastPulse: -1e9,
     wind: PARAMS.wind.start, windTarget: PARAMS.wind.start, nextWind: 0,
     fallen: new Float64Array(PARAMS.grid.cols),   // detritus exported per column, ever (observed only, never read by the rules)
@@ -1364,7 +1408,8 @@ function createWorld(seed, founderCount, dayLength) {
     music: createMusic(seed),                       // harmonic field and voice budget; never feeds back into the biology
   };
   w.nextWind = Math.floor(rng.range(PARAMS.wind.gapMin, PARAMS.wind.gapMax) * PARAMS.time.tickRate);
-  w.surfaceLight = surfaceLightAt(dayPhase(w), moonLit(moonPhase(w)));
+  updateSeason(w);
+  w.surfaceLight = surfaceLightAt(dayPhase(w), moonLit(moonPhase(w)), w.dayFrac, w.sun);
   updateLight(w);
   const count = founderCount || F.count;
   for (let l = 0; l < F.lineages; l++) {
@@ -1484,7 +1529,8 @@ function stepWorld(w) {
   w.tick++;
   // The slow water steps every slowEvery ticks with a step that much longer, its parts staggered over the ticks
   const SE = PARAMS.time.slowEvery, phase = w.tick % SE, sdt = dt * SE;
-  w.surfaceLight = surfaceLightAt(dayPhase(w), moonLit(moonPhase(w)));
+  updateSeason(w);
+  w.surfaceLight = surfaceLightAt(dayPhase(w), moonLit(moonPhase(w)), w.dayFrac, w.sun);
   if (phase === 0) {
     updateLight(w);
     w.upwelled += diffuseNutrients(w.fields, sdt);
@@ -1772,12 +1818,13 @@ function syncStats(w) {
 }
 
 // Weather: the wind eases toward a target that changes at random intervals.
-// Targets are r^1.5 of a uniform draw, so calm spells are common and storms rarer.
+// Targets are r^calm of a uniform draw, so calm spells are common and storms rarer; calm follows the season (the
+// winter monsoon blows harder, summer is calmer).
 function updateWind(w, dt) {
   const Wd = PARAMS.wind, rng = w.rng;
   if (w.tick >= w.nextWind) {
     const r = rng.next();
-    w.windTarget = r * Math.sqrt(r);
+    w.windTarget = r > 0 ? dexp(w.calm * dlog(r)) : 0;
     w.nextWind = w.tick + Math.floor(rng.range(Wd.gapMin, Wd.gapMax) * PARAMS.time.tickRate);
   }
   w.wind += (w.windTarget - w.wind) * dt / Wd.tau;
@@ -1949,7 +1996,7 @@ function updateTemperature(w, dt) {
   const T = PARAMS.temperature, f = w.fields, cols = PARAMS.grid.cols, t = f.temp, k = T.diffusion * dt;
   for (let i = 0; i < t.length; i++) t[i] += T.heat * f.light[i] * f.profile[(i / cols) | 0] * dt;   // most of the heat stays in the top few metres
   const loss = (T.cool + T.windCool * w.wind) * dt;
-  for (let i = 0; i < cols; i++) t[i] += (T.air - t[i]) * loss;
+  for (let i = 0; i < cols; i++) t[i] += (w.air - t[i]) * loss;   // the air follows the season
   diffuseGrid(t, f.cyScratch, k, 0, 0); t.set(f.cyScratch);
   renewBottom(t, T.deep, T.vent * dt);
   mixColumn(t, 1);
@@ -2017,7 +2064,7 @@ function marineSnow(w, dt) {
 function updateRunoff(w, dt) {
   const Ro = PARAMS.runoff, rng = w.rng, f = w.fields;
   if (w.wind > Ro.storm && w.tick - w.lastRunoff > Ro.refractory * PARAMS.time.tickRate
-      && rng.chance(Ro.rate * (w.wind - Ro.storm) / (1 - Ro.storm) * dt)) {
+      && rng.chance(Ro.rate * w.rain * (w.wind - Ro.storm) / (1 - Ro.storm) * dt)) {   // rain: the wet season's
     w.lastRunoff = w.tick;
     const fromLeft = (w.seed & 1) === 0;   // the coast lies on one side, fixed by the seed
     w.runoffs.push({ x: fromLeft ? 0 : W, dir: fromLeft ? 1 : -1, age: 0 });
@@ -3077,13 +3124,19 @@ function reshape(w) {
 // The world, its fields and its music are copied onto a fresh world's own objects: their usual shapes, and any
 // field a newer version added keeps the value a fresh world starts with
 function restoreWorld(snap) {
-  const w = decodeSnap(snap.world), fresh = createWorld(w.seed, 1, w.dayLength);
+  const w = decodeSnap(snap.world);
+  if (w.yearStart === undefined) {   // saved before the seasons (v7 and older): it wakes in midsummer, as it had always been summer
+    const Y = PARAMS.season.yearDays, d = PARAMS.season.old - (w.tick * TICK_DT / w.dayLength + PARAMS.diel.start);
+    w.yearStart = d - Math.floor(d / Y) * Y;
+  }
+  const fresh = createWorld(w.seed, 1, w.dayLength, w.yearStart);
   reshape(w);
   const fields = Object.assign(fresh.fields, w.fields), music = Object.assign(fresh.music, w.music), deaths = Object.assign(fresh.deaths, w.deaths);
   Object.assign(fresh, w);
   fresh.fields = fields;
   fresh.music = music;
   fresh.deaths = deaths;
+  updateSeason(fresh);   // (an older save holds no season)
   return fresh;
 }
 
@@ -3976,9 +4029,8 @@ function shaftFade(wy) {
 }
 
 // The sun crosses the sky during the day, the moon at night; tilt runs -1..1 and back, so it never jumps.
-function updateSun(phase) {
-  const D = PARAMS.diel;
-  const tilt = phase < D.dayFrac ? 2 * phase / D.dayFrac - 1 : 1 - 2 * (phase - D.dayFrac) / (1 - D.dayFrac);
+function updateSun(phase, frac) {
+  const tilt = phase < frac ? 2 * phase / frac - 1 : 1 - 2 * (phase - frac) / (1 - frac);
   sun.x = W / 2 + tilt * R.rayTilt * R.rayFocal;
   sun.slope = tilt * PARAMS.surface.sunSlope;
 }
@@ -4389,7 +4441,8 @@ function drawRain(ta) {
 
 // Palette for this moment of the day: two keyframes and a world-anchored dither between them
 function blitTimeOfDay(w) {
-  const keys = PARAMS.timeOfDay.keys, ph = dayPhase(w);
+  const keys = PARAMS.timeOfDay.keys, K = PARAMS.timeOfDay.keysDay, p = dayPhase(w), f = w.dayFrac;
+  const ph = p < f ? p / f * K : K + (p - f) / (1 - f) * (1 - K);   // the day stretched to the keys' day
   let k = 0;
   while (k < keys.length - 2 && ph >= keys[k + 1][0]) k++;
   const a = TIME_PAL32[keys[k][1]], b = TIME_PAL32[keys[k + 1][1]];
@@ -5982,7 +6035,7 @@ function composeFrame(w, now) {
   builds = 0;
   const moon = PARAMS.timeOfDay.moonLight;
   dayLight = moon * (0.2 + 1.6 * moonLit(moonPhase(w))) + (1 - moon) * w.surfaceLight;
-  updateSun(dayPhase(w));
+  updateSun(dayPhase(w), w.dayFrac);
   updateBloom(w);
   updateSea(w, ta);
   updateRays(waterT);
@@ -6833,7 +6886,7 @@ function drawDayPage(w, y) {
   }
   ink(cx - R - 11, cy - 7, 'E', COL.SLATE);
   ink(cx + R + 9, cy - 7, 'W', COL.SLATE);
-  const day = ph < D.dayFrac, t = day ? ph / D.dayFrac : (ph - D.dayFrac) / (1 - D.dayFrac), moon = moonPhase(w);
+  const fr = w.dayFrac, day = ph < fr, t = day ? ph / fr : (ph - fr) / (1 - fr), moon = moonPhase(w);
   const bx = Math.round(cx - R * Math.cos(Math.PI * t)), by = Math.round(cy - R * 0.85 * Math.sin(Math.PI * t));
   for (let dy = -3; dy <= 3; dy++) {
     for (let dx = -3; dx <= 3; dx++) {
@@ -6848,13 +6901,13 @@ function drawDayPage(w, y) {
     }
   }
   const hhmm = (h) => { const m = Math.round(mod(h, 24) * 60) % 1440; return pad(Math.floor(m / 60), 2) + ':' + pad(m % 60, 2); };
-  const hour = mod(N.noonHour + (ph - D.dayFrac / 2) * 24, 24), rise = N.noonHour - D.dayFrac * 12, set = N.noonHour + D.dayFrac * 12;
-  const time = hhmm(Math.floor(hour * 60) / 60);
+  const hour = mod(N.noonHour + (ph - fr / 2) * 24, 24), rise = N.noonHour - fr * 12, set = N.noonHour + fr * 12;
+  const time = hhmm(Math.floor(hour * 60) / 60), doy = yearDay(w), Y = PARAMS.season.yearDays;
   inkBig(cx - ((time.length * 8 - 2) >> 1), cy + 13, time, COL.FOAM);
-  const dayNum = Math.floor(w.tick * TICK_DT / w.dayLength + D.start) + 1;
-  inkCentre(cy + 27, 'DAY ' + dayNum + '   ' + (day ? 'SUNSET AT ' + hhmm(set) : 'SUNRISE AT ' + hhmm(rise)), COL.SHAFT);
+  inkCentre(cy + 27, SEASONS[seasonOf(doy)] + ', DAY ' + (Math.floor(doy) + 1) + ' OF ' + Y, COL.FOAM);
+  inkCentre(cy + 34, day ? 'SUNSET AT ' + hhmm(set) : 'SUNRISE AT ' + hhmm(rise), COL.SHAFT);
 
-  let ry = cy + 37;
+  let ry = cy + 44;
   const row = (label, draw, indent) => { ink(P.x + 6 + (indent || 0), ry, label, COL.SHAFT); draw(N.bar.x, ry); ry += 9; };
   const value = (text, idx) => (x, yy) => ink(x, yy, text, idx || COL.FOAM);
   const divide = () => { dotted(P.x + 6, x1 - 7, ry, COL.SLATE); ry += 5; };
@@ -6894,16 +6947,30 @@ function drawDayPage(w, y) {
   if (known) row('LAST HOUR', value((r[last * S + NB.ENC] - r[i0 * S + NB.ENC]) + ' MADE   ' + (r[last * S + NB.GERM] - r[i0 * S + NB.GERM]) + ' WOKE'), 4);
   // The whole day in one strip, midnight to midnight: surface light by the hour, and where the day is now
   divide();
-  const sx = P.x + 6, sw = P.w - 12, toPhase = (h) => mod((h - N.noonHour) / 24 + D.dayFrac / 2, 1);
+  const sx = P.x + 6, sw = P.w - 12, toPhase = (h) => mod((h - N.noonHour) / 24 + fr / 2, 1);
   for (let i = 0; i < sw; i++) {
-    const L = surfaceLightAt(toPhase((i + 0.5) / sw * 24)), lit = smoothstep(D.moon, 1, L);
+    const L = surfaceLightAt(toPhase((i + 0.5) / sw * 24), 0.5, fr, 1), lit = smoothstep(D.moon, 1, L);
     for (let k = 0; k < 5; k++) {
       const x = sx + i, yy = ry + 2 + k;
-      put(x, yy, toPhase((i + 0.5) / sw * 24) >= D.dayFrac ? 2 : rampBase(GOLD) + (bayer(x, yy) < lit ? HIGHLIGHT : BASE));
+      put(x, yy, toPhase((i + 0.5) / sw * 24) >= fr ? 2 : rampBase(GOLD) + (bayer(x, yy) < lit ? HIGHLIGHT : BASE));
     }
   }
   const nx = sx + Math.round(hour / 24 * (sw - 1));
   for (let k = 0; k < 9; k++) put(nx, ry + k, COL.FOAM);
+  // The year in one strip, from December: cold blue to warm gold as the air, the seasons under it, and today
+  ry += 12;
+  const from = 334;   // 1 December: the four seasons in a row
+  for (let i = 0; i < sw; i++) {
+    const warm = seasonWarmth(mod(from + (i + 0.5) / sw * Y, Y));
+    for (let k = 0; k < 5; k++) {
+      const x = sx + i, yy = ry + 2 + k;
+      put(x, yy, bayer(x, yy) < warm ? rampBase(AMBER) + (k ? BASE : HIGHLIGHT) : rampBase(BLUE) + (k ? SHADOW : BASE));
+    }
+    if (i && i % Math.round(sw / 4) === 0) for (let k = 0; k < 7; k++) put(sx + i, ry + 1 + k, 2);   // the seasons' borders
+  }
+  SEASONS.forEach((s, q) => ink(sx + Math.round((q + 0.5) * sw / 4) - (textWidth(s) >> 1), ry + 10, s, seasonOf(doy) === q ? COL.FOAM : COL.SLATE));
+  const yx = sx + Math.round(mod(doy - from, Y) / Y * (sw - 1));
+  for (let k = 0; k < 9; k++) put(yx, ry + k, COL.FOAM);
 }
 
 // II. The census: how many of each form live in the column now, and who ruled the water over the window
@@ -7651,18 +7718,23 @@ function hashString(s) {
   return h >>> 0;
 }
 
-// With none of ?seed, ?stress, ?ff, ?day the page keeps one world that lives on between visits (saved in IndexedDB);
+// With none of ?seed, ?stress, ?ff, ?day, ?season the page keeps one world that lives on between visits (saved in IndexedDB);
 // any of them starts a scratch world that is never saved, so trying a seed never overwrites the kept one.
 // ?seed= (number or word), ?debug, ?stress (start at the cell cap), ?ff=seconds (fast-forward),
 // ?zoom=1..4 with ?at=x,y (world point to centre on), ?speed=1|2|4|8 (time-lapse), ?day=5|10|30 (minutes),
-// ?notebook=1..7 (open the field notebook on that page), ?bench (how fast this device lives a world out of sight).
+// ?notebook=1..7 (open the field notebook on that page), ?bench (how fast this device lives a world out of sight),
+// ?season=winter|spring|summer|autumn (start in the middle of that season).
 // M turns the music off, N opens the notebook.
 function readOptions() {
   const q = new URLSearchParams(location.search);
-  const kept = !q.has('seed') && !q.has('stress') && !q.has('ff') && !q.has('day') && !q.has('bench');
+  const kept = !q.has('seed') && !q.has('stress') && !q.has('ff') && !q.has('day') && !q.has('bench') && !q.has('season');
   let label = (q.get('seed') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12), seed;
   if (!label) {
-    seed = crypto.getRandomValues(new Uint32Array(1))[0] % 1000000;   // the one non-seeded draw: picking the seed
+    // The one non-seeded draw: picking the seed. A kept world is drawn again until its seed starts it in the season it
+    // is now where the player lives (by the month, as on the northern shelf)
+    const now = new Date(), today = (Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) - Date.UTC(now.getFullYear(), 0, 1)) / 864e5;
+    do seed = crypto.getRandomValues(new Uint32Array(1))[0] % 1000000;
+    while (kept && seasonOf(seedYearStart(seed) + PARAMS.diel.start) !== seasonOf(Math.min(today, PARAMS.season.yearDays - 1)));
     label = String(seed);
     if (!kept) try { q.set('seed', label); history.replaceState(null, '', location.pathname + '?' + q.toString()); } catch (e) { /* file:// may refuse */ }
   } else {
@@ -7674,6 +7746,7 @@ function readOptions() {
     zoom: Number(q.get('zoom')) || 1, atX: at.length === 2 ? at[0] : W / 2, atY: at.length === 2 ? at[1] : H / 2,
     speed: Number(q.get('speed')) || 1, notebook: Math.floor(Number(q.get('notebook')) || 0),
     dayLength: PARAMS.diel.dayMinutes.includes(Number(q.get('day'))) ? Number(q.get('day')) * 60 : PARAMS.diel.dayLength,
+    yearStart: PARAMS.season.starts[(q.get('season') || '').toLowerCase()],   // development: start in that season
     kept, bench: q.has('bench'),
   };
 }
@@ -7918,7 +7991,7 @@ async function init() {
     audio.muted = !!(found.rec.prefs && found.rec.prefs.muted);
     catchUp(Math.max(0, (Date.now() - found.rec.savedAt) / 1000));
   } else {
-    world = createWorld(opts.seed, opts.stress ? PARAMS.division.maxCells : 0, opts.dayLength);
+    world = createWorld(opts.seed, opts.stress ? PARAMS.division.maxCells : 0, opts.dayLength, opts.yearStart);
     if (opts.bench) startBench();
   }
   if (keeper.db) {

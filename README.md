@@ -9,8 +9,8 @@
 Pixel-art phytoplankton drift, grow, divide, synchronise and die in a dark water column, and every note you hear
 comes from one of them. Diatoms sing like glockenspiels and vibraphones, dinoflagellates like wood and plucked
 strings, green algae like a felt piano, coccolithophores like a celesta and cryptophytes like a kalimba. Blooms swell into chords; die-offs fall silent. You can just watch
-it, like a tide pool, or put your hand in the water. The water is a warm-temperate shelf sea in summer, about 60 m
-deep, like the East China Sea.
+it, like a tide pool, or put your hand in the water. The water is a warm-temperate shelf sea, about 60 m
+deep, like the East China Sea, and it lives through the seasons of a whole year.
 
 ## The idea: emergence, not authorship
 
@@ -39,6 +39,12 @@ short list of local rules, and everything else comes out of how they interact:
   filaments that fix their own nitrogen from the air, so they thrive in warm, nutrient-poor water and fertilise it
   when they die. Gas vesicles float them up, so in calm, warm spells they gather into a scum at the surface that
   shades everything below; the wind breaks it up.
+- **The seasons.** A year is 365 days of the game (about 30 real hours). Winter days are short and the sun is low;
+  the cold air and the winter monsoon's storms overturn the water to the seabed and bring nutrients up. In spring
+  the light returns and the water settles; in summer it is warm, calm and layered, and the bottom water can run short
+  of oxygen; the rainy season washes runoff in from the coast; autumn's storms and cooling stir it again. Nobody
+  scripts the blooms: they follow from the light, the air, the wind and the rain. A new world starts in the season
+  you are in.
 - **The water's physics.** Sunlight warms the surface, the air cools it, and the wind and the tide stir it. In
   calm weather the column stratifies into a warm mixed layer, a thermocline and a cold bottom layer, as shelf
   seas do in summer; storms deepen the mixed layer and bring nutrients up. Storms also wash muddy runoff in from

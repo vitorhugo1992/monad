@@ -8,6 +8,11 @@
 // a kept world on opening).
 //
 //   node tools/sim-check.mjs --save-fixture     saves a real world from this version into tools/fixtures
+//   --fast                                       skips the rerun, the save round trip and the old saves (for long sweeps)
+//
+// Over long runs it also reports the seasons: per world and season, who led the water, the population, the surface
+// and bottom warmth (mixed to the floor: within half a degree), bottom hypoxia and the music. A year is
+// 365 days (node tools/sim-check.mjs 1 1825 <seed> --fast is one world-year at 5-min days).
 //
 // Reports per seed: population sparkline, min/max, cap pressure, extinctions, the bloom arc,
 // diel migration, nutrient pulses, deaths by cause, nutrient conservation, phase sync and chains,
@@ -23,7 +28,7 @@ const start = html.indexOf('// ===== PARAMS =====');
 const end = html.indexOf('// ===== Audio =====');
 if (start < 0 || end < 0) throw new Error('section markers not found');
 const sim = new Function(html.slice(start, end) +
-  '\nreturn { PARAMS, createWorld, stepWorld, aliveCount, nutrientInventory, worldChecksum, dayPhase, syncStats, dinoWeight, GENES, HUE_WHEEL, intervalClass, keyName, snapshotWorld, restoreWorld, aliveCount: aliveCount, silicaInventory, meanSilica, cyanoTotal, bottomOxygen, surfaceTemp };')();
+  '\nreturn { PARAMS, createWorld, stepWorld, aliveCount, nutrientInventory, worldChecksum, dayPhase, syncStats, dinoWeight, GENES, HUE_WHEEL, intervalClass, keyName, snapshotWorld, restoreWorld, aliveCount: aliveCount, silicaInventory, meanSilica, cyanoTotal, bottomOxygen, surfaceTemp, yearDay, seasonOf, SEASONS, FLOOR_ROW };')();
 
 // Positional numbers, plus PARAMS overrides like metabolism.efficiency=0.2 or diel.dayLength=600
 const args = process.argv.slice(2);
@@ -84,6 +89,9 @@ function run(seed) {
   const noon = [], night = [], syncs = [], dinos = [], groups = [];
   // The water: surface temperature, oxygen in the bottom water (hypoxic: its lowest node below the threshold),
   // Trichodesmium and its scum (biomass in the surface row), runoff events
+  // The seasons: per season, samples of who leads, the population, warmth top and bottom, hypoxia and onsets
+  const seasons = sim.SEASONS.map(() => ({ n: 0, lead: new Array(GROUPS.length).fill(0), pop: 0, peak: 0, peakLead: -1, top: 0, bottom: 0, mixed: 0, hypoxic: 0, ons: 0, runoffs: 0, storm: 0, nut: 0, si: 0 }));
+  let seasonOns = 0;
   const water = { tMin: Infinity, tMax: -Infinity, tSum: 0, n: 0, oMin: Infinity, oSum: 0, hypoxic: 0, triMax: 0, scumMax: 0, scum: 0, runoffs: 0, sMin: Infinity, bank: [] };
   // Music: onset times, chords (2+ onsets within chordWin), clashes against the notes still sounding
   const chordWin = 0.3 * rate, sounding = [], onsetTicks = [];
@@ -93,7 +101,8 @@ function run(seed) {
     const before = w.pulses.length, lastRunoff = w.lastRunoff;
     sim.stepWorld(w);
     if (w.pulses.length > before) pulses++;
-    if (w.lastRunoff !== lastRunoff) water.runoffs++;
+    if (w.lastRunoff !== lastRunoff) { water.runoffs++; seasons[sim.seasonOf(sim.yearDay(w))].runoffs++; }
+    seasonOns += w.music.notes.length;
     for (let i = sounding.length - 1; i >= 0; i--) if (sounding[i].end <= t) sounding.splice(i, 1);
     for (const n of w.music.notes) {
       onsetTicks.push(t);
@@ -130,6 +139,20 @@ function run(seed) {
       water.triMax = Math.max(water.triMax, cy.tri); water.scumMax = Math.max(water.scumMax, scum / cols);
       if (scum / cols > 0.3) water.scum++;   // a scum: the surface row holds a third of a cell per node, or more
       const all = pop + gc.cyano + gc.tricho;
+      if (t > 600 * rate) {   // after the inoculum has grown
+        const se = seasons[sim.seasonOf(sim.yearDay(w))], fb = (sim.FLOOR_ROW - 1) * cols;
+        let bot = 0;
+        for (let i = 0; i < cols; i++) bot += w.fields.temp[fb + i];
+        bot /= cols;
+        se.n++; se.pop += pop; se.top += st; se.bottom += bot; se.ons += seasonOns; se.storm += w.wind > 0.55 ? 1 : 0;
+        for (let i = 0; i < cols; i++) { se.nut += w.fields.nut[i] / cols; se.si += w.fields.si[i] / cols; }   // the surface row
+        if (st - bot < 0.5) se.mixed++;
+        if (ox.min < sim.PARAMS.oxygen.hypoxic) se.hypoxic++;
+        let lead = -1;
+        if (all >= 10) { lead = 0; GROUPS.forEach((k, i) => { if (gc[k] > gc[GROUPS[lead]]) lead = i; }); se.lead[lead]++; }
+        if (pop > se.peak) { se.peak = pop; se.peakLead = lead; }
+      }
+      seasonOns = 0;
       const nd = gc.dino;
       dinos.push({ n: nd, share: pop ? nd / pop : 0, wind: w.wind });
       // Diversity, late in the run; one group >= 90% counts as a monoculture
@@ -138,7 +161,7 @@ function run(seed) {
     // Mean depth at mid-day and late night: diel vertical migration
     const ph = sim.dayPhase(w), D = sim.PARAMS.diel;
     const at = (x) => lastPhase < x && ph >= x;
-    if ((at(D.dayFrac * 0.5) || at(0.95)) && pop > 0) {
+    if ((at(w.dayFrac * 0.5) || at(0.95)) && pop > 0) {
       let y = 0;
       for (const c of w.cells) if (!c.dying) y += c.y;
       (at(0.95) ? night : noon).push(y / pop / 320);
@@ -163,7 +186,7 @@ function run(seed) {
   for (const c of alive) ramps[Math.floor(c.g.hue)]++;
   return {
     seed, music, water, pops, minPop, maxPop, lateMin, lateCellMin, extinctAt, capFrac: capTicks / total, extinct, drift, siDrift, arc: arcs(pops), pulses,
-    noon: mean(noon), night: mean(night), deaths: w.deaths, ramps,
+    noon: mean(noon), night: mean(night), deaths: w.deaths, ramps, seasons,
     size: mean(alive.map((c) => c.g.size)), checksum: sim.worldChecksum(w),
     sync: Object.fromEntries(['local', 'locked', 'global', 'chained', 'chains', 'longest', 'coils', 'stars'].map((k) => [k, mean(syncs.map((q) => q[k]))])),
     longest: Math.max(1, ...syncs.map((q) => q.longest)),
@@ -205,9 +228,17 @@ for (let s = firstSeed; s < firstSeed + seeds; s++) {
     ` | late diat/dino/green/cocco/crypto/cyano/tricho ${r.groups.share.map((x) => Math.round(x * 100)).join('/')}% mono ${Math.round(r.groups.mono * 100)}% lead ${r.groups.lead.map((x) => Math.round(x * 100)).join('/')}%` +
     ` | music ${r.music.key} ons ${r.music.ons.toFixed(2)}/s vox<=${r.music.maxVox} quiet ${Math.round(r.music.quiet * 100)}% longest ${r.music.longest.toFixed(0)} s` +
     ` chords/min ${r.music.chords2.toFixed(1)} (3+ ${r.music.chords3.toFixed(1)}) clash ${(r.music.harsh * 100).toFixed(1)}% 2nds ${(r.music.seconds * 100).toFixed(0)}% last ${r.music.lastNotes}\n`);
+  for (const [q, se] of r.seasons.entries()) {
+    if (!se.n) continue;
+    const led = se.lead.map((v, i) => [v, i]).filter(([v]) => v).sort((a, b) => b[0] - a[0]).slice(0, 3).map(([v, i]) => GROUPS[i] + ' ' + Math.round(100 * v / se.n) + '%').join(' ');
+    process.stdout.write(`    ${sim.SEASONS[q].padEnd(6)} pop ${String(Math.round(se.pop / se.n)).padStart(3)} peak ${String(se.peak).padStart(3)} (${se.peakLead >= 0 ? GROUPS[se.peakLead] : '-'})` +
+      ` | surface ${(se.top / se.n).toFixed(1)} bottom ${(se.bottom / se.n).toFixed(1)} mixed ${Math.round(100 * se.mixed / se.n)}% | N ${(se.nut / se.n).toFixed(2)} Si ${(se.si / se.n).toFixed(2)} | storm ${Math.round(100 * se.storm / se.n)}% runoffs ${se.runoffs}` +
+      ` | hypoxic ${Math.round(100 * se.hypoxic / se.n)}% | ons ${(se.ons / (se.n * 10)).toFixed(2)}/s | lead ${led}\n`);
+  }
 }
 
-const again = run(firstSeed);
+const fast = args.includes('--fast');
+const again = fast ? results[0] : run(firstSeed);
 
 // Save and restore: a world saved, stored (structured clone, as IndexedDB does) and restored twice on the way
 // must end exactly where an unbroken run ends, down to every field of every cell.
@@ -231,7 +262,7 @@ function roundTrip(seed) {
   const same = (x) => sim.snapshotWorld(sim.restoreWorld(structuredClone(sim.snapshotWorld(x))));
   return { same: isDeepStrictEqual(same(a), same(b)), sum: sim.worldChecksum(a) === sim.worldChecksum(b), saveMs, bytes };
 }
-const trip = roundTrip(firstSeed);
+const trip = fast ? { same: true, sum: true, saveMs: 0, bytes: 0 } : roundTrip(firstSeed);
 const n = results.length;
 console.log('\n' + [
   `seeds ${n}, ${minutes} min each, day ${sim.PARAMS.diel.dayLength} s, ${((Date.now() - t0) / 1000).toFixed(1)} s`,
@@ -248,17 +279,23 @@ console.log('\n' + [
   `leading the water (mean share of time): ${GROUP_NAMES.map((name, i) => name + ' ' + Math.round(100 * results.reduce((s, r) => s + r.groups.lead[i], 0) / results.length) + '%').join(', ')}`,
   `the water (median): surface ${median(results.map((r) => r.water.tMin)).toFixed(1)}..${median(results.map((r) => r.water.tMax)).toFixed(1)} degrees, bottom oxygen ${median(results.map((r) => r.water.oMean)).toFixed(2)} (lowest ${median(results.map((r) => r.water.oMin)).toFixed(2)}), hypoxic ${Math.round(100 * median(results.map((r) => r.water.hypoxic)))}% of the time (worst ${Math.round(100 * Math.max(...results.map((r) => r.water.hypoxic)))}%); filamentous cyanobacteria peak ${median(results.map((r) => r.water.triMax)).toFixed(0)}, a scum ${Math.round(100 * median(results.map((r) => r.water.scum)))}% of the time (seeds with one: ${results.filter((r) => r.water.scum > 0).length}/${n}); runoffs ${median(results.map((r) => r.water.runoffs))}`,
   `cysts (median): made ${median(results.map((r) => r.water.encysted)).toFixed(1)}/h, germinated ${median(results.map((r) => r.water.germinated)).toFixed(1)}/h, bank ${median(results.map((r) => r.water.bank))} cysts; surface salinity down to ${median(results.map((r) => r.water.sMin)).toFixed(1)} psu after runoff (freshest ${Math.min(...results.map((r) => r.water.sMin)).toFixed(1)})`,
+  `seasons (all worlds): ${sim.SEASONS.map((name, q) => { const ss = results.map((r) => r.seasons[q]).filter((se) => se.n), N = ss.reduce((s, se) => s + se.n, 0) || 1;
+    const lead = GROUPS.map((g, i) => [ss.reduce((s, se) => s + se.lead[i], 0) / N, g]).sort((a, b) => b[0] - a[0]).slice(0, 3).map(([v, g]) => g + ' ' + Math.round(100 * v) + '%').join(' ');
+    const peaks = {}; for (const se of ss) if (se.peakLead >= 0) peaks[GROUPS[se.peakLead]] = (peaks[GROUPS[se.peakLead]] || 0) + 1;
+    return `
+  ${name.padEnd(6)} lead ${lead}; peak led by ${Object.entries(peaks).map(([g, n]) => g + ' ' + n).join(' ')}; surface ${(ss.reduce((s, se) => s + se.top, 0) / N).toFixed(1)} bottom ${(ss.reduce((s, se) => s + se.bottom, 0) / N).toFixed(1)}, mixed to the floor ${Math.round(100 * ss.reduce((s, se) => s + se.mixed, 0) / N)}%, hypoxic ${Math.round(100 * ss.reduce((s, se) => s + se.hypoxic, 0) / N)}%, onsets ${(ss.reduce((s, se) => s + se.ons, 0) / (N * 10)).toFixed(2)}/s`; }).join('')}`,
   `causes of death (median share): ${CAUSES.map((k) => k + ' ' + Math.round(100 * median(results.map((r) => { const d = r.deaths, t = Object.values(d).reduce((s, v) => s + v, 0) || 1; return (d[k] || 0) / t; }))) + '%').join(', ')}`,
   `max |nutrient drift|: ${Math.max(...results.map((r) => Math.abs(r.drift))).toExponential(2)}, |silica drift|: ${Math.max(...results.map((r) => Math.abs(r.siDrift))).toExponential(2)}`,
-  `deterministic rerun: ${again.checksum === results[0].checksum ? 'yes' : 'NO'} (${results[0].checksum.toString(16)})`,
-  `save/restore round trip: ${trip.same && trip.sum ? 'identical' : 'DIFFERENT'} (snapshot ~${(trip.bytes / 1024).toFixed(0)} KB, save+restore ${trip.saveMs} ms)`,
+  ...(fast ? ['rerun, save round trip and old saves: skipped (--fast)'] : [
+    `deterministic rerun: ${again.checksum === results[0].checksum ? 'yes' : 'NO'} (${results[0].checksum.toString(16)})`,
+    `save/restore round trip: ${trip.same && trip.sum ? 'identical' : 'DIFFERENT'} (snapshot ~${(trip.bytes / 1024).toFixed(0)} KB, save+restore ${trip.saveMs} ms)`]),
 ].join('\n'));
 
 // Every saved world from an earlier version must still load and live on: no crash, no NaN, the water's
 // nutrients still finite. Whether it grows exactly the same world tells if the rules changed since (allowed).
 let fixturesOk = true;
 const fixtureLines = [];
-for (const f of (() => { try { return readdirSync(FIXTURES).filter((n) => n.endsWith('.bin')).sort(); } catch (e) { return []; } })()) {
+for (const f of fast ? [] : (() => { try { return readdirSync(FIXTURES).filter((n) => n.endsWith('.bin')).sort(); } catch (e) { return []; } })()) {
   try {
     const fx = deserialize(readFileSync(new URL(f, FIXTURES))), w = sim.restoreWorld(fx.snap), rate = sim.PARAMS.time.tickRate;
     for (let t = 0; t < fx.minutes * 60 * rate; t++) { sim.stepWorld(w); w.music.notes.length = 0; }
@@ -270,7 +307,7 @@ for (const f of (() => { try { return readdirSync(FIXTURES).filter((n) => n.ends
     fixtureLines.push(`${f}: BROKEN: ${e.message}`);
   }
 }
-console.log(fixtureLines.length ? 'old saves: ' + (fixturesOk ? 'all load' : 'SOME FAIL') + '\n  ' + fixtureLines.join('\n  ') : 'old saves: none in tools/fixtures');
+if (!fast) console.log(fixtureLines.length ?'old saves: ' + (fixturesOk ? 'all load' : 'SOME FAIL') + '\n  ' + fixtureLines.join('\n  ') : 'old saves: none in tools/fixtures');
 if (!fixturesOk) process.exitCode = 1;
 
 function median(a) { const s = [...a].sort((p, q) => p - q); return s[Math.floor(s.length / 2)]; }

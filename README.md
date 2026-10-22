@@ -128,11 +128,6 @@ newcomers, nitrogen fixation, stratification and tidal mixing, and hypoxia.
   <img src="docs/night-halos.png" width="150" alt="The whole column at night: visitors' songs spread as rings of colour">
   <img src="docs/seafloor-amphipod.png" width="150" alt="At 4x on the seabed: an amphipod picks over the fallen marine snow">
 </p>
-<p align="center">
-  <img src="docs/notebook-day.png" width="150" alt="The field notebook: the day, the tide and the moon, the water at the surface and the bottom">
-  <img src="docs/notebook-column.png" width="150" alt="The field notebook: a cast of the water column with its mixed layer, thermocline and chlorophyll maximum">
-  <img src="docs/notebook-species.png" width="150" alt="The field notebook: the species guide, each form drawn by the game itself">
-</p>
 
 ## A world that keeps living
 

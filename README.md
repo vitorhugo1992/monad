@@ -110,8 +110,7 @@ newcomers, nitrogen fixation, stratification and tidal mixing, and hypoxia.
   - **Migration:** where each form spends the day and the night.
   - **The ledger:** deaths (grazed, eaten by fish, hunted, lysed by viruses, suffocated...), cysts and visitors.
 
-  A small curiosity about the sea sits at the foot of every page. The **note** beside the book turns the music off
-  and on.
+  The **note** beside the book turns the music off and on.
 
 ## A world that keeps living
 

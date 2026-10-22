@@ -590,7 +590,8 @@ const PARAMS = {
     // Rain while runoff spreads: drops per s on the whole surface, each a ring spreading for ring s; bubble: share that
     // leave a bubble (which chirps: rain heard from under the water)
     rain: { drops: 30, ring: 0.45, ringR: 2.5, bubble: 0.2 },
-    krill: { hungry: 0, foodFull: 0.8, fedTau: 2.5, zFrom: 0.3, zSpan: 0.6, coverage: 0.25, len: 8, thick: 0.15, curl: 0.12, flick: 0.35,
+    krill: { hungry: 0, foodFull: 0.8, fedTau: 2.5, zFrom: 0.3, zSpan: 0.6, coverage: 0.25, len: 6.5, thick: 0.15, curl: 0.12, flick: 0.35,
+             amber: 0.3, darker: 0.4,   // shares of krill with an orange body, and a tone darker
              feelers: 0.95, legBeat: 3, swimBeat: 9, glide: 0.45, wander: 8, dartEvery: 4.5, dartDist: 7, dartTime: 0.6 },
   },
   murk: { from: 0.8, full: 3 },         // bloom biomass summed down the upper column: rays fade in murky water
@@ -5191,6 +5192,9 @@ function drawKrill(w, ta) {
       const node = j * cols + i, pres = clamp((Z[node] - L.zFrom) / L.zSpan, 0, 1) * L.coverage * krillFed[node];
       if (hash01(node * 91 + 7) >= pres) continue;
       const h = node * 17, p = krillAt(L, h, ta), q = krillAt(L, h, ta - 0.15);
+      // each krill its own shade: a pink-rose or orange-amber body, some a tone darker
+      const shell = rampBase(hash01(h + 33) < L.amber ? AMBER : ROSE), dim = hash01(h + 34) < L.darker ? 1 : 0;
+      const tone = (t) => shell + Math.max(SHADOW, t - dim);
       const cx = (i + 0.5) * GRID_W + p.x, cy = (j + 0.5) * GRID_H + p.y;
       if (cx < x0 || cx > x1 || cy < y0 || cy > y1) continue;
       krillSeen.n++; krillSeen.x += cx;
@@ -5211,13 +5215,13 @@ function drawKrill(w, ta) {
       for (let k = 0; k < 6; k++) {
         const sp = 0.1 + k * 0.05, [bx, by] = spine(sp), th = thick(sp);
         const sw = Math.sin(ta * L.legBeat + k * 0.7) * 0.25;
-        worldLine(bx, by + th * 0.6, bx + dir * len * (0.06 + sw * 0.15), by + th * 0.6 + len * 0.22, k % 2 ? rose + BRIGHT : rose + HIGHLIGHT);
+        worldLine(bx, by + th * 0.6, bx + dir * len * (0.06 + sw * 0.15), by + th * 0.6 + len * 0.22, k % 2 ? tone(BRIGHT) : tone(HIGHLIGHT));
       }
       // swimmerets under the abdomen, beating in a travelling wave
       for (let k = 0; k < 5; k++) {
         const sp = 0.46 + k * 0.085, [bx, by] = spine(sp), th = thick(sp);
         const sw = Math.sin(ta * L.swimBeat - k * 0.9);
-        worldLine(bx, by + th * 0.7, bx + dir * len * 0.06 * sw, by + th * 0.7 + len * 0.1, rose + HIGHLIGHT);
+        worldLine(bx, by + th * 0.7, bx + dir * len * 0.06 * sw, by + th * 0.7 + len * 0.1, tone(HIGHLIGHT));
       }
       // body: overlapping discs from tail to head, lit from above, segment seams on the abdomen
       const steps = Math.max(10, Math.ceil(len * z * 1.2));
@@ -5227,21 +5231,21 @@ function drawKrill(w, ta) {
         fillShape(bx, by, th, th, 0, (u, v, x, y) => {
           const d = u * u + v * v;
           if (d > 1) return -1;
-          if (seam && v < 0.6) return rose + BASE;
+          if (seam && v < 0.6) return tone(BASE);
           if (sp > 0.06 && sp < 0.36 && v > -0.55 && v < 0.35 && Math.abs(u) < 0.6) {   // green gut inside the carapace
             return wb(x, y) < 0.55 ? green + BASE : green + HIGHLIGHT;
           }
-          if (v < -0.55) return d > 0.7 ? rose + BRIGHT : COL.FOAM;              // lit back
-          if (v > 0.6) return rose + BASE;                                       // shadowed belly
-          if (hash01(((x + view.bx0) * 7 + (y + view.by0) * 13) * 3 + h) < 0.12) return rose + SHADOW;   // chromatophores
-          return wb(x, y) < 0.5 ? rose + HIGHLIGHT : rose + BRIGHT;
+          if (v < -0.55) return d > 0.7 ? tone(BRIGHT) : COL.FOAM;              // lit back
+          if (v > 0.6) return tone(BASE);                                       // shadowed belly
+          if (hash01(((x + view.bx0) * 7 + (y + view.by0) * 13) * 3 + h) < 0.12) return tone(SHADOW);   // chromatophores
+          return wb(x, y) < 0.5 ? tone(HIGHLIGHT) : tone(BRIGHT);
         });
       }
       // tail fan
       const [tx, ty] = spine(1);
       for (const sp of [-0.55, 0, 0.55]) {
         const ang = Math.PI + sp + tilt;
-        worldLine(tx, ty, tx + dir * Math.cos(ang) * len * 0.16, ty + Math.sin(ang + Math.PI) * len * 0.1 * sp + len * 0.03, rose + BRIGHT);
+        worldLine(tx, ty, tx + dir * Math.cos(ang) * len * 0.16, ty + Math.sin(ang + Math.PI) * len * 0.1 * sp + len * 0.03, tone(BRIGHT));
       }
       // eye on a short stalk, with a highlight
       const [ex, ey] = spine(0.02), er = Math.max(0.6, len * 0.075);
@@ -5253,7 +5257,7 @@ function drawKrill(w, ta) {
         for (let k = 0; k < 4; k++) {
           const a = -0.35 - f * 0.25 + Math.sin(ta * 1.3 + k * 0.8 + f * 2 + h) * 0.12 + k * 0.12;
           const nx = fx + dir * Math.cos(a) * seg, ny = fy + Math.sin(a) * seg;
-          worldLine(fx, fy, nx, ny, f ? rose + HIGHLIGHT : COL.SHAFT);
+          worldLine(fx, fy, nx, ny, f ? tone(HIGHLIGHT) : COL.SHAFT);
           fx = nx; fy = ny;
         }
       }
@@ -6218,7 +6222,8 @@ function drawStack(cols, cy0, ch) {
   inkOver(CX + 2, cy0 + 2, String(scale), COL.SLATE);
 }
 
-// ---- Curiosities: one at the foot of every page, picked by what the water is doing (render only) ----
+// ---- Curiosities: one at the foot of a page, picked by what the water is doing (render only). Not shown yet
+// (author: they take room; to come back once the open issues are fixed) ----
 // Each is true of the sea and of what MONAD shows; tag: when it fits (general: always). Sources by number below.
 const TIPS = [
   { tag: 'cyano', text: 'PROCHLOROCOCCUS IS THE MOST ABUNDANT PHOTOSYNTHETIC ORGANISM ON EARTH: ABOUT THREE OCTILLION CELLS.' },   // Flombaum et al. 2013, PNAS 110:9824
@@ -6327,9 +6332,8 @@ function drawNotebook(w) {
   }
   if (notebook.page !== PAGES.length - 1 || !notebook.open) notebook.confirm = false;   // a question left unanswered is withdrawn
   [drawDayPage, drawCensusPage, drawSpeciesPage, drawWaterPage, drawColumnPage, drawMigrationPage, drawLedgerPage][notebook.page](w, P.y + 19);
-  drawTip(w, fy - 28);
 }
-const PAGE_END = () => PARAMS.notebook.page.y + PARAMS.notebook.page.h - 41;   // the lowest row a page's content may use, above the tip
+const PAGE_END = () => PARAMS.notebook.page.y + PARAMS.notebook.page.h - 17;   // the lowest row a page's content may use, above the page turner
 
 // The notebook keeps day colours at every hour, so it reads the same at night
 function inkNotebook() {
@@ -6574,11 +6578,11 @@ function drawSpeciesPage(w, y) {
 }
 
 // IV. The water: its chemistry and its life over the window, panel by panel on one time axis (each with its scale and
-// the value now), and the population by form underneath, so a silica crash lines up with the diatoms' fall
+// the value now); the population by form is on the census page, on the same time window
 function drawWaterPage(w, y) {
   const N = PARAMS.notebook, P = N.page, CX = N.chart.x, CW = N.chart.w, x1 = P.x + P.w;
   drawSpanRow(y);
-  const cols = notebookColumns(), deep = PARAMS.nutrients.deep, O = PARAMS.oxygen, mL = PARAMS.notebook.o2mL, ph = 9;
+  const cols = notebookColumns(), deep = PARAMS.nutrients.deep, O = PARAMS.oxygen, mL = PARAMS.notebook.o2mL;
   const own = (a) => { let m = 0; for (let c = 0; c < CW; c++) if (cols.has[c]) m = Math.max(m, a[c]); return m; };
   const at = (a, kv) => (c) => (cols.has[c] && (!kv || kv[c]) ? a[c] : NaN);
   const lysTop = own(cols.lys), grazTop = own(cols.graz), cyTop = own(cols.cyano.map((v, c) => v + cols.tri[c]));
@@ -6594,6 +6598,7 @@ function drawWaterPage(w, y) {
     { lines: [['CYANOBACTERIA', (c) => (cols.has[c] ? cols.cyano[c] + cols.tri[c] : NaN), rampBase(CYANO_RAMP) + BRIGHT]], lo: 0, hi: Math.max(1, cyTop), now: (v) => Math.round(v) + " CELLS' WORTH" },
   ];
   let py = y + 11;
+  const ph = Math.floor((PAGE_END() - 9 - py) / panels.length) - 10;   // the panels share the page down to the time axis
   for (const pn of panels) {
     let lx = P.x + 6;
     for (const [name, , idx] of pn.lines) { ink(lx, py, name, idx); lx += textWidth(name) + 6; }
@@ -6607,9 +6612,7 @@ function drawWaterPage(w, y) {
     }
     py = y0 + ph + 3;
   }
-  const sh = PAGE_END() - 9 - py;
-  drawStack(cols, py, sh);
-  drawTimeAxis(cols, py + sh + 3);
+  drawTimeAxis(cols, py);
 }
 
 // V. The column: a cast of the water now, as oceanographers draw it, depth in metres down the page. Two panels: the
@@ -6689,7 +6692,8 @@ function drawColumnPage(w, y) {
 }
 
 // VI. Migration: where each form spends the day and the night over the window (the diel vertical migration figure: a
-// sun at its mean depth in full daylight, a moon at its mean depth in the dark; a long stalk is a form that migrates).
+// sun at its mean depth in full daylight, a moon at its mean depth in the dark, each with its spread of one standard
+// deviation beside it; a long stalk is a form that migrates).
 // Tap a form to follow it alone over time, with its spread, the others in grey.
 function drawMigrationPage(w, y) {
   const N = PARAMS.notebook, P = N.page, F = FORMS.length, CX = N.chart.x, CW = N.chart.w, solo = notebook.solo;
@@ -6704,6 +6708,7 @@ function drawMigrationPage(w, y) {
     }
   };
   const mean = (f, k) => (acc[k + 'N'][f] >= 3 ? acc[k][f] / acc[k + 'N'][f] : -1);
+  const spread = (f, k) => { const m = mean(f, k); return m < 0 ? 0 : Math.sqrt(Math.max(0, acc[k + 'Sq'][f] / acc[k + 'N'][f] - m * m)); };
   if (solo < 0) {
     for (let k = 0; k < ch; k++) {   // the water, lighter above
       const band = 6 - Math.floor(k / ch * 4);
@@ -6712,6 +6717,12 @@ function drawMigrationPage(w, y) {
     for (let f = 0; f < F; f++) {
       const cx = lx0 + f * gap + 3, rb = rampBase(FORMS[f].ramp), dd = mean(f, 'day'), nd = mean(f, 'night');
       if (dd >= 0 && nd >= 0) { const a = Math.round(Math.min(dd, nd) * (ch - 1)), b = Math.round(Math.max(dd, nd) * (ch - 1)); for (let k = a; k <= b; k++) put(cx, cy0 + k, rb + BASE); }
+      for (const [m, sd, dx, idx] of [[dd, spread(f, 'day'), -4, rampBase(GOLD) + BASE], [nd, spread(f, 'night'), 4, COL.SHAFT]]) {   // the spread
+        if (m < 0) continue;
+        const a = Math.round(clamp(m - sd, 0, 1) * (ch - 1)), b = Math.round(clamp(m + sd, 0, 1) * (ch - 1));
+        for (let k = a; k <= b; k++) put(cx + dx, cy0 + k, idx);
+        put(cx + dx - 1, cy0 + a, idx); put(cx + dx - 1, cy0 + b, idx);
+      }
       if (dd >= 0) { const k = Math.round(dd * (ch - 1)); fillRect(cx - 2, cy0 + k - 2, 5, 5, rampBase(GOLD) + HIGHLIGHT); fillRect(cx - 1, cy0 + k - 1, 3, 3, rb + BRIGHT); }
       if (nd >= 0) { const k = Math.round(nd * (ch - 1)); fillRect(cx - 2, cy0 + k - 2, 5, 5, COL.FOAM); fillRect(cx - 1, cy0 + k - 1, 3, 3, rb + BASE); }
     }
@@ -6740,12 +6751,13 @@ function drawMigrationPage(w, y) {
   if (solo < 0) {
     fillRect(P.x + 8, iy + 3, 5, 5, rampBase(GOLD) + HIGHLIGHT); ink(P.x + 16, iy + 3, 'BY DAY', COL.SHAFT);
     fillRect(P.x + 48, iy + 3, 5, 5, COL.FOAM); ink(P.x + 56, iy + 3, 'BY NIGHT', COL.SHAFT);
-    inkRight(x1 - 7, iy + 3, 'MEAN DEPTH', COL.SLATE);
+    inkRight(x1 - 7, iy + 3, 'MEAN, BARS 1 SD', COL.SLATE);
     inkCentre(iy + 12, 'TAP A FORM TO FOLLOW IT', COL.SLATE);
   } else {
     const dd = mean(solo, 'day'), nd = mean(solo, 'night');
     inkCentre(iy + 3, FORMS[solo].name + '   TAP AGAIN FOR ALL', COL.FOAM);
-    inkCentre(iy + 12, 'BY DAY ' + (dd >= 0 ? metres(dd) + ' M' : '-') + '   BY NIGHT ' + (nd >= 0 ? metres(nd) + ' M' : '-'), COL.SHAFT);
+    const pm = (m, k) => (m >= 0 ? metres(m) + '+-' + metres(spread(solo, k)) + ' M' : '-');
+    inkCentre(iy + 12, 'BY DAY ' + pm(dd, 'day') + '   BY NIGHT ' + pm(nd, 'night'), COL.SHAFT);
   }
 }
 
@@ -6773,7 +6785,7 @@ function drawLedgerPage(w, y) {
   // Deaths per minute, stacked by cause, nights dark behind
   cy += 10;
   ink(P.x + 6, cy, 'DEATHS PER MINUTE', COL.SHAFT);
-  const cy0 = cy + 8, ch = 60;
+  const cy0 = cy + 8, ch = PAGE_END() - 51 - cy0;   // down to the visitors and NEW WATER below it
   chartBackground(cols, cy0, ch);
   let top = 1;
   for (let c = 0; c < CW; c++) { let s = 0; for (let q = 0; q < NC; q++) s += cols.deaths[c * NC + q]; top = Math.max(top, s); }

@@ -605,14 +605,25 @@ const PARAMS = {
   notebook: {
     sampleEvery: 5, maxSamples: 65536, spans: [600, 1800, 3600, 10800, 0], startSpan: 4,
     page: { x: 6, y: 14, w: 168, h: 292 }, chart: { x: 20, w: 140 }, glyph: { x: 164, y: 3 }, bar: { x: 64, w: 84 },
-    dim: 0.55, swipe: 20, nightBelow: 0.15, chlDim: 3,
+    dim: 0.55, swipe: 20, nightBelow: 0.15, dayAbove: 0.5,   // surface light below which a row counts as night, above which as day
     layers: { mixedStep: 0.6, clineShare: 0.5, stratified: 1, minRows: 9 },   // the column page's layer criteria (density in degrees; share of the steepest gradient; chart rows)
-    seaStates: [0.15, 0.35, 0.6], noonHour: 12, dialR: 34,
+    seaStates: [0.15, 0.35, 0.6], noonHour: 12, dialR: 32,
+    surfaceRows: 4,   // the surface water the recorder and the day page read: the top grid rows (about a tenth of the column)
+    // Real units (sources in the Notebook section). depthM: the column in metres (light falls to e^-atten at the
+    // floor: Kd 0.067 per m for a clear stratified shelf); o2mL: oxygen saturation at 15 C and 35 psu in mL/L, the
+    // model's 1; euphotic: the share of surface light that bounds the euphotic zone.
+    depthM: 60, o2mL: 5.83, euphotic: 0.01,
+    // Chlorophyll as a fluorometer sees it, per unit of biomass (read as carbon), relative to diatoms: kind is by form
+    // (green algae, Alexandrium, Dinophysis x its stolen plastids, Tripos, Prorocentrum, centric, pennate,
+    // coccolithophore, cryptophyte); syn, pro, tri: the cyanobacteria, times their weaker in-vivo fluorescence
+    // (phycobilisome light reaches little chlorophyll that fluoresces). acclim: photoacclimation, chl x (1 + acclim) /
+    // (1 + acclim x the share of surface light), up to 4x in the dark (Geider et al. 1997). full: the scale's top.
+    chl: { kind: [1.3, 0.7, 0.7, 0.7, 0.7, 1, 1, 0.8, 1], syn: 0.2, pro: 1.05, tri: 0.12, acclim: 3, full: 36 },
   },
   // One world that lives on between visits (unless the URL picks a seed or another start: a scratch world, never saved).
   // every: real s between autosaves (also on hiding the page); chunkRows: notebook rows per stored chunk, so a save
   // writes only the rows that changed.
-  persist: { db: 'monad', every: 30, chunkRows: 1024, version: 6,
+  persist: { db: 'monad', every: 30, chunkRows: 1024, version: 7,
     // Catching up: the time away is lived again, exactly, up to maxAway (s); beyond it the water rests. A worker runs
     // it out of sight and shows a frame every show s (a silent time-lapse); the last tail simulated s play on the page,
     // from tailSpeed x slowing to real time, so the recap glides into the live world. bench: s measured by ?bench.
@@ -5473,6 +5484,8 @@ const FONT = {
   U: [5, 5, 5, 5, 7], V: [5, 5, 5, 5, 2], W: [5, 5, 7, 7, 5], X: [5, 5, 2, 5, 5], Y: [5, 5, 2, 2, 2],
   Z: [7, 1, 2, 4, 7], '#': [5, 7, 5, 7, 5], ':': [0, 2, 0, 2, 0], '.': [0, 0, 0, 0, 2], '-': [0, 0, 7, 0, 0], '/': [1, 1, 2, 4, 4],
   '<': [1, 2, 4, 2, 1], '>': [4, 2, 1, 2, 4], '%': [5, 1, 2, 4, 5], '+': [0, 2, 7, 2, 0], ' ': [0, 0, 0, 0, 0],
+  ',': [0, 0, 0, 2, 4], "'": [2, 2, 0, 0, 0], '(': [2, 4, 4, 4, 2], ')': [2, 1, 1, 1, 2], '?': [7, 1, 3, 0, 2],
+  '!': [2, 2, 2, 0, 2], '=': [0, 7, 0, 7, 0], ';': [0, 2, 0, 2, 4],
 };
 
 function drawGlyphs(x, y, text, idx, vis, dx) {
@@ -5642,11 +5655,30 @@ function render(w, now) {
 // ===== Notebook =====
 // The field notebook: the world's records behind one small glyph. It only watches: every sampleEvery simulated
 // seconds it writes one row (the forms counted as the sprite and the voice split them, their mean depth and spread,
-// light, wind, nutrients, grazers, deaths so far) and it never writes to the world, so a seed still grows the same.
-// Four pages: the day, the census, migration, the ledger. The graphs share one time window, from the last
-// minutes to the whole life.
+// light, wind, nutrients, grazers, the surface water, the mixed layer, cysts and deaths so far) and it never writes to
+// the world, so a seed still grows the same. Seven pages: the day, the census, the species, the water, the column,
+// migration, the ledger. The graphs share one time window, from the last minutes to the whole life.
+//
+// Units and figures follow standard oceanographic practice, as true of the model as of the sea (sources):
+// - the column is 60 m: light falls to e^-4 at the floor, Kd 0.067 per m, a clear stratified shelf (Kirk 2011, Light
+//   and Photosynthesis in Aquatic Ecosystems); the euphotic zone ends at 1% of surface light.
+// - oxygen: the model's 1 is saturation at 15 C and 35 psu, 5.83 mL/L (Garcia & Gordon 1992, L&O 37:1307); percent
+//   saturation against the model's own saturation at the local temperature. Hypoxic below 2 mL/L (Diaz & Rosenberg
+//   2008, Science 321:926); the model's severe threshold (about 0.5 mL/L) is called a dead zone.
+// - nutrients and silica as a share of the deep shelf water, chlorophyll as relative fluorescence: the model's single
+//   nutrient has no one real unit, and in-situ fluorometer profiles are reported in relative units too.
+// - chlorophyll per unit biomass by group (PARAMS.notebook.chl): Chl:C of diatoms, dinoflagellates and green algae
+//   (Geider et al. 1997, MEPS 148:187; 1998, L&O 43:679; MacIntyre et al. 2002, J. Phycol. 38:17; Chan 1980,
+//   J. Phycol. 16:428); Dinophysis' stolen plastids (Park et al. 2006, AME 45:101); weak in-vivo chlorophyll
+//   fluorescence of phycobilin-rich Synechococcus and Trichodesmium, divinyl chlorophyll of Prochlorococcus (Campbell
+//   et al. 1998, MMBR 62:667; Moore et al. 1995, MEPS 116:259; Carpenter et al. 2004, DSR I 51:173).
+//   Photoacclimation (1 + c)/(1 + c L), up to 4x in dim water (Geider et al. 1997): why a chlorophyll maximum sits
+//   below the biomass (Cullen 2015, Annu. Rev. Mar. Sci. 7:207). Shelf seas call it the subsurface maximum.
+// - layers by the density threshold of Monterey & Levitus 1997 (0.125 kg/m^3 above the surface's) and the share of
+//   the steepest gradient; the bottom mixed layer as in Simpson & Sharples 2012 (Shelf Seas, CUP).
+// - migration as day against night depth, the classic diel vertical migration figure.
 
-// The seven forms as drawn. Icons are 7x7 masks in the form's ramp: h bright, b highlight, o base.
+// The nine forms as drawn. Icons are 7x7 masks in the form's ramp: h bright, b highlight, o base.
 const FORMS = [
   { name: 'GREEN ALGAE', ramp: GREEN, icon: ['......o', '.....o.', '..bbo..', '.bhhbb.', '.bhbbb.', '.bbbbb.', '..bbb..'] },
   { name: 'ALEXANDRIUM', ramp: BROWN, icon: ['..bbb..', '.bhhbb.', 'bhbbbbb', 'ooooooo', 'bbbbbbb', '.bbbbb.', '..bbb..'] },
@@ -5658,8 +5690,9 @@ const FORMS = [
   { name: 'COCCOLITHOPHORE', ramp: OLIVE, icon: ['..ooo..', '.ohbho.', 'obhbhbo', 'ohbobho', 'obhbhbo', '.ohbho.', '..ooo..'] },
   { name: 'CRYPTOPHYTE', ramp: VIOLET, icon: ['o......', '.o.o...', '..bbb..', '.bhhbb.', '.bhbbb.', '..bbbb.', '...bb..'] },
 ];
+const CYANO_RAMP = EMERALD, TRI_RAMP = AMBER;   // in charts the filamentous ones are hatched, apart from Tripos
 const CAUSES = [
-  { key: 'starved', name: 'STARVED', ramp: GOLD }, { key: 'old', name: 'OLD AGE', ramp: VIOLET },
+  { key: 'starved', name: 'STARVED', ramp: GOLD }, { key: 'old', name: 'OLD AGE', ramp: BROWN },
   { key: 'grazed', name: 'GRAZED', ramp: ROSE }, { key: 'sardines', name: 'SARDINES', ramp: LIGHTBLUE },
   { key: 'salps', name: 'SALPS', ramp: EMERALD }, { key: 'hunted', name: 'HUNTED', ramp: BLUE },
   { key: 'lysed', name: 'LYSED', ramp: VIOLET }, { key: 'hypoxia', name: 'HYPOXIA', ramp: OLIVE },
@@ -5667,10 +5700,10 @@ const CAUSES = [
 // Where each cause's running count sits in a row (hypoxia came later, after the other columns)
 const causeCol = (i) => (CAUSES[i].key === 'hypoxia' ? NB.HYPOXIA : NB.DEATHS + i);
 const VISITOR_INK = [
-  { kind: 'sardines', name: 'SARDINES', ramp: LIGHTBLUE }, { kind: 'salps', name: 'SALPS', ramp: VIOLET },
+  { kind: 'sardines', name: 'SARDINES', ramp: LIGHTBLUE }, { kind: 'salps', name: 'SALPS', ramp: EMERALD },
   { kind: 'sunfish', name: 'SUNFISH', ramp: GOLD },
 ];
-const PAGES = ['THE DAY', 'CENSUS', 'THE WATER', 'THE COLUMN', 'MIGRATION', 'LEDGER'];
+const PAGES = ['THE DAY', 'CENSUS', 'SPECIES', 'THE WATER', 'THE COLUMN', 'MIGRATION', 'LEDGER'];
 const SEA_STATES = ['CALM', 'BREEZE', 'WINDY', 'STORM'];
 // The notebook glyph, an open book: o page, - a line of writing; the spine is the gap between the pages
 const GLYPH = ['ooooo...ooooo', 'oooooo.oooooo', 'o----o.o----o', 'oooooo.oooooo', 'o----o.o----o', 'oooooo.oooooo', 'o---oo.oo---o', 'oooooo.oooooo', '..oooo.oooo..'];
@@ -5678,19 +5711,110 @@ const PAGE_INK = 1;   // the page: one step above the darkest water
 
 // One row of the record: offsets into the flat Float32Array (N, DEPTH and SD hold one value per form).
 // TICK holds simulated seconds (whole numbers, exact in a Float32 for ~194 days of life); rowTick turns it back.
+// SYN, PRO, TRI: cyanobacteria; O2: bottom water; TEMP: surface; NUTS, SIS, SALS: the surface water (nutrients,
+// silica, salinity); MLD: the mixed layer's depth as a share of the column (1: mixed to the floor); ENC, GERM: cysts
+// made and germinated so far. Each is filled from its arrival; older rows hold -1 there (unknown).
 const NB = { TICK: 0, LIGHT: 1, WIND: 2, NUT: 3, GRAZ: 4, POP: 5, CYSTS: 6, CHAINED: 7, GLOW: 8, N: 9, DEPTH: 18, SD: 27, DEATHS: 36, SILICA: 43, SYN: 44, PRO: 45,
-             TRI: 46, O2: 47, TEMP: 48, HYPOXIA: 49, STRIDE: 50 };   // SYN, PRO, TRI: cyanobacteria; O2: bottom water; TEMP: surface (each filled from its arrival)
+             TRI: 46, O2: 47, TEMP: 48, HYPOXIA: 49, NUTS: 50, SIS: 51, SALS: 52, MLD: 53, ENC: 54, GERM: 55, STRIDE: 56 };
 
 const notebook = {
-  open: false, page: 0, span: PARAMS.notebook.startSpan, solo: -1, hits: [],
+  open: false, page: 0, span: PARAMS.notebook.startSpan, solo: -1, guide: 0, hits: [],
   rows: new Float32Array(4096 * NB.STRIDE), count: 0, every: PARAMS.notebook.sampleEvery * PARAMS.time.tickRate, next: 0,
   visits: [], seenVisitor: 1, cols: null, colsKey: '', confirm: false,   // confirm: NEW WATER asked, waiting for YES or NO
   rests: [],   // the kept world resting while away beyond the catch-up limit: { tick, s }
+  tip: -1, tips: 0,   // the curiosity at the foot of the page, and how many have been shown (render only)
 };
 const rowTick = (r, i) => r[i * NB.STRIDE + NB.TICK] * PARAMS.time.tickRate;
 
 // The form a cell is drawn as: soft flagellate, one of the four dinoflagellates, centric or pennate diatom
 const formOf = (c) => c.kind;
+
+// ---- Reading the water (observation only: nothing here writes to the world) ----
+// A cast of the water now: the row means of each property (and the lowest oxygen in each row); with chl, the
+// chlorophyll a fluorometer would see in each row, smoothed over seven rows as one would (see PARAMS.notebook.chl)
+function castProfile(w, chl) {
+  const f = w.fields, { cols, rows } = PARAMS.grid;
+  const p = { temp: new Float64Array(rows), sal: new Float64Array(rows), o2: new Float64Array(rows), o2min: new Float64Array(rows),
+              nut: new Float64Array(rows), si: new Float64Array(rows), light: new Float64Array(rows), chl: null };
+  for (let j = 0; j < rows; j++) {
+    p.o2min[j] = Infinity;
+    for (let i = 0; i < cols; i++) {
+      const k = j * cols + i;
+      p.temp[j] += f.temp[k] / cols; p.sal[j] += f.sal[k] / cols; p.o2[j] += f.o2[k] / cols;
+      p.nut[j] += f.nut[k] / cols; p.si[j] += f.si[k] / cols; p.light[j] += f.light[k] / cols;
+      p.o2min[j] = Math.min(p.o2min[j], f.o2[k]);
+    }
+  }
+  if (!chl) return p;
+  const C = PARAMS.notebook.chl, Hn = PARAMS.hunt, a = new Float64Array(rows), s = Math.max(w.surfaceLight, 1e-6);
+  for (const c of w.cells) {
+    if (c.dying) continue;
+    const g = clamp(c.y / GRID_H - 0.5, 0, rows - 1), j0 = Math.floor(g), j1 = Math.min(rows - 1, j0 + 1), u = g - j0;
+    const q = c.biomass * C.kind[c.kind] * (c.hunter ? Hn.dark + (1 - Hn.dark) * c.klepto : 1);   // Dinophysis: its stolen plastids
+    a[j0] += q * (1 - u); a[j1] += q * u;
+  }
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) { const k = j * cols + i; a[j] += f.syn[k] * C.syn + f.pro[k] * C.pro + f.tri[k] * C.tri; }
+    a[j] *= (1 + C.acclim) / (1 + C.acclim * clamp(p.light[j] / s, 0, 1));   // dim water: greener cells
+  }
+  p.chl = new Float64Array(rows);
+  for (let j = 0; j < rows; j++) {
+    let sum = 0, wsum = 0;
+    for (let d = -3; d <= 3; d++) { const wgt = 4 - Math.abs(d); sum += a[clamp(j + d, 0, rows - 1)] * wgt; wsum += wgt; }
+    p.chl[j] = sum / wsum;
+  }
+  return p;
+}
+
+// The layers of a cast, on ch chart rows from the surface to the floor, read from the density profile (the model's
+// linear equation of state, counted in degrees: warmth, and salt at salinity.haline degrees per psu): the mixed
+// layer by the threshold criterion (density 0.125 kg/m^3 above the surface's, about mixedStep degrees; Monterey &
+// Levitus 1997), the pycnocline as the band where the gradient is at least clineShare of its steepest below the mixed
+// layer, and a bottom mixed layer where the bottom water lies within mixedStep of the floor's. Only in stratified
+// water (stratified degrees of density or more from the surface to the floor).
+function waterLayers(p, ch) {
+  const L = PARAMS.notebook.layers, hal = PARAMS.salinity.haline, rows = PARAMS.grid.rows, column = H - PARAMS.world.floor;
+  const depthOf = (k) => (k + 0.5) / ch * column;   // world depth of a chart row
+  const at = (a, wy) => {   // a row-mean profile at a world depth, linear between grid rows
+    const g = clamp(wy / GRID_H - 0.5, 0, rows - 1), j0 = Math.floor(g), j1 = Math.min(rows - 1, j0 + 1);
+    return a[j0] + (a[j1] - a[j0]) * (g - j0);
+  };
+  const Tm = (k) => at(p.temp, depthOf(k)), Sm = (k) => at(p.sal, depthOf(k));
+  const T = (k) => Tm(k) - hal * (Sm(k) - PARAMS.salinity.shelf);   // light water counts as warm: lower density, higher T
+  const tSurf = T(0), tFloor = T(ch - 1), stratified = tSurf - tFloor >= L.stratified;
+  let mixed = ch, top = ch, bottom = ch, bml = ch;
+  if (stratified) {
+    for (let k = 0; k < ch; k++) if (T(k) < tSurf - L.mixedStep) { mixed = k; break; }
+    let kmax = -1, gmax = 0;
+    for (let k = mixed; k < ch - 1; k++) { const g = T(k) - T(k + 1); if (g > gmax) { gmax = g; kmax = k; } }
+    if (kmax >= 0) {
+      top = kmax; bottom = kmax;
+      while (top > mixed && T(top - 1) - T(top) >= gmax * L.clineShare) top--;
+      while (bottom < ch - 2 && T(bottom + 1) - T(bottom + 2) >= gmax * L.clineShare) bottom++;
+      bottom++;
+    }
+    bml = ch - 1;
+    while (bml > bottom && T(bml - 1) < tFloor + L.mixedStep) bml--;
+    if (ch - bml < L.minRows) bml = ch;
+  }
+  return { stratified, mixed, top, bottom, bml, ch, at, depthOf, Tm, Sm };
+}
+
+// Mean of the top rows of a field (the surface water)
+function surfaceMean(a) {
+  const { cols } = PARAMS.grid, n = PARAMS.notebook.surfaceRows;
+  let s = 0;
+  for (let k = 0; k < n * cols; k++) s += a[k];
+  return s / (n * cols);
+}
+// Mean temperature of the bottom water (the rows bottomOxygen reads)
+function bottomTemp(w) {
+  const t = w.fields.temp, cols = PARAMS.grid.cols;
+  let s = 0;
+  for (const j of BOTTOM_ROWS) for (let i = 0; i < cols; i++) s += t[j * cols + i];
+  return s / (BOTTOM_ROWS.length * cols);
+}
+const LAYER_ROWS = 196;   // chart rows the layers are judged on (the recorder and the column page agree)
 
 // Called after every tick: visitors are logged as they arrive, the rest every sampleEvery s
 function notebookSample(w) {
@@ -5713,6 +5837,13 @@ function notebookSample(w) {
   r[o + NB.SYN] = cy.syn; r[o + NB.PRO] = cy.pro; r[o + NB.TRI] = cy.tri;
   r[o + NB.O2] = bottomOxygen(w).mean;
   r[o + NB.TEMP] = surfaceTemp(w);
+  r[o + NB.NUTS] = surfaceMean(w.fields.nut);
+  r[o + NB.SIS] = surfaceMean(w.fields.si);
+  r[o + NB.SALS] = surfaceMean(w.fields.sal);
+  const lay = waterLayers(castProfile(w, false), LAYER_ROWS);
+  r[o + NB.MLD] = lay.stratified ? lay.mixed / LAYER_ROWS : 1;
+  r[o + NB.ENC] = w.encysted;
+  r[o + NB.GERM] = w.germinated;
   let z = 0;
   for (let i = 0; i < graz.length; i++) z += graz[i];
   r[o + NB.GRAZ] = z / graz.length;
@@ -5783,30 +5914,39 @@ function rowAt(t) {
   return lo;
 }
 
+// The spring-neap strength at a tick (1 + range at springs), as updateTide reckons it from the moon
+function springAt(w, tick) {
+  const Td = PARAMS.tide, p0 = w.seed * 0.6180339887, p = tick * TICK_DT / (w.dayLength * Td.month) + p0 - Math.floor(p0);
+  return 1 + Td.range * dsin(2 * TAU * (p - Math.floor(p)) + Math.PI / 2);
+}
+
 // The graphs' time window (the last span, or the whole life), one column per pixel: the mean of the rows in each
 // column; the forms' depths are weighted by their numbers. An empty column (window finer than the rows) holds the last.
+// Rates (cells burst, deaths by cause) are counted over at least rateSpan s, so single events don't read as spikes.
 function notebookColumns() {
   const nb = notebook, key = nb.span + ':' + nb.count;
   if (nb.cols && nb.colsKey === key) return nb.cols;
-  const CW = PARAMS.notebook.chart.w, F = FORMS.length, S = NB.STRIDE, r = nb.rows, n = nb.count;
+  const CW = PARAMS.notebook.chart.w, F = FORMS.length, NC = CAUSES.length, S = NB.STRIDE, r = nb.rows, n = nb.count;
   const t1 = n ? rowTick(r, n - 1) : 0, s = PARAMS.notebook.spans[nb.span] * PARAMS.time.tickRate;
   const t0 = s && s < t1 ? t1 - s : 0;
+  const A = () => new Float32Array(CW);
   const cols = {
-    t0, t1, first: rowAt(t0), has: new Uint8Array(CW), k: new Float32Array(CW),
-    light: new Float32Array(CW), nut: new Float32Array(CW), graz: new Float32Array(CW), pop: new Float32Array(CW), si: new Float32Array(CW),
-    lys: new Float32Array(CW),   // cells burst by viruses per minute (from the ledger's running count)
-    cyano: new Float32Array(CW),   // cyanobacteria biomass, all three
-    o2: new Float32Array(CW), temp: new Float32Array(CW), kw: new Float32Array(CW),   // oxygen in the bottom water; surface temperature; rows holding them (saved since v5)
+    t0, t1, first: rowAt(t0), has: new Uint8Array(CW), k: A(), last: new Int32Array(CW).fill(-1),
+    light: A(), nut: A(), graz: A(), pop: A(), si: A(),
+    cyano: A(), tri: A(),                       // cyanobacteria biomass: the small ones, the filamentous ones
+    o2: A(), temp: A(), kw: A(),                // bottom-water oxygen; surface temperature; rows holding them (saved since v5)
+    nutS: A(), siS: A(), salS: A(), mld: A(), kv: A(),   // the surface water and the mixed layer; rows holding them (v7)
+    lys: A(), deaths: new Float32Array(CW * NC),         // cells burst per minute; deaths per minute by cause
     n: new Float32Array(CW * F), depth: new Float32Array(CW * F), sd: new Float32Array(CW * F),
   };
   for (let i = cols.first; i < n; i++) {
     const o = i * S, c = t1 > t0 ? Math.min(CW - 1, Math.floor((rowTick(r, i) - t0) / (t1 - t0) * CW)) : CW - 1;
     cols.k[c]++;
+    cols.last[c] = i;
     cols.light[c] += r[o + NB.LIGHT]; cols.nut[c] += r[o + NB.NUT]; cols.graz[c] += r[o + NB.GRAZ]; cols.pop[c] += r[o + NB.POP]; cols.si[c] += r[o + NB.SILICA];
-    cols.cyano[c] += r[o + NB.SYN] + r[o + NB.PRO] + r[o + NB.TRI];
+    cols.cyano[c] += r[o + NB.SYN] + r[o + NB.PRO]; cols.tri[c] += r[o + NB.TRI];
     if (r[o + NB.TEMP] > 0) { cols.o2[c] += r[o + NB.O2]; cols.temp[c] += r[o + NB.TEMP]; cols.kw[c]++; }
-    const LY = NB.DEATHS + CAUSES.findIndex((k) => k.key === 'lysed'), dtRow = i > 0 ? r[o + NB.TICK] - r[o - S + NB.TICK] : 0;
-    if (dtRow > 0) cols.lys[c] += Math.max(0, r[o + LY] - r[o - S + LY]) / dtRow * 60;
+    if (r[o + NB.MLD] >= 0) { cols.nutS[c] += r[o + NB.NUTS]; cols.siS[c] += r[o + NB.SIS]; cols.salS[c] += r[o + NB.SALS]; cols.mld[c] += r[o + NB.MLD]; cols.kv[c]++; }
     for (let f = 0; f < F; f++) {
       const m = r[o + NB.N + f], d = r[o + NB.DEPTH + f], sd = r[o + NB.SD + f];
       cols.n[c * F + f] += m;
@@ -5814,10 +5954,22 @@ function notebookColumns() {
       cols.sd[c * F + f] += m * (sd * sd + d * d);
     }
   }
-  const scalars = [cols.light, cols.nut, cols.graz, cols.pop, cols.si, cols.lys, cols.cyano], perForm = [cols.n, cols.depth, cols.sd];
+  // Rates at each column's last row, over the rows since max(rateSpan, a column) before it
+  const colSpan = (t1 - t0) / CW * TICK_DT, back = Math.max(60, colSpan), LY = NB.DEATHS + CAUSES.findIndex((k) => k.key === 'lysed');
+  for (let c = 0; c < CW; c++) {
+    const i = cols.last[c];
+    if (i < 1) continue;
+    const ti = r[i * S + NB.TICK], j = Math.min(i - 1, rowAt((ti - back) * PARAMS.time.tickRate)), dt = ti - r[j * S + NB.TICK];
+    if (dt <= 0) continue;
+    cols.lys[c] = Math.max(0, r[i * S + LY] - r[j * S + LY]) / dt * 60;
+    for (let q = 0; q < NC; q++) cols.deaths[c * NC + q] = Math.max(0, r[i * S + causeCol(q)] - r[j * S + causeCol(q)]) / dt * 60;
+  }
+  const scalars = [cols.light, cols.nut, cols.graz, cols.pop, cols.si, cols.cyano, cols.tri], perForm = [cols.n, cols.depth, cols.sd];
+  const kept = [cols.o2, cols.temp, cols.kw, cols.nutS, cols.siS, cols.salS, cols.mld, cols.kv, cols.lys];
   for (let c = 0; c < CW; c++) {
     const k = cols.k[c];
     if (cols.kw[c]) { cols.o2[c] /= cols.kw[c]; cols.temp[c] /= cols.kw[c]; }
+    if (cols.kv[c]) { cols.nutS[c] /= cols.kv[c]; cols.siS[c] /= cols.kv[c]; cols.salS[c] /= cols.kv[c]; cols.mld[c] /= cols.kv[c]; }
     if (k) {
       cols.has[c] = 1;
       for (const a of scalars) a[c] /= k;
@@ -5832,7 +5984,8 @@ function notebookColumns() {
     } else if (c && cols.has[c - 1]) {
       cols.has[c] = 1;
       for (const a of scalars) a[c] = a[c - 1];
-      cols.o2[c] = cols.o2[c - 1]; cols.temp[c] = cols.temp[c - 1]; cols.kw[c] = cols.kw[c - 1];
+      for (const a of kept) a[c] = a[c - 1];
+      for (let q = 0; q < NC; q++) cols.deaths[c * NC + q] = cols.deaths[(c - 1) * NC + q];
       for (const a of perForm) for (let f = 0; f < F; f++) a[c * F + f] = a[(c - 1) * F + f];
     }
   }
@@ -5841,13 +5994,32 @@ function notebookColumns() {
   return cols;
 }
 
+// Day and night mean depth (and spread) of each form over the window, straight from the rows, so long windows don't
+// alias the diel cycle: rows in full daylight (surface light above dayAbove) and in the dark (below nightBelow)
+function dayNightDepths(t0) {
+  const r = notebook.rows, S = NB.STRIDE, F = FORMS.length, N = PARAMS.notebook;
+  const z = () => new Float64Array(F);
+  const acc = { day: z(), dayN: z(), daySq: z(), night: z(), nightN: z(), nightSq: z() };
+  for (let i = rowAt(t0); i < notebook.count; i++) {
+    const o = i * S, L = r[o + NB.LIGHT], k = L > N.dayAbove ? 'day' : L < N.nightBelow ? 'night' : '';
+    if (!k) continue;
+    for (let f = 0; f < F; f++) {
+      const m = r[o + NB.N + f], d = r[o + NB.DEPTH + f], sd = r[o + NB.SD + f];
+      acc[k][f] += m * d; acc[k + 'N'][f] += m; acc[k + 'Sq'][f] += m * (sd * sd + d * d);
+    }
+  }
+  return acc;
+}
+
 // ---- Opening, turning, zooming ----
 function openNotebook(on) {
   notebook.open = on;
+  if (on) notebook.tip = -1;   // a fresh curiosity on each opening
   needsRender = true;
 }
 function turnPage(dir) {
   notebook.page = (notebook.page + dir + PAGES.length) % PAGES.length;
+  notebook.tip = -1;
   needsRender = true;
 }
 function setSpan(i) {
@@ -5888,6 +6060,21 @@ const ink = (x, y, text, idx) => drawGlyphs(x, y, text, idx, 1, 0);
 const inkRight = (xr, y, text, idx) => ink(xr - textWidth(text) + 1, y, text, idx);
 const inkCentre = (y, text, idx) => { const P = PARAMS.notebook.page; ink(P.x + Math.floor((P.w - textWidth(text)) / 2), y, text, idx); };
 const hit = (x, y, w, h, fn) => notebook.hits.push({ x, y, w, h, fn });
+// Text on a dark backing, readable over a graph
+function inkOver(x, y, text, idx) {
+  fillRect(x - 1, y - 1, textWidth(text) + 2, 7, PAGE_INK);
+  ink(x, y, text, idx);
+}
+// Words wrapped into lines of at most n characters
+function wrap(text, n) {
+  const lines = [];
+  let line = '';
+  for (const word of text.split(' ')) {
+    if (line && line.length + 1 + word.length > n) { lines.push(line); line = word; } else line = line ? line + ' ' + word : word;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
 
 function fillRect(x, y, w, h, idx) {
   for (let j = y; j < y + h; j++) for (let i = x; i < x + w; i++) put(i, j, idx);
@@ -5921,7 +6108,25 @@ function drawIcon(x, y, f, faded) {
     }
   }
 }
-const niceCeil = (v) => [5, 10, 20, 50, 100, 150, 200, 300, 400, 500].find((s) => s >= v) || Math.ceil(v / 100) * 100;
+// Trichodesmium's icon: a tuft of golden-brown filaments
+function drawTrichoIcon(x, y, faint) {
+  const rows = ['.o...o.', '..o.o..', 'o.hob.o', '.ohbbo.', '..bbb..', '.o.b.o.', 'o..o..o'];
+  rows.forEach((row, dy) => { for (let dx = 0; dx < 7; dx++) { const ch = row[dx]; if (ch !== '.') put(x + dx, y + dy, faint ? COL.SLATE : rampBase(TRI_RAMP) + (ch === 'h' ? BRIGHT : ch === 'b' ? HIGHLIGHT : BASE)); } });
+}
+// Cyanobacteria's icon: a haze of tiny specks, pink and blue-green
+function drawCyanoIcon(x, y, faint) {
+  const dots = [[1, 1, ROSE], [4, 0, EMERALD], [2, 3, EMERALD], [5, 3, ROSE], [0, 5, ROSE], [3, 6, EMERALD], [6, 5, ROSE], [4, 4, ROSE]];
+  for (const [dx, dy, r] of dots) put(x + dx, y + dy, faint ? COL.SLATE : rampBase(r) + BRIGHT);
+}
+// Every entry of the species guide: the nine forms, then the two cyanobacteria
+const guideIcon = (e, x, y, faint) => (e < FORMS.length ? drawIcon(x, y, e, faint) : e === FORMS.length ? drawCyanoIcon(x, y, faint) : drawTrichoIcon(x, y, faint));
+const niceCeil = (v) => [1, 2, 5, 10, 20, 50, 100, 150, 200, 300, 400, 500].find((s) => s >= v) || Math.ceil(v / 100) * 100;
+
+// Real units
+const metres = (frac) => Math.round(frac * PARAMS.notebook.depthM);
+const mlPerL = (o2) => o2 * PARAMS.notebook.o2mL;
+const o2Saturation = (T) => 1 - PARAMS.oxygen.satT * (T - PARAMS.temperature.air);   // the model's own, at temperature T
+const moonName = (m) => { const lit = moonLit(m); return lit > 0.95 ? 'FULL' : lit < 0.05 ? 'NEW' : (m < 0.5 ? 'WAXING ' : 'WANING ') + Math.round(lit * 100) + '%'; };
 
 // The notebook glyph, top right: shows with the HUD, bright while the notebook is open
 function drawNotebookGlyph(now) {
@@ -5985,6 +6190,112 @@ function drawSpanRow(y) {
     x += tw + gap;
   });
 }
+// The population over the window, stacked by form (green algae at the bottom), the cyanobacteria on top (biomass,
+// about a cell's worth per unit; the filamentous ones hatched), nights dark behind; the scale inside, top left
+function drawStack(cols, cy0, ch) {
+  const N = PARAMS.notebook, F = FORMS.length, CX = N.chart.x;
+  chartBackground(cols, cy0, ch);
+  let top = 1;
+  for (let c = 0; c < N.chart.w; c++) {
+    let tot = cols.cyano[c] + cols.tri[c];
+    for (let f = 0; f < F; f++) tot += cols.n[c * F + f];
+    top = Math.max(top, tot);
+  }
+  const scale = niceCeil(top);
+  for (let c = 0; c < N.chart.w; c++) {
+    if (!cols.has[c]) continue;
+    let acc = 0;
+    const layer = (v, rb, hatch) => {
+      if (!v) return;
+      const a = Math.round(acc / scale * ch), b = Math.round((acc + v) / scale * ch), x = CX + c;
+      for (let k = a; k < b; k++) { const y = cy0 + ch - 1 - k; put(x, y, rb + (k === b - 1 ? HIGHLIGHT : hatch && (x + y) % 3 === 0 ? SHADOW : BASE)); }
+      acc += v;
+    };
+    for (let f = 0; f < F; f++) layer(cols.n[c * F + f], rampBase(FORMS[f].ramp), false);
+    layer(cols.cyano[c], rampBase(CYANO_RAMP), false);
+    layer(cols.tri[c], rampBase(TRI_RAMP), true);
+  }
+  inkOver(CX + 2, cy0 + 2, String(scale), COL.SLATE);
+}
+
+// ---- Curiosities: one at the foot of every page, picked by what the water is doing (render only) ----
+// Each is true of the sea and of what MONAD shows; tag: when it fits (general: always). Sources by number below.
+const TIPS = [
+  { tag: 'cyano', text: 'PROCHLOROCOCCUS IS THE MOST ABUNDANT PHOTOSYNTHETIC ORGANISM ON EARTH: ABOUT THREE OCTILLION CELLS.' },   // Flombaum et al. 2013, PNAS 110:9824
+  { tag: 'general', text: "SEA PLANKTON DO ABOUT HALF OF THE WORLD'S PHOTOSYNTHESIS, WITH ABOUT 1% OF ITS PLANT BIOMASS." },   // Field et al. 1998, Science 281:237
+  { tag: 'general', text: "PLANKTON MAKE ABOUT HALF OF EARTH'S OXYGEN, BUT SEA LIFE BREATHES MOST OF IT BACK AGAIN." },   // Field et al. 1998; Falkowski 1998
+  { tag: 'general', text: "THE OCEAN'S PHYTOPLANKTON ARE EATEN OR DIE AND ARE REPLACED ABOUT ONCE A WEEK." },   // Falkowski 1998, Science 281:200
+  { tag: 'diatoms', text: 'DIATOMS FIX ABOUT A FIFTH OF ALL THE CARBON PHOTOSYNTHESISED ON EARTH.' },   // Nelson et al. 1995, GBC 9:359
+  { tag: 'diatoms', text: "A DIATOM'S LATTICE OF GLASS PORES BENDS LIGHT LIKE A PHOTONIC CRYSTAL: WHY THEIR RIMS SHIMMER." },   // Fuhrmann et al. 2004, Appl. Phys. B 78:257
+  { tag: 'diatoms', text: 'SILICA RETURNS TO THE WATER MORE SLOWLY THAN NITROGEN, SO DIATOMS RUN OUT FIRST AND OTHERS TAKE THEIR TURN.' },   // Dugdale et al. 1995, DSR I 42:697
+  { tag: 'crash', text: 'DIATOM BLOOMS OFTEN END IN A MASS SINKING OF CELLS AND RESTING SPORES.' },   // Smetacek 1985, Mar. Biol. 84:239
+  { tag: 'diatoms', text: 'CHAINS GUARD DIATOMS AGAINST THE SMALLEST GRAZERS, BUT COPEPODS AND FISH EAT CHAINS ALL THE SAME.' },   // Bergkvist et al. 2012, L&O 57:318
+  { tag: 'cysts', text: 'DINOFLAGELLATE CYSTS ABOUT A CENTURY OLD, DUG FROM FJORD MUD, HAVE BEEN WOKEN AND GROWN AGAIN.' },   // Ribeiro et al. 2011, ISME J 5:1645
+  { tag: 'cysts', text: "CYST BEDS ON THE SEABED SEED NEXT SEASON'S BLOOMS, AS ALEXANDRIUM'S DO IN THE GULF OF MAINE." },   // Anderson et al. 2005, DSR II 52:2522
+  { tag: 'storm', text: "MARGALEF'S MANDALA: DIATOMS RULE STIRRED, RICH WATER; DINOFLAGELLATES RULE CALM, LAYERED WATER." },   // Margalef 1978, Oceanol. Acta 1:493
+  { tag: 'calm', text: "MARGALEF'S MANDALA: DIATOMS RULE STIRRED, RICH WATER; DINOFLAGELLATES RULE CALM, LAYERED WATER." },
+  { tag: 'glow', text: 'A FLASH MAY BE A BURGLAR ALARM: IT DRAWS BIGGER HUNTERS ONTO WHATEVER IS GRAZING THE GLOWING CELL.' },   // Abrahams & Townsend 1993, Ecology 74:258
+  { tag: 'glow', text: 'DINOFLAGELLATES GLOW ON A DAILY CLOCK: THEY SHINE AT NIGHT EVEN WHEN KEPT IN THE DARK ALL DAY.' },   // Hastings & Sweeney 1957, PNAS 43:804
+  { tag: 'night', text: 'SOME DINOFLAGELLATES SWIM DOWN AT NIGHT TO FETCH NUTRIENTS AND RETURN TO THE LIGHT AT DAWN.' },   // Cullen & Horrigan 1981, Mar. Biol. 62:81
+  { tag: 'night', text: 'THE NIGHTLY RISE AND DAWN SINKING OF SEA ANIMALS IS THE LARGEST MIGRATION ON EARTH, EVERY DAY.' },   // Hays 2003, Hydrobiologia 503:163
+  { tag: 'general', text: 'A LITRE OF SEAWATER HOLDS ABOUT TEN BILLION VIRUSES.' },   // Suttle 2005, Nature 437:356
+  { tag: 'general', text: 'BURST CELLS RETURN THEIR NUTRIENTS TO THE WATER INSTEAD OF FEEDING GRAZERS: THE VIRAL SHUNT.' },   // Wilhelm & Suttle 1999, BioScience 49:781
+  { tag: 'milky', text: 'A GIANT VIRUS, EHV, CAN END A BLOOM OF THE COCCOLITHOPHORE EMILIANIA HUXLEYI.' },   // Bratbak et al. 1993, MEPS 93:39
+  { tag: 'milky', text: 'COCCOLITHOPHORE BLOOMS CAN SPREAD OVER 100 000 KM2, SEEN FROM SPACE AS MILKY TURQUOISE WATER.' },   // Holligan et al. 1993, GBC 7:879
+  { tag: 'dinophysis', text: "DINOPHYSIS'S CHLOROPLASTS PASS THROUGH THREE CELLS: A CRYPTOPHYTE, THE CILIATE MESODINIUM, THEN DINOPHYSIS." },   // Park et al. 2006
+  { tag: 'scum', text: 'DARWIN SAW TRICHODESMIUM FROM THE BEAGLE AND CALLED IT SEA-SAW-DUST.' },   // Darwin 1839, Journal of Researches
+  { tag: 'scum', text: 'TRICHODESMIUM FLOATS ON GAS VESICLES AND SINKS BY BUILDING HEAVY SUGAR BALLAST IN BRIGHT LIGHT.' },   // Villareal & Carpenter 2003, Microb. Ecol. 45:1
+  { tag: 'general', text: 'MARINE SNOW IS CLUMPS OF DEAD CELLS, MUCUS AND PELLETS, SINKING TENS TO HUNDREDS OF METRES A DAY.' },   // Alldredge & Silver 1988, Prog. Oceanogr. 20:41
+  { tag: 'salps', text: 'SALP PELLETS CAN SINK OVER TWO KILOMETRES A DAY, AMONG THE FASTEST PARTICLES IN THE SEA.' },   // Bruland & Silver 1981, Mar. Biol. 63:295
+  { tag: 'sunfish', text: 'OCEAN SUNFISH BASK AT THE SURFACE TO WARM UP AFTER DEEP, COLD DIVES FOR JELLY-LIKE PREY.' },   // Nakamura et al. 2015, J. Anim. Ecol. 84:590
+  { tag: 'sunfish', text: 'A SUNFISH OF ABOUT 2.3 TONNES IS THE HEAVIEST BONY FISH EVER WEIGHED.' },   // Sawai et al. 2018, Ichthyol. Res. 65:142
+  { tag: 'sardines', text: 'SARDINES FILTER PHYTOPLANKTON AS WELL AS ZOOPLANKTON: DIATOMS CAN FILL THEIR STOMACHS.' },   // Garrido et al. 2008, MEPS 354:245
+  { tag: 'hypoxia', text: 'OVER 400 COASTAL SYSTEMS NOW HAVE DEAD ZONES, MOSTLY FED BY NUTRIENTS WASHED OFF THE LAND.' },   // Diaz & Rosenberg 2008, Science 321:926
+  { tag: 'hypoxia', text: 'THE WHITE MATS ON DEAD SEABEDS ARE GIANT SULPHUR BACTERIA, BEGGIATOA, LIVING ON HYDROGEN SULPHIDE.' },   // Jorgensen 1977, Mar. Biol. 41:19
+  { tag: 'tide', text: 'SPRING TIDES HAVE NOTHING TO DO WITH SPRING: THEY COME ABOUT EVERY 15 DAYS, NEAR NEW AND FULL MOON.' },   // Simpson & Sharples 2012
+  { tag: 'tide', text: 'WHERE TIDES ARE STRONG FOR THE DEPTH THEY MIX THE SHELF FROM THE SEABED UP; FRONTS FORM WHERE THEY STOP.' },   // Simpson & Hunter 1974, Nature 250:404
+  { tag: 'general', text: 'A SUBSURFACE CHLOROPHYLL MAXIMUM IS OFTEN NOT MORE CELLS BUT GREENER ONES: DIM-LIGHT CELLS PACK MORE CHLOROPHYLL.' },   // Cullen 2015
+  { tag: 'bloom', text: 'TINY GRAZERS, MOSTLY SINGLE CELLS, EAT ABOUT TWO THIRDS OF WHAT PHYTOPLANKTON GROW EACH DAY.' },   // Calbet & Landry 2004, L&O 49:51
+  { tag: 'upwelling', text: 'UPWELLING LIFTS COLD, NUTRIENT-RICH WATER INTO THE LIGHT; SOME OF THE RICHEST FISHING GROUNDS LIVE ON IT.' },   // Simpson & Sharples 2012
+  { tag: 'runoff', text: 'RIVER WATER IS LIGHTER THAN SEAWATER, SO A LENS OF FRESH WATER CAN FLOAT ON THE SEA AND SEAL OFF THE WATER BELOW.' },   // Simpson & Sharples 2012
+];
+// What the water is doing now, as tags
+function tipTags(w) {
+  const tags = new Set(['general']), F = FORMS.length, counts = new Array(F).fill(0);
+  let glow = 0;
+  for (const c of w.cells) { if (c.dying) continue; counts[formOf(c)]++; if (isLuminous(c)) glow++; }
+  const alive = counts.reduce((s, v) => s + v, 0), night = w.surfaceLight < PARAMS.notebook.nightBelow, cy = cyanoTotal(w);
+  if (counts[5] + counts[6] > 30) tags.add('diatoms');
+  if (counts[7] > 30) tags.add('milky');
+  if (counts[2] > 3) tags.add('dinophysis');
+  if (cy.syn + cy.pro > 15) tags.add('cyano');
+  if (cy.tri > 20) tags.add('scum');
+  if (alive > 150) tags.add('bloom');
+  if (alive < 30) tags.add('crash');
+  if (night) tags.add('night');
+  if (night && glow) tags.add('glow');
+  if (w.cysts.length > 10) tags.add('cysts');
+  if (w.wind > PARAMS.notebook.seaStates[2]) tags.add('storm');
+  if (w.wind < PARAMS.notebook.seaStates[0]) tags.add('calm');
+  if (Math.abs(w.spring - 1) > PARAMS.tide.range / 2) tags.add('tide');
+  if (w.pulses.length) tags.add('upwelling');
+  if (w.runoffs.length) tags.add('runoff');
+  if (bottomOxygen(w).min < PARAMS.oxygen.hypoxic) tags.add('hypoxia');
+  for (const v of w.visitors) tags.add(v.kind);
+  return tags;
+}
+// A tip that fits the moment (one of the water's own if any, else a general one), different from the last
+function drawTip(w, y) {
+  const nb = notebook, P = PARAMS.notebook.page;
+  if (nb.tip < 0) {
+    const tags = tipTags(w), fits = TIPS.map((t, i) => i).filter((i) => tags.has(TIPS[i].tag) && TIPS[i].tag !== 'general');
+    const pool = fits.length && nb.tips % 3 !== 2 ? fits : TIPS.map((t, i) => i).filter((i) => TIPS[i].tag === 'general');
+    nb.tip = pool[Math.floor(hash01(nb.tips * 7919 + w.tick) * pool.length)];
+    nb.tips++;
+  }
+  dotted(P.x + 6, P.x + P.w - 7, y, COL.SLATE);
+  wrap(TIPS[nb.tip].text, 38).slice(0, 3).forEach((line, i) => ink(P.x + 6, y + 4 + i * 7, line, COL.SHAFT));
+}
 
 // ---- The pages ----
 function drawNotebook(w) {
@@ -6012,11 +6323,13 @@ function drawNotebook(w) {
   hit(x1 - 28, fy - 5, 28, 15, () => turnPage(1));
   for (let i = 0; i < PAGES.length; i++) {
     fillRect(dx0 + i * 6 + 2, fy + 2, 2, 2, i === notebook.page ? COL.FOAM : COL.SLATE);
-    hit(dx0 + i * 6, fy - 3, 6, 11, () => { notebook.page = i; });
+    hit(dx0 + i * 6, fy - 3, 6, 11, () => { notebook.page = i; notebook.tip = -1; });
   }
   if (notebook.page !== PAGES.length - 1 || !notebook.open) notebook.confirm = false;   // a question left unanswered is withdrawn
-  [drawDayPage, drawCensusPage, drawWaterPage, drawColumnPage, drawMigrationPage, drawLedgerPage][notebook.page](w, P.y + 19);
+  [drawDayPage, drawCensusPage, drawSpeciesPage, drawWaterPage, drawColumnPage, drawMigrationPage, drawLedgerPage][notebook.page](w, P.y + 19);
+  drawTip(w, fy - 28);
 }
+const PAGE_END = () => PARAMS.notebook.page.y + PARAMS.notebook.page.h - 41;   // the lowest row a page's content may use, above the tip
 
 // The notebook keeps day colours at every hour, so it reads the same at night
 function inkNotebook() {
@@ -6030,12 +6343,13 @@ function inkNotebook() {
   copy(M.x - 1, M.y, M.x + NOTE_GLYPH[0].length + 1, M.y + NOTE_GLYPH.length + 2);
 }
 
-// I. The day: a sun and moon dial over the sea, the hour, the weather and the water, the day in one strip
+// I. The day: a sun and moon dial over the sea, the hour, the weather, the water at the surface and the bottom, the
+// life of the world, and the day in one strip
 function drawDayPage(w, y) {
   const N = PARAMS.notebook, D = PARAMS.diel, P = N.page, ph = dayPhase(w), R = N.dialR;
-  const cx = P.x + (P.w >> 1), cy = y + 40, x1 = P.x + P.w;
-  for (let j = 1; j <= 12; j++) {   // the sea under the horizon
-    for (let x = cx - R - 12; x <= cx + R + 12; x++) put(x, cy + j, bayer(x, cy + j) < 1 - j / 12 ? 4 : 2);
+  const cx = P.x + (P.w >> 1), cy = y + 33, x1 = P.x + P.w;
+  for (let j = 1; j <= 10; j++) {   // the sea under the horizon
+    for (let x = cx - R - 12; x <= cx + R + 12; x++) put(x, cy + j, bayer(x, cy + j) < 1 - j / 10 ? 4 : 2);
   }
   for (let x = cx - R - 12; x <= cx + R + 12; x++) put(x, cy, COL.SHAFT);
   for (let a = 0; a <= 32; a++) {
@@ -6058,33 +6372,37 @@ function drawDayPage(w, y) {
       if (by + dy < cy) put(bx + dx, by + dy, rampBase(GOLD) + BASE);
     }
   }
-  const hour = mod(N.noonHour + (ph - D.dayFrac / 2) * 24, 24), hh = Math.floor(hour), mm = Math.floor((hour - hh) * 60);
-  const time = pad(hh, 2) + ':' + pad(mm, 2);
-  inkBig(cx - ((time.length * 8 - 2) >> 1), cy + 16, time, COL.FOAM);
+  const hhmm = (h) => { const m = Math.round(mod(h, 24) * 60) % 1440; return pad(Math.floor(m / 60), 2) + ':' + pad(m % 60, 2); };
+  const hour = mod(N.noonHour + (ph - D.dayFrac / 2) * 24, 24), rise = N.noonHour - D.dayFrac * 12, set = N.noonHour + D.dayFrac * 12;
+  const time = hhmm(Math.floor(hour * 60) / 60);
+  inkBig(cx - ((time.length * 8 - 2) >> 1), cy + 13, time, COL.FOAM);
   const dayNum = Math.floor(w.tick * TICK_DT / w.dayLength + D.start) + 1;
-  const next = (day ? D.dayFrac - ph : 1 - ph) * w.dayLength;
-  inkCentre(cy + 31, 'DAY ' + dayNum + '   ' + (day ? 'SUNSET IN ' : 'SUNRISE IN ') + clock(next), COL.SHAFT);
-  const lit = moonLit(moon);
-  if (!day) inkCentre(cy - R - 6, lit > 0.95 ? 'FULL MOON' : lit < 0.05 ? 'NEW MOON' : (moon < 0.5 ? 'WAXING ' : 'WANING ') + Math.round(lit * 100) + '%', COL.SLATE);
+  inkCentre(cy + 27, 'DAY ' + dayNum + '   ' + (day ? 'SUNSET AT ' + hhmm(set) : 'SUNRISE AT ' + hhmm(rise)), COL.SHAFT);
 
-  let ry = cy + 44;
-  const row = (label, draw) => { ink(P.x + 6, ry, label, COL.SHAFT); draw(N.bar.x, ry); ry += 9; };
+  let ry = cy + 37;
+  const row = (label, draw, indent) => { ink(P.x + 6 + (indent || 0), ry, label, COL.SHAFT); draw(N.bar.x, ry); ry += 9; };
   const value = (text, idx) => (x, yy) => ink(x, yy, text, idx || COL.FOAM);
   const divide = () => { dotted(P.x + 6, x1 - 7, ry, COL.SLATE); ry += 5; };
   let sea = 0;
   while (sea < N.seaStates.length && w.wind >= N.seaStates[sea]) sea++;
   let z = 0;
   for (let i = 0; i < w.fields.graz.length; i++) z += w.fields.graz[i];
-  row('SUNLIGHT', (x, yy) => bar(x, yy + 1, N.bar.w, w.surfaceLight, GOLD));
+  const Td = PARAMS.tide, O = PARAMS.oxygen;
+  row('SUNLIGHT', day ? (x, yy) => bar(x, yy + 1, N.bar.w, w.surfaceLight, GOLD) : value('NONE, ONLY THE MOON', COL.SLATE));
   row('SEA ' + SEA_STATES[sea], (x, yy) => bar(x, yy + 1, N.bar.w, w.wind, EMERALD));
-  const Td = PARAMS.tide;   // the tidal current now, and springs or neaps
   row(w.spring > 1 + Td.range / 2 ? 'SPRING TIDE' : w.spring < 1 - Td.range / 2 ? 'NEAP TIDE' : 'TIDE', (x, yy) => bar(x, yy + 1, N.bar.w, Math.abs(w.tideU) / (1 + Td.range), BLUE));
+  const toSprings = mod(-moon, 0.5) * PARAMS.tide.month;   // days to the next new or full moon
+  row('MOON', value(moonName(moon) + (toSprings > 1.5 && toSprings < 13.5 ? '  SPRINGS IN ' + Math.round(toSprings) + 'D' : '')));
   row('UPWELLING', value(w.pulses.length ? 'A PLUME RISES' : 'NONE', w.pulses.length ? rampBase(GREEN) + HIGHLIGHT : COL.SLATE));
-  row('RUNOFF', value(w.runoffs.length ? 'RAIN   MUD WASHES IN' : 'NONE', w.runoffs.length ? rampBase(AMBER) + HIGHLIGHT : COL.SLATE));
-  row('WATER', value(surfaceTemp(w).toFixed(1) + ' C AT THE SURFACE'));
-  const ox = bottomOxygen(w), deadZone = ox.min < PARAMS.oxygen.hypoxic;
-  row(deadZone ? 'DEAD ZONE' : 'BOTTOM OXYGEN', (x, yy) => bar(x, yy + 1, N.bar.w, ox.mean, deadZone ? OLIVE : LIGHTBLUE));
-  row('NUTRIENTS', (x, yy) => bar(x, yy + 1, N.bar.w, meanNutrient(w), GREEN));
+  row('RUNOFF', value(w.runoffs.length ? 'RAIN, MUD WASHES IN' : 'NONE', w.runoffs.length ? rampBase(AMBER) + HIGHLIGHT : COL.SLATE));
+  divide();
+  row('SURFACE', value(surfaceTemp(w).toFixed(1) + ' C   ' + surfaceMean(w.fields.sal).toFixed(1) + ' PSU'));
+  const nutS = surfaceMean(w.fields.nut) / PARAMS.nutrients.deep;
+  row('NUTRIENTS', (x, yy) => { bar(x, yy + 1, 60, nutS, GREEN); inkRight(x1 - 7, yy, Math.round(nutS * 100) + '%', COL.FOAM); }, 4);
+  const ox = bottomOxygen(w), Tb = bottomTemp(w), severe = ox.min < O.anoxic, hypoxic = ox.min < O.hypoxic;
+  row(severe ? 'DEAD ZONE' : hypoxic ? 'HYPOXIC' : 'BOTTOM O2', value(hypoxic
+    ? 'LOWEST ' + mlPerL(ox.min).toFixed(1) + ' ML/L'
+    : mlPerL(ox.mean).toFixed(1) + ' ML/L   ' + Math.round(ox.mean / o2Saturation(Tb) * 100) + '%', hypoxic ? rampBase(OLIVE) + BRIGHT : COL.FOAM));
   row('GRAZERS', (x, yy) => bar(x, yy + 1, N.bar.w, z / w.fields.graz.length / 2, ROSE));
   divide();
   if (w.extinctTick >= 0) {
@@ -6092,12 +6410,16 @@ function drawDayPage(w, y) {
     row('', value('EXTINCT', rampBase(ROSE) + HIGHLIGHT));
   } else {
     row('ALIVE FOR', value(clock(w.tick * TICK_DT)));
-    row('POPULATION', value(aliveCount(w) + '   CYSTS ' + w.cysts.length));
+    row('POPULATION', value(String(aliveCount(w))));
   }
+  // Cysts: the bed now, and those made and woken in the last hour (from the record)
+  const r = notebook.rows, S = NB.STRIDE, last = notebook.count - 1, i0 = rowAt(w.tick - 3600 * PARAMS.time.tickRate);
+  const known = last >= 0 && r[i0 * S + NB.ENC] >= 0;
+  row('CYSTS', value(w.cysts.length + ' IN THE BED'));
+  if (known) row('LAST HOUR', value((r[last * S + NB.ENC] - r[i0 * S + NB.ENC]) + ' MADE   ' + (r[last * S + NB.GERM] - r[i0 * S + NB.GERM]) + ' WOKE'), 4);
   // The whole day in one strip, midnight to midnight: surface light by the hour, and where the day is now
   divide();
   const sx = P.x + 6, sw = P.w - 12, toPhase = (h) => mod((h - N.noonHour) / 24 + D.dayFrac / 2, 1);
-  const hhmm = (h) => { const m = Math.round(mod(h, 24) * 60) % 1440; return pad(Math.floor(m / 60), 2) + ':' + pad(m % 60, 2); };
   for (let i = 0; i < sw; i++) {
     const L = surfaceLightAt(toPhase((i + 0.5) / sw * 24)), lit = smoothstep(D.moon, 1, L);
     for (let k = 0; k < 5; k++) {
@@ -6107,9 +6429,6 @@ function drawDayPage(w, y) {
   }
   const nx = sx + Math.round(hour / 24 * (sw - 1));
   for (let k = 0; k < 9; k++) put(nx, ry + k, COL.FOAM);
-  const rise = N.noonHour - D.dayFrac * 12, set = N.noonHour + D.dayFrac * 12;
-  ink(sx, ry + 11, 'SUNRISE ' + hhmm(rise), COL.SHAFT);
-  inkRight(sx + sw - 1, ry + 11, 'SUNSET ' + hhmm(set), COL.SHAFT);
 }
 
 // II. The census: how many of each form live in the column now, and who ruled the water over the window
@@ -6122,7 +6441,7 @@ function drawCensusPage(w, y) {
     if (c.chainLen > 1) chained++;
     if (isLuminous(c)) glow++;
   }
-  const most = Math.max(1, ...counts), BX = 82, BW = 58;
+  const cyT = cyanoTotal(w), most = Math.max(1, ...counts, cyT.syn + cyT.pro, cyT.tri), BX = 82, BW = 58;
   for (let f = 0; f < F; f++) {
     const ry = y + f * 10;
     drawIcon(P.x + 6, ry, f, !counts[f]);
@@ -6132,298 +6451,348 @@ function drawCensusPage(w, y) {
   }
   // Cyanobacteria as biomass (about a cell's worth per unit): the single cells together (author: just cyanobacteria),
   // and under them, indented, the filamentous ones (Trichodesmium)
-  const cyT = cyanoTotal(w);
-  [['CYANOBACTERIA', cyT.syn + cyT.pro, drawCyanoIcon, ROSE, 0], ['FILAMENTOUS', cyT.tri, drawTrichoIcon, AMBER, 6]].forEach(([name, v, icon, ramp, indent], k) => {
+  [['CYANOBACTERIA', cyT.syn + cyT.pro, drawCyanoIcon, CYANO_RAMP, 0], ['FILAMENTOUS', cyT.tri, drawTrichoIcon, TRI_RAMP, 6]].forEach(([name, v, icon, ramp, indent], k) => {
     const n = Math.round(v), ry = y + (F + k) * 10;
     icon(P.x + 6 + indent, ry, !n);
     ink(P.x + 16 + indent, ry + 1, name, n ? COL.FOAM : COL.SLATE);
-    bar(BX, ry + 2, BW, Math.min(1, n / Math.max(most, 1)), ramp);
+    bar(BX, ry + 2, BW, n / most, ramp);
     inkRight(x1 - 7, ry + 1, String(n), n ? COL.FOAM : COL.SLATE);
   });
   ink(P.x + 6, y + 112, 'IN CHAINS ' + chained + '   CYSTS ' + w.cysts.length + '   GLOWING ' + glow, COL.SHAFT);
-  dotted(P.x + 6, x1 - 7, y + 121, COL.SLATE);
-  drawSpanRow(y + 127);
+  ink(P.x + 6, y + 120, 'CYANOBACTERIA: CELLS\' WORTH OF BIOMASS', COL.SLATE);
+  dotted(P.x + 6, x1 - 7, y + 128, COL.SLATE);
+  drawSpanRow(y + 133);
 
-  const cols = notebookColumns(), cy0 = y + 139, ch = 97;
+  const cols = notebookColumns(), cy0 = y + 144, ch = PAGE_END() - 9 - cy0;
   drawStack(cols, cy0, ch);
   drawTimeAxis(cols, cy0 + ch + 3);
 }
 
-// Trichodesmium's icon: a tuft of golden-brown filaments
-function drawTrichoIcon(x, y, faint) {
-  const rows = ['.o...o.', '..o.o..', 'o.hob.o', '.ohbbo.', '..bbb..', '.o.b.o.', 'o..o..o'];
-  rows.forEach((row, dy) => { for (let dx = 0; dx < 7; dx++) { const ch = row[dx]; if (ch !== '.') put(x + dx, y + dy, faint ? COL.SLATE : rampBase(AMBER) + (ch === 'h' ? BRIGHT : ch === 'b' ? HIGHLIGHT : BASE)); } });
+// III. The species: each form drawn by the sprite renderer itself from an example cell, with what it is, in the sea
+// and in this water. Texts true of the real organisms and of the model (sources in the comments).
+const GUIDE = [
+  { sub: 'CHLOROPHYTES', text: 'SMALL SWIMMING CELLS THAT BEAT THEIR FLAGELLA. CHLOROPHYLL B MAKES THEM GRASS GREEN. THEY SWIM TO THE LIGHT BY DAY AND SINK TOWARD RICHER WATER AT NIGHT. WHEN FOOD RUNS SHORT SOME TURN INTO TOUGH RESTING ZYGOTES ON THE SEABED.' },   // Lee 2018, Phycology
+  { sub: 'ARMOURED DINOFLAGELLATE', text: 'A SHELL OF CELLULOSE PLATES, AND A GROOVE AROUND ITS MIDDLE FOR A WHIRLING FLAGELLUM. SOME LINEAGES GLOW BLUE-GREEN AT NIGHT WHEN DISTURBED. CALM WATER SUITS IT; STORMS STOP ITS GROWTH. IN HARD TIMES IT SLEEPS IN THE MUD AS A CYST AND SEEDS THE NEXT BLOOM.' },   // Anderson et al. 2012, Annu. Rev. Mar. Sci. 4:143
+  { sub: 'THE CHLOROPLAST THIEF', text: 'A FLATTENED DINOFLAGELLATE WITH FRILLY COLLARS THAT CANNOT MAKE CHLOROPLASTS OF ITS OWN. IT STEALS THEM FROM THE CELLS IT EATS, CRYPTOPHYTES FIRST, AND USES THEM UNTIL THEY FADE, SO IT MUST KEEP HUNTING. IN THE SEA IT GETS THEM SECOND-HAND, BY EATING THE CILIATE MESODINIUM.' },   // Park et al. 2006
+  { sub: 'HORNED DINOFLAGELLATE', text: 'A BIG ARMOURED CELL WITH THREE LONG CURVED HORNS, ONCE CALLED CERATIUM. A CALM-WATER CELL: TURBULENCE HOLDS BACK ITS GROWTH, SO IT BLOOMS IN STILL, LAYERED SUMMER WATER. ITS CELLS CAN STAY JOINED IN SHORT CHAINS.' },   // Margalef 1978
+  { sub: 'DINOFLAGELLATE IN TWO VALVES', text: 'ITS SHELL IS TWO FLAT VALVES LIKE A SEED, WITH A SMALL TOOTH AT THE FRONT WHERE ITS FLAGELLA COME OUT. IT ALWAYS LIVES ALONE, NEVER IN CHAINS, AND LIKE ALL DINOFLAGELLATES IT GROWS BEST IN CALM WATER.' },   // Glibert et al. 2012, Harmful Algae 14:231
+  { sub: 'GLASS PILLBOX', text: 'A CELL IN A BOX OF SILICA GLASS, TWO VALVES THAT FIT LIKE A PILLBOX, ETCHED WITH FINE PORES. IT NEEDS SILICA, SO A BIG BLOOM STRIPS THE WATER AND ENDS ITSELF. CHAINS AND COILS ESCAPE THE SMALLEST GRAZERS. HUNGRY CELLS SINK AS RESTING SPORES AND WAKE WHEN THE WATER IS RICH AGAIN.' },   // Smetacek 1985
+  { sub: 'GLASS BOAT', text: 'A GLASS CELL SHAPED LIKE A BOAT, WITH A SLIT, THE RAPHE, DOWN ITS MIDDLE. SOME BUILD STAR-SHAPED COLONIES JOINED AT ONE END, AS ASTERIONELLOPSIS DOES. LIKE ALL DIATOMS IT NEEDS SILICA, AND ITS GLASS SHIMMERS LIKE A PHOTONIC CRYSTAL.' },   // Round, Crawford & Mann 1990, The Diatoms
+  { sub: 'CHALK-PLATED HAPTOPHYTE', text: 'A TINY CELL WRAPPED IN CHALK PLATES, THE COCCOLITHS. IN A BLOOM THE SHED PLATES TURN THE SEA MILKY TURQUOISE. IT GROWS SLOWLY BUT THRIVES IN POOR, CALM WATER. THE PLATES WEIGH IT DOWN AND MAY SHIELD IT FROM GRAZERS. ITS OWN VIRUS CAN END A BLOOM.' },   // Holligan et al. 1993; Bratbak et al. 1993; Monteiro et al. 2016
+  { sub: 'SLIPPER FLAGELLATE', text: 'A SLIPPER-SHAPED CELL WITH TWO UNEQUAL FLAGELLA FROM A FURROW AT THE FRONT, AND NO ARMOUR. EXTRA PIGMENTS, PHYCOBILINS FROM PINK TO BLUE, CATCH THE DIM LIGHT OF DEEPER WATER. DINOPHYSIS HUNTS IT FOR ITS CHLOROPLASTS.' },   // Hoef-Emden & Archibald 2016, Handbook of the Protists
+  { sub: 'SYNECHOCOCCUS, PROCHLOROCOCCUS', text: 'BACTERIA THAT PHOTOSYNTHESISE, ABOUT ONE THOUSANDTH OF A MILLIMETRE ACROSS: TOO SMALL TO SEE ONE BY ONE, A HAZE OF SPECKS. SYNECHOCOCCUS IS PINK-ORANGE AND LIKES BRIGHT WATER; PROCHLOROCOCCUS IS BLUE-GREEN AND WORKS IN DIM WATER. BOTH WIN IN POOR, CALM WATER, AND EACH HAS ITS OWN VIRUSES.' },   // Flombaum et al. 2013; Partensky et al. 1999
+  { sub: 'TRICHODESMIUM-LIKE', text: 'COLONIES OF HAIR-LIKE FILAMENTS, SEA SAWDUST. THEY FIX NITROGEN FROM THE AIR AND FERTILISE POOR WATER WHEN THEY DIE. GAS VESICLES FLOAT THEM UP; IN CALM, WARM WATER THEY GATHER IN A GOLDEN SCUM AT THE SURFACE. THEY NEED WATER OF ABOUT 20 C AND UP, AND FEW GRAZERS EAT THEM.' },   // Capone et al. 1997, Science 276:1221
+];
+// Example cells for the guide, one per form: a lineage found by trying sprite seeds until the form comes out
+// (render only: they never enter the world)
+let specimens = null;
+function guideSpecimens() {
+  if (specimens) return specimens;
+  const timbre = [0.12, 0.41, 0.41, 0.41, 0.41, 0.9, 0.9, 0.12, 0.12];
+  specimens = timbre.map((tb, kind) => {
+    for (let seed = 1; ; seed++) {
+      const g = { hue: kind >= 5 && kind <= 6 ? 5.2 : 3.5, size: kind === 3 ? 1.2 : 1.5, depthPref: 0.3, omega: 0.3, coupling: kind >= 5 && kind <= 6 ? 0.55 : 0.2, timbre: tb };
+      const c = cellObject(-1 - kind, 0, 0, 0, g, 0.5, 0, seed * 7919);
+      deriveTraits(c);
+      if (c.kind !== kind) continue;
+      if (c.hunter) { c.klepto = 1; c.plastids = [VIOLET, ROSE, BLUE, VIOLET]; }   // Dinophysis wears its prey's colours
+      return c;
+    }
+  });
+  return specimens;
 }
-
-// Cyanobacteria's icon: a haze of tiny specks, pink and blue-green
-function drawCyanoIcon(x, y, faint) {
-  const dots = [[1, 1, ROSE], [4, 0, EMERALD], [2, 3, EMERALD], [5, 3, ROSE], [0, 5, ROSE], [3, 6, EMERALD], [6, 5, ROSE], [4, 4, ROSE]];
-  for (const [dx, dy, r] of dots) put(x + dx, y + dy, faint ? COL.SLATE : rampBase(r) + (faint ? SHADOW : BRIGHT));
-}
-
-// The population over the window, stacked by form (green algae at the bottom), nights dark behind
-function drawStack(cols, cy0, ch) {
-  const N = PARAMS.notebook, F = FORMS.length, CX = N.chart.x;
-  chartBackground(cols, cy0, ch);
-  let top = 1;
-  for (let c = 0; c < N.chart.w; c++) {
-    let tot = 0;
-    for (let f = 0; f < F; f++) tot += cols.n[c * F + f];
-    top = Math.max(top, tot);
-  }
-  const scale = niceCeil(top);
-  for (let c = 0; c < N.chart.w; c++) {
-    if (!cols.has[c]) continue;
-    let acc = 0;
-    for (let f = 0; f < F; f++) {
-      const v = cols.n[c * F + f];
-      if (!v) continue;
-      const a = Math.round(acc / scale * ch), b = Math.round((acc + v) / scale * ch), rb = rampBase(FORMS[f].ramp);
-      for (let k = a; k < b; k++) put(CX + c, cy0 + ch - 1 - k, rb + (k === b - 1 ? HIGHLIGHT : BASE));
-      acc += v;
+// A cell drawn as the water draws it (without the water's light), centred at cx, cy, on screen radius rpx
+function drawSpecimen(c, cx, cy, rpx, tick) {
+  const angle = -0.6, step = Math.round(angle / TAU * PARAMS.sprite.tumbleSteps), key = 'guide' + rpx;
+  if (!c.spr || c.spr.key !== key) c.spr = buildSprite(c, rpx, step * TAU / PARAMS.sprite.tumbleSteps, 8, key);
+  const spr = c.spr, base = rampBase(hueRamp(c)), base2 = rampBase(hueNeighbour(c));
+  c.theta = tick * TICK_DT * TAU * c.g.omega;   // the flagella beat with its pulse
+  drawFlagella(c, cx, cy, step * TAU / PARAMS.sprite.tumbleSteps, rpx, spr, base);
+  const tones = spr.frames[Math.floor(tick * TICK_DT * PARAMS.sprite.wobbleFps) % spr.frames.length], x0 = cx - spr.half, y0 = cy - spr.half;
+  for (let py = 0; py < spr.size; py++) {
+    for (let px = 0; px < spr.size; px++) {
+      const t0 = tones[py * spr.size + px];
+      if (t0 === -1) continue;
+      let idx;
+      if (t0 === IRIDESCENT) idx = IRID_SET[mod(Math.floor(tick * TICK_DT * PARAMS.sprite.iridSpeed * 8) + ((px + 2 * py) >> 1), IRID_SET.length)];
+      else if (t0 <= PLATE_LIT) idx = PLATE_IDX[PLATE_LIT - t0];
+      else {
+        const slot = t0 >= ALT ? Math.floor(t0 / ALT) : 0, tt = t0 - slot * ALT;
+        idx = (slot === 0 ? base : slot === 1 ? base2 : c.plastids && c.plastids[slot - 2] !== undefined ? rampBase(c.plastids[slot - 2]) : base) + tt;
+      }
+      put(x0 + px, y0 + py, idx);
     }
   }
-  inkRight(CX - 3, cy0, String(scale), COL.SLATE);
-  inkRight(CX - 3, cy0 + ch - 5, '0', COL.SLATE);
 }
-
-// III. The water: its chemistry over the window (nutrients and silica on one scale; grazers, and viruses as the cells
-// they burst per minute, each to their own peak),
-// and the population by form underneath on the same time axis, so a silica crash lines up with the diatoms' fall
-function drawWaterPage(w, y) {
-  const N = PARAMS.notebook, P = N.page, F = FORMS.length, CX = N.chart.x, CW = N.chart.w;
-  drawSpanRow(y);
-  const cols = notebookColumns();
-  const series = [
-    { name: 'NUTRIENTS', a: cols.nut, idx: rampBase(GOLD) + HIGHLIGHT },
-    { name: 'SILICA', a: cols.si, idx: rampBase(LIGHTBLUE) + BRIGHT },
-    { name: 'GRAZERS', a: cols.graz, idx: rampBase(ROSE) + HIGHLIGHT, own: true },
-    { name: 'VIRUSES', a: cols.lys, idx: rampBase(VIOLET) + HIGHLIGHT, own: true },   // cells they burst per minute
-    { name: 'CYANO', a: cols.cyano, idx: rampBase(EMERALD) + BRIGHT, own: true },     // cyanobacteria biomass, all three
-    { name: 'OXYGEN', a: cols.o2, idx: COL.FOAM, lo: 0, top: 1.2, kw: true },                    // in the bottom water, on a fixed scale
-    { name: 'WARMTH', a: cols.temp, idx: rampBase(AMBER) + HIGHLIGHT, lo: 10, top: 26, kw: true },   // the surface, in degrees
-  ];
-  let lx = P.x + 6;
-  for (const sr of series) { if (lx + textWidth(sr.name) > P.x + P.w - 6) { lx = P.x + 6; y += 7; } ink(lx, y + 11, sr.name, sr.idx); lx += textWidth(sr.name) + 8; }
-  const cy0 = y + 20, ch = 81;
-  chartBackground(cols, cy0, ch);
-  let shared = 0;   // nutrients and silica share one scale, so the two can be compared
-  for (let c = 0; c < CW; c++) if (cols.has[c]) shared = Math.max(shared, cols.nut[c], cols.si[c]);
-  for (const sr of series) {
-    let top = sr.top || (sr.own ? 0 : shared);
-    const lo = sr.lo || 0;
-    if (sr.own) for (let c = 0; c < CW; c++) if (cols.has[c]) top = Math.max(top, sr.a[c]);
-    if (top <= lo) continue;
-    chartLine(cy0, (c) => (cols.has[c] && (!sr.kw || cols.kw[c]) ? ch - 1 - Math.round(clamp((sr.a[c] - lo) / (top - lo), 0, 1) * (ch - 1)) : -1), sr.idx);   // older rows hold no oxygen or warmth
+// The cyanobacteria as the water shows them: a haze of specks, pink-orange and blue-green, twinkling slowly
+function drawCyanoSpecimen(x0, y0, w, h, tick) {
+  for (let k = 0; k < 170; k++) {
+    const x = x0 + Math.floor(hash01(k * 3 + 1) * w), y = y0 + Math.floor(hash01(k * 3 + 2) * h), tw = hash01(k * 5 + Math.floor(tick * TICK_DT * 0.7 + hash01(k) * 4));
+    put(x, y, rampBase(k % 2 ? ROSE : EMERALD) + (tw < 0.3 ? HIGHLIGHT : BRIGHT));
   }
-  const sy0 = cy0 + ch + 6, sh = 100;
-  drawStack(cols, sy0, sh);
-  drawTimeAxis(cols, sy0 + sh + 3);
-  for (let f = 0; f < F; f++) drawIcon(CX + Math.round(f * (CW - 7) / (F - 1)), sy0 + sh + 14, f, false);   // the forms, bottom to top of the stack
+}
+// The filamentous ones: a tuft of filaments lying loosely side by side, splaying toward the ends, swaying
+function drawTrichoSpecimen(cx, cy, tick) {
+  const rb = rampBase(TRI_RAMP), sway = dsin(tick * TICK_DT * 0.8);
+  for (let k = 0; k < 11; k++) {
+    const off = (k - 5) * 1.6, len = 30 + hash01(k * 11) * 10, tilt = (k - 5) * 0.035;
+    for (let s = -len / 2; s <= len / 2; s += 0.5) {
+      const u = s / (len / 2), x = Math.round(cx + s), y = Math.round(cy + off + off * 0.5 * u * u + tilt * s + sway * u * u * 1.5);
+      if (Math.floor(s + k * 3) % 9 === 0) continue;   // trichome pieces
+      put(x, y, rb + (k < 4 ? BRIGHT : k < 8 ? HIGHLIGHT : BASE));
+    }
+  }
+}
+function drawSpeciesPage(w, y) {
+  const N = PARAMS.notebook, P = N.page, F = FORMS.length, nE = F + 2, e = notebook.guide;
+  const counts = new Array(F).fill(0), cyT = cyanoTotal(w);
+  for (const c of w.cells) if (!c.dying) counts[formOf(c)]++;
+  const seen = (k) => (k < F ? counts[k] : k === F ? cyT.syn + cyT.pro : cyT.tri) >= 0.5;
+  const gap = 14, gx = P.x + Math.floor((P.w - ((nE - 1) * gap + 7)) / 2);
+  for (let k = 0; k < nE; k++) {
+    guideIcon(k, gx + k * gap, y, k !== e);
+    if (k === e) for (let i = -1; i < 8; i++) put(gx + k * gap + i, y + 9, COL.FOAM);
+    hit(gx + k * gap - 3, y - 3, gap, 15, () => { notebook.guide = k; });
+  }
+  // The specimen in its box of water
+  const bx = P.x + 6, by = y + 14, bw = P.w - 12, bh = 66;
+  for (let j = 0; j < bh; j++) for (let i = 0; i < bw; i++) put(bx + i, by + j, bayer(bx + i, by + j) < j / bh ? 2 : 3);
+  const tick = world.tick, mx = bx + (bw >> 1), my = by + (bh >> 1);
+  if (e < F) {
+    const c = guideSpecimens()[e];
+    drawSpecimen(c, mx, my, e === 3 ? 10 : e >= 1 && e <= 4 ? 13 : e === 8 ? 12 : 15, tick);
+  } else if (e === F) drawCyanoSpecimen(bx + 4, by + 4, bw - 8, bh - 8, tick);
+  else drawTrichoSpecimen(mx, my, tick);
+  const name = e < F ? FORMS[e].name : e === F ? 'CYANOBACTERIA' : 'FILAMENTOUS CYANOBACTERIA';
+  let ty = by + bh + 5;
+  ink(P.x + 6, ty, name, COL.FOAM);
+  ink(P.x + 6, ty + 7, GUIDE[e].sub, COL.SLATE);
+  ty += 17;
+  for (const line of wrap(GUIDE[e].text, 38)) { ink(P.x + 6, ty, line, COL.SHAFT); ty += 7; }
+  const now = e < F ? counts[e] + (counts[e] === 1 ? ' CELL' : ' CELLS') : 'ABOUT ' + Math.round(e === F ? cyT.syn + cyT.pro : cyT.tri) + " CELLS' WORTH";
+  ink(P.x + 6, Math.min(ty + 3, PAGE_END() - 5), 'IN THIS WATER NOW: ' + now, seen(e) ? rampBase(e < F ? FORMS[e].ramp : e === F ? CYANO_RAMP : TRI_RAMP) + BRIGHT : COL.SLATE);
 }
 
-// IV. The column: a cast of the water now, as oceanographers draw it: depth down the page, each property across it from
-// low to high on its own fixed scale (chlorophyll to its own peak). The layers are read from the temperature (see
-// below). Hypoxic depths are shaded. Chlorophyll is the living
-// biomass (cells and cyanobacteria, every species together) times the chlorophyll each unit carries: cells in dim
-// water pack more (photoacclimation: 1 + chlDim x the share of the surface light they miss), which is why real casts
-// show a deep chlorophyll maximum below the biomass peak. Observation only.
+// IV. The water: its chemistry and its life over the window, panel by panel on one time axis (each with its scale and
+// the value now), and the population by form underneath, so a silica crash lines up with the diatoms' fall
+function drawWaterPage(w, y) {
+  const N = PARAMS.notebook, P = N.page, CX = N.chart.x, CW = N.chart.w, x1 = P.x + P.w;
+  drawSpanRow(y);
+  const cols = notebookColumns(), deep = PARAMS.nutrients.deep, O = PARAMS.oxygen, mL = PARAMS.notebook.o2mL, ph = 9;
+  const own = (a) => { let m = 0; for (let c = 0; c < CW; c++) if (cols.has[c]) m = Math.max(m, a[c]); return m; };
+  const at = (a, kv) => (c) => (cols.has[c] && (!kv || kv[c]) ? a[c] : NaN);
+  const lysTop = own(cols.lys), grazTop = own(cols.graz), cyTop = own(cols.cyano.map((v, c) => v + cols.tri[c]));
+  const panels = [
+    { lines: [['SURFACE NUTRIENTS', at(cols.nutS, cols.kv), rampBase(GOLD) + HIGHLIGHT], ['SILICA', at(cols.siS, cols.kv), rampBase(LIGHTBLUE) + BRIGHT]],
+      lo: 0, hi: deep, now: (v) => Math.round(v * 100) + '% OF DEEP' },
+    { lines: [['BOTTOM OXYGEN', at(cols.o2, cols.kw), COL.FOAM]], lo: 0, hi: 1.2, mark: O.hypoxic, now: (v) => (v * mL).toFixed(1) + ' ML/L' },
+    { lines: [['SURFACE WARMTH', at(cols.temp, cols.kw), rampBase(AMBER) + HIGHLIGHT]], lo: 14, hi: 26, now: (v) => v.toFixed(1) + ' C' },
+    { lines: [['SURFACE SALINITY', at(cols.salS, cols.kv), rampBase(VIOLET) + HIGHLIGHT]], lo: 31.5, hi: 35.5, now: (v) => v.toFixed(1) + ' PSU' },
+    { lines: [['MIXED LAYER', at(cols.mld, cols.kv), rampBase(BLUE) + BRIGHT]], lo: 1, hi: 0, now: (v) => (v >= 1 ? 'TO THE FLOOR' : metres(v) + ' M DEEP') },
+    { lines: [['GRAZERS', at(cols.graz), rampBase(ROSE) + HIGHLIGHT]], lo: 0, hi: grazTop, now: () => 'RELATIVE' },
+    { lines: [['CELLS LYSED', at(cols.lys), rampBase(VIOLET) + BRIGHT]], lo: 0, hi: Math.max(1, lysTop), now: (v) => Math.round(v) + ' /MIN' },
+    { lines: [['CYANOBACTERIA', (c) => (cols.has[c] ? cols.cyano[c] + cols.tri[c] : NaN), rampBase(CYANO_RAMP) + BRIGHT]], lo: 0, hi: Math.max(1, cyTop), now: (v) => Math.round(v) + " CELLS' WORTH" },
+  ];
+  let py = y + 11;
+  for (const pn of panels) {
+    let lx = P.x + 6;
+    for (const [name, , idx] of pn.lines) { ink(lx, py, name, idx); lx += textWidth(name) + 6; }
+    const lastC = (() => { for (let c = CW - 1; c >= 0; c--) if (!isNaN(pn.lines[0][1](c))) return c; return -1; })();
+    inkRight(x1 - 7, py, lastC >= 0 ? pn.now(pn.lines[0][1](lastC)) : 'NOT RECORDED', COL.SLATE);
+    const y0 = py + 7;
+    chartBackground(cols, y0, ph);
+    if (pn.mark !== undefined) dotted(CX, CX + CW - 1, y0 + ph - 1 - Math.round(clamp((pn.mark - pn.lo) / (pn.hi - pn.lo), 0, 1) * (ph - 1)), rampBase(OLIVE) + HIGHLIGHT);
+    for (const [, f, idx] of pn.lines) {
+      chartLine(y0, (c) => { const v = f(c); return isNaN(v) ? -1 : ph - 1 - Math.round(clamp((v - pn.lo) / (pn.hi - pn.lo), 0, 1) * (ph - 1)); }, idx);
+    }
+    py = y0 + ph + 3;
+  }
+  const sh = PAGE_END() - 9 - py;
+  drawStack(cols, py, sh);
+  drawTimeAxis(cols, py + sh + 3);
+}
+
+// V. The column: a cast of the water now, as oceanographers draw it, depth in metres down the page. Two panels: the
+// physics (warmth, salinity, oxygen, light) and the life (nutrients, silica, chlorophyll as a fluorometer sees it, a
+// shaded area), each property on its own fixed scale. Layers named by standard criteria; hypoxic depths shaded.
 const PROFILE = [
-  { name: 'WARMTH', idx: rampBase(AMBER) + HIGHLIGHT, lo: 8, hi: 26 },
-  { name: 'OXYGEN', idx: COL.FOAM, lo: 0, hi: 1.4 },
-  { name: 'NUTRIENTS', idx: rampBase(GOLD) + BRIGHT, lo: 0, hi: 1.2 },
-  { name: 'SILICA', idx: rampBase(LIGHTBLUE) + BRIGHT, lo: 0, hi: 1.2 },
-  { name: 'LIGHT', idx: rampBase(GOLD) + BASE, lo: 0, hi: 1 },
-  { name: 'CHLOROPHYLL', idx: rampBase(GREEN) + HIGHLIGHT, lo: 0, hi: 0, area: true },   // as a fluorometer sees it, to its own peak: a shaded area
-  { name: 'SALINITY', idx: rampBase(VIOLET) + HIGHLIGHT, lo: 30, hi: 36 },
+  { key: 'temp', name: 'WARMTH 10-26 C', idx: rampBase(AMBER) + HIGHLIGHT, lo: 10, hi: 26, panel: 0 },
+  { key: 'sal', name: 'SALINITY 31-36', idx: rampBase(VIOLET) + HIGHLIGHT, lo: 31, hi: 36, panel: 0 },
+  { key: 'o2', name: 'O2 0-12 ML/L', idx: COL.FOAM, lo: 0, hi: 12 / 5.83, panel: 0 },
+  { key: 'light', name: 'LIGHT 0-100%', idx: rampBase(GOLD) + BRIGHT, lo: 0, hi: 1, panel: 0, rel: true },
+  { key: 'chl', name: 'CHL FLUOR. REL.', idx: rampBase(GREEN) + HIGHLIGHT, lo: 0, hi: 1, panel: 1, area: true },
+  { key: 'nut', name: 'NUTRIENTS 0-150%', idx: rampBase(GOLD) + HIGHLIGHT, lo: 0, hi: 1.5, panel: 1 },
+  { key: 'si', name: 'SILICA 0-150%', idx: rampBase(LIGHTBLUE) + BRIGHT, lo: 0, hi: 1.5, panel: 1 },
 ];
 function drawColumnPage(w, y) {
-  const N = PARAMS.notebook, P = N.page, CX = N.chart.x, CW = N.chart.w, f = w.fields, { cols, rows } = PARAMS.grid, O = PARAMS.oxygen;
-  // Row means of each property (and the lowest oxygen in each row)
-  const prof = PROFILE.map(() => new Float64Array(rows)), o2min = new Float64Array(rows);
-  const props = [f.temp, f.o2, f.nut, f.si, f.light];
-  for (let j = 0; j < rows; j++) {
-    o2min[j] = Infinity;
-    for (let i = 0; i < cols; i++) {
-      const k = j * cols + i;
-      props.forEach((a, p) => { prof[p][j] += a[k] / cols; });
-      const dim = 1 - clamp(f.light[k] / Math.max(w.surfaceLight, 1e-6), 0, 1);
-      prof[5][j] += (f.bio[k] + f.tri[k]) * (1 + N.chlDim * dim) / cols;
-      prof[6][j] += f.sal[k] / cols;
-      o2min[j] = Math.min(o2min[j], f.o2[k]);
-    }
-  }
-  const chl = prof[5], smooth = chl.slice();   // patchy row to row: smoothed over seven rows, as a fluorometer would see it
-  for (let j = 0; j < rows; j++) {
-    let s = 0, wsum = 0;
-    for (let d = -3; d <= 3; d++) { const wgt = 4 - Math.abs(d); s += chl[clamp(j + d, 0, rows - 1)] * wgt; wsum += wgt; }
-    smooth[j] = s / wsum;
-  }
-  prof[5] = smooth;
-  let lx = P.x + 6, ly = y;
-  for (const p of PROFILE) { if (lx + textWidth(p.name) > P.x + P.w - 6) { lx = P.x + 6; ly += 8; } ink(lx, ly, p.name, p.idx); lx += textWidth(p.name) + 8; }
-  ink(CX, ly + 10, 'LOW', COL.SLATE);
-  inkRight(CX + CW - 1, ly + 10, 'HIGH', COL.SLATE);
-  for (let x = CX + textWidth('LOW') + 3; x < CX + CW - textWidth('HIGH') - 4; x++) put(x, ly + 12, COL.SLATE);
-  put(CX + CW - textWidth('HIGH') - 5, ly + 11, COL.SLATE); put(CX + CW - textWidth('HIGH') - 5, ly + 13, COL.SLATE);
-
-  const cy0 = ly + 20, ch = 196, column = H - PARAMS.world.floor;
-  const depthOf = (k) => (k + 0.5) / ch * column;   // world depth of a chart row
-  const at = (a, wy) => {   // a row-mean profile at a world depth, linear between grid rows
-    const g = clamp(wy / GRID_H - 0.5, 0, rows - 1), j0 = Math.floor(g), j1 = Math.min(rows - 1, j0 + 1);
-    return a[j0] + (a[j1] - a[j0]) * (g - j0);
-  };
-  // Layers from the density profile (the model's linear equation of state, counted in degrees: warmth, and salt at
-  // salinity.haline degrees per psu): the mixed layer by the threshold criterion (density 0.125 kg/m^3 above the
-  // surface's, about mixedStep degrees; Monterey & Levitus 1997), the pycnocline as the band where the gradient is at least
-  // clineShare of its steepest below the mixed layer, named THERMOCLINE or HALOCLINE by whether warmth or salt carries
-  // most of its step, and a bottom mixed layer where the bottom water lies within mixedStep of the floor's. Only in
-  // stratified water (stratified degrees of density or more from the surface to the floor); a layer is named only
-  // where the profile shows it.
-  const hal = PARAMS.salinity.haline, L = N.layers, Tm = (k) => at(prof[0], depthOf(k)), Sm = (k) => at(prof[6], depthOf(k));
-  const T = (k) => Tm(k) - hal * (Sm(k) - PARAMS.salinity.shelf);   // light water counts as warm: lower density, higher T
-  const tSurf = T(0), tFloor = T(ch - 1), stratified = tSurf - tFloor >= L.stratified;
-  let mixed = ch, top = ch, bottom = ch, bml = ch;
-  if (stratified) {
-    for (let k = 0; k < ch; k++) if (T(k) < tSurf - L.mixedStep) { mixed = k; break; }
-    let kmax = -1, gmax = 0;
-    for (let k = mixed; k < ch - 1; k++) { const g = T(k) - T(k + 1); if (g > gmax) { gmax = g; kmax = k; } }
-    if (kmax >= 0) {
-      top = kmax; bottom = kmax;
-      while (top > mixed && T(top - 1) - T(top) >= gmax * L.clineShare) top--;
-      while (bottom < ch - 2 && T(bottom + 1) - T(bottom + 2) >= gmax * L.clineShare) bottom++;
-      bottom++;
-    }
-    bml = ch - 1;
-    while (bml > bottom && T(bml - 1) < tFloor + L.mixedStep) bml--;
-    if (ch - bml < L.minRows) bml = ch;
-  }
-  // The water, lighter above, with the dead zone shaded
+  const N = PARAMS.notebook, P = N.page, CX = N.chart.x, CW = N.chart.w, O = PARAMS.oxygen;
+  const prof = castProfile(w, true), PW = (CW - 4) >> 1, PX = [CX, CX + PW + 4];
+  prof.light = prof.light.map((v) => v / Math.max(w.surfaceLight, 1e-6));   // light as a share of the surface's
+  prof.chl = prof.chl.map((v) => v / N.chl.full);
+  const ly = [y, y];
+  for (const S of PROFILE) { ink(PX[S.panel], ly[S.panel], S.name, S.idx); ly[S.panel] += 7; }
+  const cy0 = Math.max(ly[0], ly[1]) + 3, ch = PAGE_END() - 24 - cy0, lay = waterLayers(prof, ch), { at, depthOf } = lay;
+  const column = H - PARAMS.world.floor, mOf = (k) => metres(depthOf(k) / column);
+  // The water, lighter above, with the hypoxic depths shaded, in both panels
   for (let k = 0; k < ch; k++) {
-    const band = 6 - Math.floor(k / ch * 5.5), dead = smoothstep(O.hypoxic, O.anoxic, at(o2min, depthOf(k)));
-    for (let c = 0; c < CW; c++) {
-      const x = CX + c, yy = cy0 + k;
-      put(x, yy, dead > 0 && bayer(x, yy) < dead * 0.7 ? rampBase(OLIVE) + OUTLINE : bayer(x, yy) < (k / ch * 5.5) % 1 ? Math.max(1, band - 1) : band);
+    const band = 6 - Math.floor(k / ch * 5.5), dead = smoothstep(O.hypoxic, O.anoxic, at(prof.o2min, depthOf(k)));
+    for (const px of PX) {
+      for (let c = 0; c < PW; c++) {
+        const x = px + c, yy = cy0 + k;
+        put(x, yy, dead > 0 && bayer(x, yy) < dead * 0.7 ? rampBase(OLIVE) + OUTLINE : bayer(x, yy) < (k / ch * 5.5) % 1 ? Math.max(1, band - 1) : band);
+      }
     }
-    if (k % 49 === 0) for (let c = -2; c < 0; c++) put(CX + c, cy0 + k, COL.SLATE);   // depth ticks
   }
-  const dashed = (k) => { for (let c = 0; c < CW; c += 3) { put(CX + c, cy0 + k, COL.SLATE); put(CX + c + 1, cy0 + k, COL.SLATE); } };
-  for (const k of new Set([mixed, top, bottom, bml])) if (k > 0 && k < ch) dashed(k);
-  for (const p of [5, 0, 6, 1, 2, 3, 4]) {   // the chlorophyll's area first, the lines over it
-    const S = PROFILE[p];
-    let hi = S.hi;
-    if (!hi) for (let j = 0; j < rows; j++) hi = Math.max(hi, prof[p][j]);
-    if (hi <= S.lo) continue;
-    let px = -1;
-    for (let k = 0; k < ch; k++) {   // one point per row, joined across to the last
-      const x = CX + Math.round(clamp((at(prof[p], depthOf(k)) - S.lo) / (hi - S.lo), 0, 1) * (CW - 1));
-      if (S.area) for (let q = CX; q < x; q++) if (bayer(q, cy0 + k) < 0.3) put(q, cy0 + k, rampBase(GREEN) + SHADOW);   // the chlorophyll, shaded
-      const a = px < 0 ? x : Math.min(px, x), b = px < 0 ? x : Math.max(px, x);
-      for (let q = a; q <= b; q++) put(q, cy0 + k, S.idx);
-      px = x;
+  // Depth in metres, every 10 m
+  for (let m = 0; m <= N.depthM; m += 10) {
+    const k = Math.min(ch - 1, Math.round(m / N.depthM * ch));
+    put(CX - 2, cy0 + k, COL.SLATE); put(CX - 3, cy0 + k, COL.SLATE);
+    if (m % 20 === 0) inkRight(CX - 5, cy0 + Math.min(k, ch - 5) - (k ? 2 : 0), String(m), COL.SLATE);
+  }
+  ink(P.x + 6, cy0 - 7, 'M', COL.SLATE);
+  const dashed = (k) => { for (const px of PX) for (let c = 0; c < PW; c += 3) { put(px + c, cy0 + k, COL.SLATE); put(px + c + 1, cy0 + k, COL.SLATE); } };
+  for (const k of new Set([lay.mixed, lay.top, lay.bottom, lay.bml])) if (k > 0 && k < ch) dashed(k);
+  for (const S of [...PROFILE].sort((a, b) => (b.area ? 1 : 0) - (a.area ? 1 : 0))) {   // the chlorophyll's area first, the lines over it
+    const px0 = PX[S.panel], a = prof[S.key];
+    let prevX = -1;
+    for (let k = 0; k < ch; k++) {   // one point per row, joined across to the last; past the scale, pinned to its edge
+      const x = px0 + Math.round(clamp((at(a, depthOf(k)) - S.lo) / (S.hi - S.lo), 0, 1) * (PW - 1));
+      if (S.area) for (let q = px0; q < x; q++) if (bayer(q, cy0 + k) < 0.3) put(q, cy0 + k, rampBase(GREEN) + SHADOW);
+      const lo = prevX < 0 ? x : Math.min(prevX, x), hi = prevX < 0 ? x : Math.max(prevX, x);
+      for (let q = lo; q <= hi; q++) put(q, cy0 + k, S.idx);
+      prevX = x;
     }
   }
   // Labels for the layers, on the left inside the plot
-  const label = (k0, k1, text) => { if (k1 - k0 >= L.minRows) ink(CX + 2, cy0 + Math.round((k0 + k1) / 2) - 2, text, COL.SHAFT); };
-  if (stratified) {
-    label(0, mixed, 'MIXED LAYER');
-    label(top, bottom, Tm(top) - Tm(bottom) >= hal * (Sm(bottom) - Sm(top)) ? 'THERMOCLINE' : 'HALOCLINE');
-    if (bml < ch) label(bml, ch, 'BOTTOM MIXED LAYER');
+  const L = N.layers, label = (k0, k1, text) => { if (k1 - k0 >= L.minRows) inkOver(CX + 2, cy0 + Math.round((k0 + k1) / 2) - 2, text, COL.SHAFT); };
+  if (lay.stratified) {
+    label(0, lay.mixed, 'MIXED LAYER');
+    label(lay.top, lay.bottom, lay.Tm(lay.top) - lay.Tm(lay.bottom) >= PARAMS.salinity.haline * (lay.Sm(lay.bottom) - lay.Sm(lay.top)) ? 'THERMOCLINE' : 'HALOCLINE');
+    if (lay.bml < ch) label(lay.bml, ch, 'BOTTOM MIXED LAYER');
   }
-  const ox = bottomOxygen(w);
-  inkCentre(cy0 + ch + 4, 'SURFACE ' + Tm(0).toFixed(1) + ' C ' + Sm(0).toFixed(1) + '   FLOOR ' + Tm(ch - 1).toFixed(1) + ' C ' + Sm(ch - 1).toFixed(1), COL.SHAFT);
-  inkCentre(cy0 + ch + 12, ox.min < O.hypoxic ? 'HYPOXIC BOTTOM WATER' : !stratified ? 'MIXED TO THE FLOOR' : 'MIXED LAYER ' + Math.round(mixed / ch * 100) + '% OF THE DEPTH',
-    ox.min < O.hypoxic ? rampBase(OLIVE) + BRIGHT : COL.SHAFT);
+  // Below: the surface and the floor, the mixed layer and the euphotic zone, and the chlorophyll maximum or hypoxia
+  let eu = -1, chlK = 0, hyp = -1, worst = Infinity;
+  for (let k = 0; k < ch; k++) {
+    if (eu < 0 && at(prof.light, depthOf(k)) < N.euphotic) eu = k;
+    if (at(prof.chl, depthOf(k)) > at(prof.chl, depthOf(chlK))) chlK = k;
+    const o = at(prof.o2min, depthOf(k));
+    if (o < O.hypoxic && hyp < 0) hyp = k;
+    worst = Math.min(worst, o);
+  }
+  let ty = cy0 + ch + 3;
+  inkCentre(ty, 'SURFACE ' + lay.Tm(0).toFixed(1) + ' C ' + lay.Sm(0).toFixed(1) + ' PSU   FLOOR ' + lay.Tm(ch - 1).toFixed(1) + ' C', COL.SHAFT);
+  ty += 7;
+  inkCentre(ty, (lay.stratified ? 'MIXED LAYER ' + mOf(lay.mixed) + ' M' : 'MIXED TO THE FLOOR') + '  EUPHOTIC ' + (eu < 0 ? 'TO FLOOR' : mOf(eu) + ' M'), COL.SHAFT);
+  ty += 7;
+  if (hyp >= 0) inkCentre(ty, (worst < O.anoxic ? 'DEAD ZONE' : 'HYPOXIC') + ' BELOW ' + mOf(hyp) + ' M, LOWEST ' + mlPerL(worst).toFixed(1) + ' ML/L', rampBase(OLIVE) + BRIGHT);
+  else if (at(prof.chl, depthOf(chlK)) > 0.05) inkCentre(ty, (lay.stratified && chlK > lay.mixed ? 'SUBSURFACE CHL MAXIMUM AT ' : 'CHL MAXIMUM AT ') + mOf(chlK) + ' M', rampBase(GREEN) + HIGHLIGHT);
 }
 
-// III. Migration: each form's mean depth over the window, nights dark behind (the diel vertical migration figure).
-// Tap a form to follow it alone, with its spread. The strip on the right is the column now.
+// VI. Migration: where each form spends the day and the night over the window (the diel vertical migration figure: a
+// sun at its mean depth in full daylight, a moon at its mean depth in the dark; a long stalk is a form that migrates).
+// Tap a form to follow it alone over time, with its spread, the others in grey.
 function drawMigrationPage(w, y) {
   const N = PARAMS.notebook, P = N.page, F = FORMS.length, CX = N.chart.x, CW = N.chart.w, solo = notebook.solo;
   drawSpanRow(y);
-  const cols = notebookColumns(), cy0 = y + 10, ch = 196, column = H - PARAMS.world.floor;
-  chartBackground(cols, cy0, ch);
-  ink(CX + 2, cy0 + 2, 'SURFACE', COL.SLATE);
-  ink(CX + 2, cy0 + ch - 7, 'FLOOR', COL.SLATE);
-  if (solo >= 0) {   // the spread: one standard deviation either side, dithered
+  const cols = notebookColumns(), acc = dayNightDepths(cols.t0), x1 = P.x + P.w;
+  const gap = 15, lx0 = CX + Math.floor((CW - ((F - 1) * gap + 7)) / 2), iy = PAGE_END() - 30, cy0 = y + 12, ch = iy - 26 - cy0;
+  const depthAxis = () => {
+    for (let m = 0; m <= N.depthM; m += 10) {
+      const k = Math.min(ch - 1, Math.round(m / N.depthM * (ch - 1)));
+      put(CX - 2, cy0 + k, COL.SLATE); put(CX - 3, cy0 + k, COL.SLATE);
+      if (m % 20 === 0) inkRight(CX - 5, cy0 + Math.min(k, ch - 5) - (k ? 2 : 0), String(m), COL.SLATE);
+    }
+  };
+  const mean = (f, k) => (acc[k + 'N'][f] >= 3 ? acc[k][f] / acc[k + 'N'][f] : -1);
+  if (solo < 0) {
+    for (let k = 0; k < ch; k++) {   // the water, lighter above
+      const band = 6 - Math.floor(k / ch * 4);
+      for (let c = 0; c < CW; c++) put(CX + c, cy0 + k, bayer(CX + c, cy0 + k) < (k / ch * 4) % 1 ? Math.max(2, band - 1) : band);
+    }
+    for (let f = 0; f < F; f++) {
+      const cx = lx0 + f * gap + 3, rb = rampBase(FORMS[f].ramp), dd = mean(f, 'day'), nd = mean(f, 'night');
+      if (dd >= 0 && nd >= 0) { const a = Math.round(Math.min(dd, nd) * (ch - 1)), b = Math.round(Math.max(dd, nd) * (ch - 1)); for (let k = a; k <= b; k++) put(cx, cy0 + k, rb + BASE); }
+      if (dd >= 0) { const k = Math.round(dd * (ch - 1)); fillRect(cx - 2, cy0 + k - 2, 5, 5, rampBase(GOLD) + HIGHLIGHT); fillRect(cx - 1, cy0 + k - 1, 3, 3, rb + BRIGHT); }
+      if (nd >= 0) { const k = Math.round(nd * (ch - 1)); fillRect(cx - 2, cy0 + k - 2, 5, 5, COL.FOAM); fillRect(cx - 1, cy0 + k - 1, 3, 3, rb + BASE); }
+    }
+    depthAxis();
+    ink(P.x + 6, cy0 - 7, 'M', COL.SLATE);
+  } else {
+    chartBackground(cols, cy0, ch);
+    for (let f = 0; f < F; f++) if (f !== solo) chartLine(cy0, (c) => (cols.has[c] && cols.n[c * F + f] >= 0.5 ? Math.round(cols.depth[c * F + f] * (ch - 1)) : -1), COL.SLATE);
     const rb = rampBase(FORMS[solo].ramp);
-    for (let c = 0; c < CW; c++) {
+    for (let c = 0; c < CW; c++) {   // the spread: one standard deviation either side, dithered
       const j = c * F + solo;
       if (!cols.has[c] || cols.n[j] < 0.5) continue;
       const a = Math.round(clamp(cols.depth[j] - cols.sd[j], 0, 1) * (ch - 1)), b = Math.round(clamp(cols.depth[j] + cols.sd[j], 0, 1) * (ch - 1));
       for (let k = a; k <= b; k++) if (bayer(CX + c, cy0 + k) < 0.5) put(CX + c, cy0 + k, rb + SHADOW);
     }
+    chartLine(cy0, (c) => (cols.has[c] && cols.n[c * F + solo] >= 0.5 ? Math.round(cols.depth[c * F + solo] * (ch - 1)) : -1), rb + BRIGHT);
+    depthAxis();
+    drawTimeAxis(cols, cy0 + ch + 3);
   }
   for (let f = 0; f < F; f++) {
-    if (solo >= 0 && f !== solo) continue;
-    chartLine(cy0, (c) => (cols.has[c] && cols.n[c * F + f] >= 0.5 ? Math.round(cols.depth[c * F + f] * (ch - 1)) : -1),
-      rampBase(FORMS[f].ramp) + (solo >= 0 ? BRIGHT : HIGHLIGHT));
+    const lx = lx0 + f * gap, seen = mean(f, 'day') >= 0 || mean(f, 'night') >= 0;
+    drawIcon(lx, iy - 10, f, solo >= 0 ? f !== solo : !seen);
+    if (f === solo) for (let k = -1; k < 8; k++) put(lx + k, iy - 1, COL.FOAM);
+    hit(lx - 4, iy - 14, gap, 16, () => { notebook.solo = notebook.solo === f ? -1 : f; });
   }
-  const NX = CX + CW + 3, L = w.surfaceLight, day = smoothstep(N.nightBelow, 0.7, L), now = new Array(F).fill(0);
-  let deep = 0;
-  for (let k = 0; k < ch; k++) {
-    for (let i = 0; i < 7; i++) put(NX + i, cy0 + k, L < N.nightBelow ? COL.WATER : bayer(NX + i, cy0 + k) < day ? 3 : 2);
-  }
-  for (const c of w.cells) {
-    if (c.dying) continue;
-    const f = formOf(c);
-    now[f]++;
-    if (solo >= 0 && f !== solo) continue;
-    if (f === solo) deep += clamp(c.y / column, 0, 1);
-    put(NX + Math.floor(hash01(c.id * 7 + 3) * 7), cy0 + Math.round(clamp(c.y / column, 0, 1) * (ch - 1)), rampBase(FORMS[f].ramp) + HIGHLIGHT);
-  }
-  drawTimeAxis(cols, cy0 + ch + 3);
-
-  const ly = cy0 + ch + 12, gap = 18, lx0 = P.x + Math.floor((P.w - ((F - 1) * gap + 7)) / 2);
-  for (let f = 0; f < F; f++) {
-    let seen = now[f] > 0;
-    for (let c = 0; c < CW && !seen; c++) seen = cols.n[c * F + f] > 0;
-    const lx = lx0 + f * gap;
-    drawIcon(lx, ly, f, !seen || (solo >= 0 && f !== solo));
-    if (f === solo) for (let k = -1; k < 8; k++) put(lx + k, ly + 9, COL.FOAM);
-    hit(lx - 5, ly - 4, gap, 16, () => { notebook.solo = notebook.solo === f ? -1 : f; });
-  }
-  if (solo < 0) inkCentre(ly + 13, 'ALL FORMS   TAP ONE TO FOLLOW', COL.SHAFT);
-  else {
-    inkCentre(ly + 13, FORMS[solo].name, COL.FOAM);
-    inkCentre(ly + 21, 'NOW ' + now[solo] + (now[solo] ? '   AT ' + Math.round(deep / now[solo] * 100) + '% DEPTH' : ''), COL.SHAFT);
+  if (solo < 0) {
+    fillRect(P.x + 8, iy + 3, 5, 5, rampBase(GOLD) + HIGHLIGHT); ink(P.x + 16, iy + 3, 'BY DAY', COL.SHAFT);
+    fillRect(P.x + 48, iy + 3, 5, 5, COL.FOAM); ink(P.x + 56, iy + 3, 'BY NIGHT', COL.SHAFT);
+    inkRight(x1 - 7, iy + 3, 'MEAN DEPTH', COL.SLATE);
+    inkCentre(iy + 12, 'TAP A FORM TO FOLLOW IT', COL.SLATE);
+  } else {
+    const dd = mean(solo, 'day'), nd = mean(solo, 'night');
+    inkCentre(iy + 3, FORMS[solo].name + '   TAP AGAIN FOR ALL', COL.FOAM);
+    inkCentre(iy + 12, 'BY DAY ' + (dd >= 0 ? metres(dd) + ' M' : '-') + '   BY NIGHT ' + (nd >= 0 ? metres(nd) + ' M' : '-'), COL.SHAFT);
   }
 }
 
-// IV. The ledger: deaths by cause in the window, the population against the grazers and the nutrients, and visitors
+// VII. The ledger: deaths by cause and cysts in the window, deaths per minute over it by cause, and the visitors
 function drawLedgerPage(w, y) {
-  const N = PARAMS.notebook, P = N.page, CX = N.chart.x, CW = N.chart.w, x1 = P.x + P.w, S = NB.STRIDE, r = notebook.rows;
+  const N = PARAMS.notebook, P = N.page, CX = N.chart.x, CW = N.chart.w, x1 = P.x + P.w, S = NB.STRIDE, r = notebook.rows, NC = CAUSES.length;
   drawSpanRow(y);
   const cols = notebookColumns(), last = (notebook.count - 1) * S, before = cols.t0 > 0 && cols.first > 0 ? (cols.first - 1) * S : -1;
-  const deaths = CAUSES.map((k, i) => (notebook.count ? r[last + causeCol(i)] - (before >= 0 ? r[before + causeCol(i)] : 0) : 0));
+  const since = (col) => (notebook.count ? r[last + col] - (before >= 0 ? r[before + col] : 0) : 0);
+  const deaths = CAUSES.map((k, i) => since(causeCol(i)));
   const total = deaths.reduce((s, v) => s + v, 0), most = Math.max(1, ...deaths);
   ink(P.x + 6, y + 11, 'DEATHS', COL.SHAFT);
   inkRight(x1 - 7, y + 11, String(total), COL.SHAFT);
   CAUSES.forEach((k, i) => {
-    const ry = y + 20 + i * 9;
-    ink(P.x + 6, ry, k.name, deaths[i] ? COL.FOAM : COL.SLATE);
+    const ry = y + 19 + i * 8;
+    fillRect(P.x + 6, ry + 1, 3, 3, rampBase(k.ramp) + HIGHLIGHT);
+    ink(P.x + 12, ry, k.name, deaths[i] ? COL.FOAM : COL.SLATE);
     bar(52, ry + 1, 92, deaths[i] / most, k.ramp);
     inkRight(x1 - 7, ry, String(deaths[i]), deaths[i] ? COL.FOAM : COL.SLATE);
   });
-
-  const series = [
-    { name: 'NUTRIENTS', a: cols.nut, idx: rampBase(GOLD) + HIGHLIGHT },
-    { name: 'GRAZERS', a: cols.graz, idx: rampBase(ROSE) + HIGHLIGHT },
-    { name: 'CELLS', a: cols.pop, idx: COL.FOAM },
-  ];
-  let lx = P.x + 6;
-  for (const s of [...series].reverse()) { ink(lx, y + 96, s.name, s.idx); lx += textWidth(s.name) + 8; }
-  const cy0 = y + 105, ch = 95;
+  // Cysts are not deaths: cells that went to rest, and rested cells that woke (recorded since v7)
+  let cy = y + 21 + NC * 8;
+  const known = notebook.count && r[last + NB.ENC] >= 0 && (before < 0 || r[before + NB.ENC] >= 0);
+  ink(P.x + 6, cy, 'TO CYSTS ' + (known ? since(NB.ENC) : '-') + '   WOKE FROM CYSTS ' + (known ? since(NB.GERM) : '-'), COL.SHAFT);
+  // Deaths per minute, stacked by cause, nights dark behind
+  cy += 10;
+  ink(P.x + 6, cy, 'DEATHS PER MINUTE', COL.SHAFT);
+  const cy0 = cy + 8, ch = 60;
   chartBackground(cols, cy0, ch);
-  for (const s of series) {   // each scaled to its own peak in the window
-    let top = 0;
-    for (let c = 0; c < CW; c++) if (cols.has[c]) top = Math.max(top, s.a[c]);
-    if (top <= 0) continue;
-    chartLine(cy0, (c) => (cols.has[c] ? ch - 1 - Math.round(s.a[c] / top * (ch - 1)) : -1), s.idx);
+  let top = 1;
+  for (let c = 0; c < CW; c++) { let s = 0; for (let q = 0; q < NC; q++) s += cols.deaths[c * NC + q]; top = Math.max(top, s); }
+  const scale = niceCeil(top);
+  for (let c = 0; c < CW; c++) {
+    if (!cols.has[c]) continue;
+    let acc = 0;
+    for (let q = 0; q < NC; q++) {
+      const v = cols.deaths[c * NC + q];
+      if (!v) continue;
+      const a = Math.round(acc / scale * ch), b = Math.round((acc + v) / scale * ch), rb = rampBase(CAUSES[q].ramp);
+      for (let k = a; k < b; k++) put(CX + c, cy0 + ch - 1 - k, rb + (k === b - 1 ? HIGHLIGHT : BASE));
+      acc += v;
+    }
   }
+  inkOver(CX + 2, cy0 + 2, String(scale), COL.SLATE);
   drawTimeAxis(cols, cy0 + ch + 3);
 
-  const vy = cy0 + ch + 13, counts = VISITOR_INK.map(() => 0);
+  const vy = cy0 + ch + 12, counts = VISITOR_INK.map(() => 0);
   dotted(CX, CX + CW - 1, vy + 6, COL.SLATE);
   for (const v of notebook.visits) {
     if (v.tick < cols.t0) continue;
@@ -6433,13 +6802,13 @@ function drawLedgerPage(w, y) {
     put(x, vy, rb + BRIGHT);
     for (let k = 1; k < 6; k++) put(x, vy + k, rb + HIGHLIGHT);
   }
-  lx = P.x + 6;
+  let lx = P.x + 6;
   VISITOR_INK.forEach((k, i) => {
     const text = k.name + ' ' + counts[i];
-    ink(lx, vy + 11, text, rampBase(k.ramp) + HIGHLIGHT);
+    ink(lx, vy + 10, text, rampBase(k.ramp) + HIGHLIGHT);
     lx += textWidth(text) + 9;
   });
-  drawNewWater(vy + 30);
+  drawNewWater(vy + 26);
 }
 
 // NEW WATER: ends this world and seeds a new one, but only after a YES (kept world only)
@@ -6455,10 +6824,10 @@ function drawNewWater(y) {
   }
   inkCentre(y - 1, 'END THIS WORLD FOR NEW WATER?', COL.FOAM);
   const yes = 'YES', no = 'NO';
-  ink(cx - 22, y + 9, yes, rampBase(ROSE) + HIGHLIGHT);
-  hit(cx - 28, y + 4, textWidth(yes) + 12, 14, () => { notebook.confirm = false; seedNewWater(); });
-  ink(cx + 12, y + 9, no, COL.FOAM);
-  hit(cx + 6, y + 4, textWidth(no) + 12, 14, () => { notebook.confirm = false; });
+  ink(cx - 22, y + 8, yes, rampBase(ROSE) + HIGHLIGHT);
+  hit(cx - 28, y + 3, textWidth(yes) + 12, 12, () => { notebook.confirm = false; seedNewWater(); });
+  ink(cx + 12, y + 8, no, COL.FOAM);
+  hit(cx + 6, y + 3, textWidth(no) + 12, 12, () => { notebook.confirm = false; });
 }
 
 // ===== Input =====
@@ -6772,7 +7141,7 @@ function hashString(s) {
 // any of them starts a scratch world that is never saved, so trying a seed never overwrites the kept one.
 // ?seed= (number or word), ?debug, ?stress (start at the cell cap), ?ff=seconds (fast-forward),
 // ?zoom=1..4 with ?at=x,y (world point to centre on), ?speed=1|2|4|8 (time-lapse), ?day=5|10|30 (minutes),
-// ?notebook=1..5 (open the field notebook on that page), ?bench (how fast this device lives a world out of sight).
+// ?notebook=1..7 (open the field notebook on that page), ?bench (how fast this device lives a world out of sight).
 // M turns the music off, N opens the notebook.
 function readOptions() {
   const q = new URLSearchParams(location.search);
@@ -6843,10 +7212,18 @@ async function loadWorld(db) {
       chunks[k] = wide;
     }
   }
+  const V5 = 50;   // a v5/v6 row: everything up to hypoxia deaths
   if (rec.v < 5) {   // v4 rows had no Trichodesmium, oxygen, temperature or hypoxia: widened, those left empty
     for (let k = 0; k < chunks.length; k++) {
-      const old = chunks[k], n = old.length / V4, wide = new Float32Array(n * NB.STRIDE);
-      for (let i = 0; i < n; i++) wide.set(old.subarray(i * V4, (i + 1) * V4), i * NB.STRIDE);
+      const old = chunks[k], n = old.length / V4, wide = new Float32Array(n * V5);
+      for (let i = 0; i < n; i++) wide.set(old.subarray(i * V4, (i + 1) * V4), i * V5);
+      chunks[k] = wide;
+    }
+  }
+  if (rec.v < 7) {   // older rows hold no surface water, mixed layer or cyst counts: widened, those marked unknown (-1)
+    for (let k = 0; k < chunks.length; k++) {
+      const old = chunks[k], n = old.length / V5, wide = new Float32Array(n * NB.STRIDE).fill(-1);
+      for (let i = 0; i < n; i++) wide.set(old.subarray(i * V5, (i + 1) * V5), i * NB.STRIDE);
       chunks[k] = wide;
     }
   }

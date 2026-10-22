@@ -97,12 +97,21 @@ newcomers, nitrogen fixation, stratification and tidal mixing, and hypoxia.
   Moving toward the surface brightens the sound, toward the deep darkens it; moving sideways makes the filter
   ring, its peak following your finger from low on the left to high on the right.
 - **Pinch** or scroll to zoom in up to 8× and see the cells in detail; drag to pan.
-- The small **book** at the top right opens a field notebook: the day, a census of the forms, the water
-  (nutrients, silica, grazers, oxygen and warmth over time, lined up with the population of each form, so you can
-  watch the succession happen), the column (a vertical cast of the water now, like an oceanographer's profile:
-  temperature, oxygen, nutrients, silica, light and chlorophyll, with the mixed layer and thermocline marked),
-  their daily migration, and a ledger of deaths (grazed, eaten by fish, hunted, lysed by viruses, suffocated...)
-  and visitors. The **note** beside it turns the music off and on.
+- The small **book** at the top right opens a field notebook. Its pages:
+  - **The day:** sun and moon, tide, weather, and the water at the surface and on the bottom.
+  - **The census:** the forms and the cyanobacteria.
+  - **The species:** a guide to each form, drawn by the game's own renderer.
+  - **The water:** surface nutrients and silica, bottom oxygen, warmth, salinity, the mixed layer, grazers,
+    viruses and cyanobacteria over time. They line up with the population of each form, so you can watch the
+    succession happen.
+  - **The column:** a vertical cast of the water now, like an oceanographer's profile, in metres. It shows warmth,
+    salinity, oxygen and light, and beside them nutrients, silica and chlorophyll as a fluorometer would see it,
+    with the layers marked.
+  - **Migration:** where each form spends the day and the night.
+  - **The ledger:** deaths (grazed, eaten by fish, hunted, lysed by viruses, suffocated...), cysts and visitors.
+
+  A small curiosity about the sea sits at the foot of every page. The **note** beside the book turns the music off
+  and on.
 
 ## A world that keeps living
 

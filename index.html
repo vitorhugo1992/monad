@@ -27,7 +27,8 @@
 // Energy is per unit biomass: a cell divides at 1 and each daughter starts at 0.5.
 const PARAMS = {
   world: { w: 180, h: 320, floor: 18 }, // floor: sediment thickness at the bottom
-  time: { tickRate: 30, maxTicksPerFrame: 8, speeds: [1, 2, 4, 8] },   // time-lapse: ?speed= or the [ and ] keys
+  time: { tickRate: 30, maxTicksPerFrame: 8, speeds: [1, 2, 4, 8],   // time-lapse: ?speed= or the [ and ] keys
+          slowEvery: 3 },   // the water's slow fields (light, mixing, heat, salt, oxygen, snow, cyanobacteria, grazers) step every slowEvery ticks, staggered, with that much longer a step: they change over seconds to minutes, and stepping them 30 times a second cost most of the time
   grid: { cols: 24, rows: 40 },
   hash: { cell: 12 },                   // must be >= the largest interaction distance
   cell: { rMin: 1.25, rMax: 4, drawScale: 0.5 },   // body radius at size 0.6 .. 1.6; cells are drawn at half of it
@@ -393,9 +394,10 @@ const PARAMS = {
       // strums a harp arpeggio up the water's scale (steps above the root around octave, spacing s apart; at most one
       // strum every gap s), each string plucked (decay s, a lowpass closing from cut) with a shimmer an octave up
       // that swells into the reverb only (shimmer x the gain, over shimmerDecay s). Comb jellies play harp harmonics:
-      // a few high notes down the scale, softer and sparser. Through the music bus.
-      jellies: { gap: 0.9, octave: 4, steps: [0, 4, 7, 12, 16], spacing: 0.065, gain: 0.045, decay: 2.8, cut: 3200, shimmer: 0.4, shimmerDecay: 5.5, wet: 0.7, pan: 0.6 },
-      combs: { gap: 2.6, octave: 6, steps: [12, 7, 4], spacing: 0.11, gain: 0.018, decay: 1.8, cut: 6000, shimmer: 0.6, shimmerDecay: 4.5, wet: 0.85, pan: 0.6 },
+      // a few high notes down the scale, softer and sparser. A pulse strums only by chance, after a random rest of
+      // gap..gapMax s, and an octave (or two) lower by drop's shares (author: less insistent, more varied). Through the music bus.
+      jellies: { gap: 1.4, chance: 0.3, gapMax: 7, drop: [0.5, 0.3, 0.2], octave: 4, steps: [0, 4, 7, 12, 16], spacing: 0.065, gain: 0.05, decay: 2.4, cut: 2600, shimmer: 0.5, shimmerDecay: 4.5, wet: 0.7, pan: 0.6 },
+      combs: { gap: 3, chance: 0.25, gapMax: 9, drop: [0.6, 0.4, 0], octave: 5, steps: [12, 7, 4], spacing: 0.11, gain: 0.02, decay: 1.6, cut: 3600, shimmer: 0.5, shimmerDecay: 3.5, wet: 0.85, pan: 0.6 },
     },
     // Cyanobacteria's shimmer (author): faint, sparkling grains (a sine, attack/release s), tiny high notes from the scale
     // in octave (and one up now and then), at up to rate per s, rising with the cyanobacteria on screen (mean biomass
@@ -434,7 +436,8 @@ const PARAMS = {
     pan: 0.7, lookahead: 0.03, maxNodes: 20, muteRamp: 0.4,
     comp: { threshold: -24, knee: 18, ratio: 3.5, attack: 0.05, release: 0.4 },
     out: 1.4,                                                              // after the compressor: louder on phone speakers
-    limit: { threshold: -2, knee: 0, ratio: 20, attack: 0.002, release: 0.2 },   // and a limiter so the peaks never clip
+    limit: { threshold: -3, knee: 4, ratio: 20, attack: 0.005, release: 0.25 },   // and a limiter so the peaks never clip (a soft knee and a 5 ms attack: a hard one crackled on the drones)
+    air: { freq: 4500, gain: -6 },   // a gentle high shelf on the whole mix: the uppermost frequencies of shimmers and high notes were harsh (author)
   },
   camera: { levels: [1, 1.5, 2, 3, 4, 6, 8], wheelStep: 1 },   // zoom 1 shows the whole column
   sprite: {
@@ -621,7 +624,7 @@ const PARAMS = {
     // Copepods: the grazer field's commonest animals, drawn with the krill where the field is dense and fed (up to per
     // a node, coverage x its presence each): len world units, hopping every hopEvery s by hop units in hopTime s,
     // sinking slowly between hops (sink units/s, drift within wander)
-    copepods: { per: 3, coverage: 0.5, len: 2.4, hopEvery: 2.2, hop: 3, hopTime: 0.18, sink: 0.4, wander: 6 },
+    copepods: { per: 3, coverage: 0.5, len: 5, hopEvery: 2.2, hop: 3, hopTime: 0.18, sink: 0.4, wander: 6 },
   },
   murk: { from: 0.8, full: 3 },         // bloom biomass summed down the upper column: rays fade in murky water
   hud: { x: 4, y: 290, line: 7, visibleMs: 6000, fadeMs: 2000, epitaphFade: 20, listenY: 200, listenVis: 1, music: { x: 150, y: 5 }, bar: { w: 80, h: 3 } },   // music: the music button, left of the notebook glyph; bar: the catch-up progress bar   // epitaph fades in over 20 simulated s; listen: the solid TAP TO LISTEN hint
@@ -911,14 +914,21 @@ function dayPhase(w) {
   return p - Math.floor(p);
 }
 
+// e^-x for x >= 0 from a table (dexp at every 1/64, read linearly; under 0.003% off): the light field needs one per node
+const EXPN_STEP = 64, EXPN_MAX = 40, EXPN = new Float64Array(EXPN_MAX * EXPN_STEP + 2).map((_, i) => dexp(-i / EXPN_STEP));
+function expNeg(x) {
+  if (x >= EXPN_MAX) return 0;
+  const g = x * EXPN_STEP, i = Math.floor(g);
+  return EXPN[i] + (EXPN[i + 1] - EXPN[i]) * (g - i);
+}
+
 function updateLight(w) {
   const { cols, rows } = PARAMS.grid, f = w.fields, ks = PARAMS.light.shade, kt = PARAMS.tricho.shade, kz = PARAMS.runoff.siltShade;
-  w.surfaceLight = surfaceLightAt(dayPhase(w), moonLit(moonPhase(w)));
   for (let i = 0; i < cols; i++) {   // self-shading: the biomass above (last tick's), a scum and runoff silt dim the water below
     let above = 0;
     for (let j = 0; j < rows; j++) {
       const k = j * cols + i, b = ks * f.bio[k] + kt * f.tri[k] + kz * f.silt[k];
-      f.light[k] = f.profile[j] * w.surfaceLight * dexp(-(above + 0.5 * b));
+      f.light[k] = f.profile[j] * w.surfaceLight * expNeg(above + 0.5 * b);
       above += b;
     }
   }
@@ -992,16 +1002,25 @@ function updateMixing(w, dt) {
   }
 }
 
-// One vertical mixing step (share of the coefficient): conservative, closed at the top and the bottom
+// One vertical mixing step (share of the coefficient): implicit (backward Euler, solved down each column with the
+// Thomas algorithm), so it stays stable however strong the stirring or long the step; conservative, closed at the top
+// and the bottom
+const MIX_C = new Float64Array(PARAMS.grid.rows), MIX_D = new Float64Array(PARAMS.grid.rows);
 function mixColumn(a, share) {
-  const { cols, rows } = PARAMS.grid, b = MIX_COL;
+  const { cols, rows } = PARAMS.grid, c = MIX_C, d = MIX_D;
   for (let i = 0; i < cols; i++) {
-    for (let j = 0; j < rows; j++) b[j] = a[j * cols + i];
-    for (let j = 0; j < rows - 1; j++) {
-      const q = MIX_K[j * cols + i] * share * (b[j + 1] - b[j]);
-      a[j * cols + i] += q;
-      a[(j + 1) * cols + i] -= q;
+    // row j: -k(j-1) x(j-1) + (1 + k(j-1) + k(j)) x(j) - k(j) x(j+1) = old(j), k(j) the coefficient below row j
+    let kUp = 0;
+    for (let j = 0; j < rows; j++) {
+      const kDown = j < rows - 1 ? MIX_K[j * cols + i] * share : 0;
+      const den = 1 + kUp + kDown - (j > 0 ? kUp * c[j - 1] : 0);
+      c[j] = kDown / den;
+      d[j] = (a[j * cols + i] + (j > 0 ? kUp * d[j - 1] : 0)) / den;
+      kUp = kDown;
     }
+    let x = d[rows - 1];
+    a[(rows - 1) * cols + i] = x;
+    for (let j = rows - 2; j >= 0; j--) { x = d[j] + c[j] * x; a[j * cols + i] = x; }
   }
 }
 
@@ -1345,6 +1364,7 @@ function createWorld(seed, founderCount, dayLength) {
     music: createMusic(seed),                       // harmonic field and voice budget; never feeds back into the biology
   };
   w.nextWind = Math.floor(rng.range(PARAMS.wind.gapMin, PARAMS.wind.gapMax) * PARAMS.time.tickRate);
+  w.surfaceLight = surfaceLightAt(dayPhase(w), moonLit(moonPhase(w)));
   updateLight(w);
   const count = founderCount || F.count;
   for (let l = 0; l < F.lineages; l++) {
@@ -1462,18 +1482,27 @@ const BROWNIAN_K = PARAMS.drift.brownian * Math.sqrt(TICK_DT);
 function stepWorld(w) {
   const dt = TICK_DT, cells = w.cells;
   w.tick++;
-  updateLight(w);
-  w.upwelled += diffuseNutrients(w.fields, dt);
-  w.siUpwelled += diffuseSilica(w.fields, dt);
+  // The slow water steps every slowEvery ticks with a step that much longer, its parts staggered over the ticks
+  const SE = PARAMS.time.slowEvery, phase = w.tick % SE, sdt = dt * SE;
+  w.surfaceLight = surfaceLightAt(dayPhase(w), moonLit(moonPhase(w)));
+  if (phase === 0) {
+    updateLight(w);
+    w.upwelled += diffuseNutrients(w.fields, sdt);
+    w.siUpwelled += diffuseSilica(w.fields, sdt);
+  }
   updateWind(w, dt);
   updateTide(w);
-  updateMixing(w, dt);
-  mixColumn(w.fields.nut, PARAMS.mixing.nutrients);
-  mixColumn(w.fields.si, PARAMS.mixing.nutrients);
+  updateMixing(w, sdt);   // every tick: the coefficients are shared scratch, never left over from another tick or world
+  if (phase === 0) {
+    mixColumn(w.fields.nut, PARAMS.mixing.nutrients);
+    mixColumn(w.fields.si, PARAMS.mixing.nutrients);
+  }
   updatePulses(w, dt);
   updateRunoff(w, dt);
-  updateTemperature(w, dt);
-  updateSalinity(w, dt);
+  if (phase === 0) {
+    updateTemperature(w, sdt);
+    updateSalinity(w, sdt);
+  }
   applyHand(w);
   buildHash(w);
   for (let i = 0; i < cells.length; i++) {   // Brownian kicks, drawn in the same order as always
@@ -1494,9 +1523,11 @@ function stepWorld(w) {
   }
   singAndListen(w);
   updateChains(w, dt);
-  graze(w, dt);
-  cyanobacteria(w, dt);
-  tricho(w, dt);
+  graze(w, dt, phase === 2 ? sdt : 0);
+  if (phase === 1) {
+    cyanobacteria(w, sdt);
+    tricho(w, sdt);
+  }
   lyse(w, dt);
   hunt(w, dt);
   suffocate(w, dt);
@@ -1505,8 +1536,10 @@ function stepWorld(w) {
   lifeAndDeath(w);
   updateCysts(w, dt);
   immigrate(w, dt);
-  marineSnow(w, dt);
-  updateOxygen(w, dt);
+  if (phase === 2) {
+    marineSnow(w, sdt);
+    updateOxygen(w, sdt);
+  }
   // Extinction is an ending, not a reset: the water goes on, empty and silent
   if (w.extinctTick < 0 && !w.cysts.length && aliveCount(w) === 0) w.extinctTick = w.tick;
 }
@@ -1787,12 +1820,12 @@ function updatePulses(w, dt) {
 }
 
 // Rule 5: grazing. Density-dependent and lagged: grazers build up where cells are dense.
-function graze(w, dt) {
+function graze(w, dt, slowDt) {
   const G = PARAMS.grazing, f = w.fields, cells = w.cells, K = G.halfB;
   f.bio.fill(0);
   for (let i = 0; i < cells.length; i++) if (!cells[i].dying) addField(f.bio, cells[i].x, cells[i].y, cells[i].biomass);
   for (let k = 0; k < f.bio.length; k++) f.bio[k] += f.syn[k] + f.pro[k];   // grazers eat cyanobacteria too
-  updateGrazers(f, dt);
+  if (slowDt) updateGrazers(f, slowDt);   // the grazers themselves change slowly: with the slow water
   for (let i = 0; i < cells.length; i++) {
     const c = cells[i];
     if (c.dying) continue;
@@ -1827,7 +1860,7 @@ function cyanobacteria(w, dt) {
     diffuseGrid(C, f.cyScratch, k2, 0, 0);
     C.set(f.cyScratch);
   }
-  if (w.tick % Cy.advectEvery === 0) { advect(w, f.syn); advect(w, f.pro); }
+  if (Math.floor(w.tick / PARAMS.time.slowEvery) % (Cy.advectEvery / PARAMS.time.slowEvery) === 0) { advect(w, f.syn); advect(w, f.pro); }
 }
 
 // The currents: a slowly turning pattern of eddies (a stream function), faster in wind
@@ -1842,13 +1875,13 @@ function currentAt(w, x, y, out) {
 // Semi-Lagrangian: each node takes what the current brought from upstream; rescaled so nothing is made or lost.
 // Where each node's water came from is worked out once per tick and shared by every field the current carries.
 const CUR = { u: 0, v: 0 }, DEP_X = new Float64Array(PARAMS.grid.cols * PARAMS.grid.rows), DEP_Y = new Float64Array(DEP_X.length);
-let depTick = -1;
+let depTick = -1, depWorld = null;
 function advect(w, C) {
   const Cy = PARAMS.cyano, { cols, rows } = PARAMS.grid, b = w.fields.cyScratch, step = Cy.advectEvery * TICK_DT;
   let before = 0, after = 0;
   for (let k = 0; k < C.length; k++) before += C[k];
-  if (depTick !== w.tick) {
-    depTick = w.tick;
+  if (depTick !== w.tick || depWorld !== w) {   // per world and tick: another world's currents never carry this one
+    depTick = w.tick; depWorld = w;
     for (let j = 0; j < rows; j++) {
       for (let i = 0; i < cols; i++) {
         const x = (i + 0.5) * GRID_W, y = (j + 0.5) * GRID_H;
@@ -1907,30 +1940,28 @@ function tricho(w, dt) {
   mixColumn(C, 1);
   diffuseGrid(C, b, Tr.diffusion * dt, 0, 0);
   C.set(b);
-  if (w.tick % PARAMS.cyano.advectEvery === 0) advect(w, C);
+  if (Math.floor(w.tick / PARAMS.time.slowEvery) % (PARAMS.cyano.advectEvery / PARAMS.time.slowEvery) === 0) advect(w, C);
 }
-
-const SLOW_EVERY = 3;   // ticks between the steps of the weak diffusion of heat and oxygen
 
 // Temperature: sunlight warms the water where it is absorbed, the surface gives heat back to the air (faster in wind),
 // heat diffuses, deep water is cold, and wind mixing carries the warm layer down
 function updateTemperature(w, dt) {
-  const T = PARAMS.temperature, f = w.fields, cols = PARAMS.grid.cols, t = f.temp, k = T.diffusion * dt * SLOW_EVERY;
+  const T = PARAMS.temperature, f = w.fields, cols = PARAMS.grid.cols, t = f.temp, k = T.diffusion * dt;
   for (let i = 0; i < t.length; i++) t[i] += T.heat * f.light[i] * f.profile[(i / cols) | 0] * dt;   // most of the heat stays in the top few metres
   const loss = (T.cool + T.windCool * w.wind) * dt;
   for (let i = 0; i < cols; i++) t[i] += (T.air - t[i]) * loss;
-  if (w.tick % SLOW_EVERY === 0) { diffuseGrid(t, f.cyScratch, k, 0, 0); t.set(f.cyScratch); }   // weak: every few ticks is enough
+  diffuseGrid(t, f.cyScratch, k, 0, 0); t.set(f.cyScratch);
   renewBottom(t, T.deep, T.vent * dt);
   mixColumn(t, 1);
-  if (w.tick % PARAMS.cyano.advectEvery === 0) updateWarmth(f);
+  if (w.tick % PARAMS.cyano.advectEvery === 0) updateWarmth(f);   // (the slow water steps on ticks that include these)
 }
 
 // Salinity: the shelf's salt water replaces the column slowly from the sides and renews the bottom layer; salt
 // diffuses and is mixed as heat is (runoff freshens the surface, see updateRunoff)
 function updateSalinity(w, dt) {
-  const Sa = PARAMS.salinity, f = w.fields, s = f.sal, k = PARAMS.temperature.diffusion * dt * SLOW_EVERY, ex = Sa.exchange * dt;
+  const Sa = PARAMS.salinity, f = w.fields, s = f.sal, k = PARAMS.temperature.diffusion * dt, ex = Sa.exchange * dt;
   for (let i = 0; i < s.length; i++) s[i] += (Sa.shelf - s[i]) * ex;
-  if (w.tick % SLOW_EVERY === 0) { diffuseGrid(s, f.cyScratch, k, 0, 0); s.set(f.cyScratch); }
+  diffuseGrid(s, f.cyScratch, k, 0, 0); s.set(f.cyScratch);
   renewBottom(s, Sa.shelf, PARAMS.temperature.vent * dt);
   mixColumn(s, 1);
 }
@@ -1938,10 +1969,10 @@ function updateSalinity(w, dt) {
 // Oxygen: the surface breathes with the air toward saturation (less in warm water, faster in wind); oxygen diffuses
 // and is mixed; deep water seeps in slowly at the bottom. Never below none.
 function updateOxygen(w, dt) {
-  const O = PARAMS.oxygen, f = w.fields, cols = PARAMS.grid.cols, o2 = f.o2, b = f.cyScratch, k = O.diffusion * dt * SLOW_EVERY;
+  const O = PARAMS.oxygen, f = w.fields, cols = PARAMS.grid.cols, o2 = f.o2, b = f.cyScratch, k = O.diffusion * dt;
   const air = (O.aerate + O.windAerate * w.wind) * dt;
   for (let i = 0; i < cols; i++) o2[i] += (1 - O.satT * (f.temp[i] - PARAMS.temperature.air) - o2[i]) * air;
-  if (w.tick % SLOW_EVERY === 0) diffuseGrid(o2, b, k, 0, 0); else b.set(o2);   // weak: every few ticks is enough
+  diffuseGrid(o2, b, k, 0, 0);
   for (let i = 0; i < o2.length; i++) o2[i] = b[i] > 0 ? b[i] : 0;
   renewBottom(o2, O.deep, O.vent * dt);
   mixColumn(o2, 1);
@@ -3177,7 +3208,9 @@ function startAudio() {
   bendShelf.type = 'highshelf'; bendShelf.frequency.value = A.bend.shelfHz; bendShelf.gain.value = 0;
   const bendPeak = ctx.createBiquadFilter();
   bendPeak.type = 'peaking'; bendPeak.frequency.value = A.bend.peakLo; bendPeak.Q.value = A.bend.peakQ; bendPeak.gain.value = 0;
-  master.connect(bendLP); bendLP.connect(bendShelf); bendShelf.connect(bendPeak); bendPeak.connect(comp);
+  const air = ctx.createBiquadFilter();   // soft on the uppermost frequencies
+  air.type = 'highshelf'; air.frequency.value = A.air.freq; air.gain.value = A.air.gain;
+  master.connect(bendLP); bendLP.connect(bendShelf); bendShelf.connect(bendPeak); bendPeak.connect(air); air.connect(comp);
 
   const verb = ctx.createConvolver();
   verb.buffer = buildImpulse(ctx);
@@ -3494,7 +3527,14 @@ function scaleNote(m, octave, semis) {
 }
 
 const visitorNext = { school: 0, sunfish: 0, grain: 0, triGrain: 0, salp: 0, salpStep: 0, salpId: -1, jellies: 0, combs: 0 };
-const jellyBeats = new Map();   // visitor id x 64 + jelly -> its last pulse count, to hear each new contraction
+const jellyBeats = new Map();
+// Sound halos (author): a visitor's sound sends one ring of its colour out from where it came from (render only)
+const voiceRings = [];
+function voiceRing(ramp, x, y, r) {
+  if (audio.muted) return;
+  voiceRings.push({ ramp, x, y, r, t: performance.now() });
+  if (voiceRings.length > 40) voiceRings.shift();
+}   // visitor id x 64 + jelly -> its last pulse count, to hear each new contraction
 
 // Cyanobacteria's shimmer: grains scheduled at random, thicker where more is on screen
 function audioCyano(w) {
@@ -3542,6 +3582,7 @@ function audioVisitors(w) {
   if (school && t >= visitorNext.school) {
     const S = V.school, m = w.music;
     schoolChord([scaleNote(m, S.octave, 0), scaleNote(m, S.octave, 7), scaleNote(m, S.octave, 14)], school.x / W * 2 - 1);
+    voiceRing(LIGHTBLUE, school.x, school.y, PARAMS.visitors.sardines.ry);
     visitorNext.school = t + S.every;
   }
   const salp = w.visitors.find((v) => v.kind === 'salps' && onScreen(v, 30));
@@ -3550,7 +3591,7 @@ function audioVisitors(w) {
     if (salp.id !== visitorNext.salpId) { visitorNext.salpId = salp.id; visitorNext.salpStep = 0; visitorNext.salp = t; }
     while (visitorNext.salp <= t + 0.05) {
       const k = visitorNext.salpStep % (n + Sp.rest), at = Math.max(visitorNext.salp, t) + PARAMS.audio.lookahead;
-      if (k < n && salp.alive[k]) salpNote(salpMelody(w.music, salp.id, k), at, salpBarrel(salp, k).x / W * 2 - 1);
+      if (k < n && salp.alive[k]) { const q = salpBarrel(salp, k); salpNote(salpMelody(w.music, salp.id, k), at, q.x / W * 2 - 1); voiceRing(EMERALD, q.x, q.y, 3); }
       visitorNext.salpStep++;
       visitorNext.salp = Math.max(visitorNext.salp, t) + Sp.step;
     }
@@ -3562,18 +3603,22 @@ function audioVisitors(w) {
       if (!m.alive) return;
       const n = Math.floor(v.age / m.period + m.ph), key = v.id * 64 + i, last = jellyBeats.get(key);
       jellyBeats.set(key, n);
-      if (last === undefined || n <= last || t < visitorNext[v.kind]) return;
+      if (last === undefined || n <= last || t < visitorNext[v.kind] || ambRng.next() > Jv.chance) return;   // only now and then (author: not on every pulse)
       const p = jellyAt(v, m), at = t + PARAMS.audio.lookahead, steps = v.kind === 'jellies' ? Jv.steps : Jv.steps.slice(0, 2 + (i % 2));
-      steps.forEach((semis, k) => harpNote(scaleNote(w.music, Jv.octave, semis), at + k * Jv.spacing * (0.85 + 0.3 * ambRng.next()), Jv, p.x / W * 2 - 1));
-      visitorNext[v.kind] = t + Jv.gap;
+      const r = ambRng.next(), oct = Jv.octave - (r < Jv.drop[0] ? 0 : r < Jv.drop[0] + Jv.drop[1] ? 1 : 2);   // sometimes an octave or two lower
+      steps.forEach((semis, k) => harpNote(scaleNote(w.music, oct, semis), at + k * Jv.spacing * (0.85 + 0.3 * ambRng.next()), Jv, p.x / W * 2 - 1, k === steps.length - 1));
+      voiceRing(v.kind === 'jellies' ? (m.tint ? VIOLET : ROSE) : -1, p.x, p.y, PARAMS.visitors[v.kind].r * m.size);
+      visitorNext[v.kind] = t + Jv.gap + (Jv.gapMax - Jv.gap) * ambRng.next();   // a random rest before the next
     });
   }
   if (jellyBeats.size > 512) jellyBeats.clear();
   const fish = w.visitors.find((v) => v.kind === 'sunfish' && onScreen(v, 10));
   if (fish && t >= visitorNext.sunfish) {
     const F = V.sunfish, m = w.music;
-    if (visitorNext.sunfish > 0) sunfishCall(scaleNote(m, F.octave + (fish.leaving ? 1 : 0), 0), scaleNote(m, F.octave + (fish.leaving ? 1 : 0), 7),
-                                             fish.leaving ? F.baskGain : 1, fish.x / W * 2 - 1);
+    if (visitorNext.sunfish > 0) {
+      sunfishCall(scaleNote(m, F.octave + (fish.leaving ? 1 : 0), 0), scaleNote(m, F.octave + (fish.leaving ? 1 : 0), 7), fish.leaving ? F.baskGain : 1, fish.x / W * 2 - 1);
+      voiceRing(GOLD, fish.x, fish.y, PARAMS.visitors.sunfish.r);
+    }
     visitorNext.sunfish = t + F.everyMin + (F.everyMax - F.everyMin) * ambRng.next();
   } else if (!fish) visitorNext.sunfish = 0;   // a sunfish arriving calls soon after it appears, not at once
 }
@@ -3653,35 +3698,36 @@ function salpNote(midi, t0, panX) {
   o.onended = () => { for (const node of [o, o2, g2, filt, env, pan, dry, wet]) if (node) node.disconnect(); };
 }
 
-// One harp string: a plucked triangle with a bright octave partial, a lowpass closing as it rings, and a shimmer an
-// octave up that swells slowly into the reverb only (the angelic tail)
-function harpNote(midi, t0, J, panX) {
+// One harp string: a plucked triangle under a lowpass closing as it rings; the top string of a strum adds a shimmer an
+// octave up that swells slowly into the reverb only (the angelic tail). Kept light: a strum is several strings at once
+function harpNote(midi, t0, J, panX, shimmer) {
   const ctx = audio.ctx, hz = 440 * Math.pow(2, (midi - 69) / 12), end = t0 + J.decay, tail = t0 + J.shimmerDecay;
-  const o = ctx.createOscillator(), o2 = ctx.createOscillator(), g2 = ctx.createGain(), filt = ctx.createBiquadFilter();
+  const o = ctx.createOscillator(), filt = ctx.createBiquadFilter();
   const env = ctx.createGain(), dry = ctx.createGain(), wet = ctx.createGain(), pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
-  const sh = ctx.createOscillator(), shEnv = ctx.createGain();
   o.type = 'triangle'; o.frequency.value = hz;
-  o2.frequency.value = hz * 2; g2.gain.value = 0.25;
-  sh.frequency.value = hz * 2;
   filt.type = 'lowpass'; filt.Q.value = 0.6;
   filt.frequency.setValueAtTime(J.cut, t0);
   filt.frequency.exponentialRampToValueAtTime(J.cut * 0.3, end);
   env.gain.setValueAtTime(0.0001, t0);
-  env.gain.linearRampToValueAtTime(J.gain, t0 + 0.004);
+  env.gain.linearRampToValueAtTime(J.gain, t0 + 0.008);   // a soft pluck, no click
   env.gain.exponentialRampToValueAtTime(0.0001, end);
-  shEnv.gain.setValueAtTime(0.0001, t0);
-  shEnv.gain.linearRampToValueAtTime(J.gain * J.shimmer, t0 + J.shimmerDecay * 0.25);
-  shEnv.gain.exponentialRampToValueAtTime(0.0001, tail);
   dry.gain.value = 1 - J.wet; wet.gain.value = J.wet;
-  o.connect(filt); o2.connect(g2); g2.connect(filt); filt.connect(env);
+  o.connect(filt); filt.connect(env);
   let out = env;
   if (pan) { pan.pan.value = clamp(panX, -1, 1) * J.pan; env.connect(pan); out = pan; }
   out.connect(dry); out.connect(wet);
   dry.connect(audio.bus); wet.connect(audio.wet);
-  sh.connect(shEnv); shEnv.connect(audio.wet);   // the shimmer lives in the reverb
-  for (const x of [o, o2]) { x.start(t0); x.stop(end + 0.05); }
+  o.start(t0); o.stop(end + 0.05);
+  o.onended = () => { for (const node of [o, filt, env, pan, dry, wet]) if (node) node.disconnect(); };
+  if (!shimmer) return;
+  const sh = ctx.createOscillator(), shEnv = ctx.createGain();   // the shimmer lives in the reverb
+  sh.frequency.value = hz * 2;
+  shEnv.gain.setValueAtTime(0.0001, t0);
+  shEnv.gain.linearRampToValueAtTime(J.gain * J.shimmer, t0 + J.shimmerDecay * 0.25);
+  shEnv.gain.exponentialRampToValueAtTime(0.0001, tail);
+  sh.connect(shEnv); shEnv.connect(audio.wet);
   sh.start(t0); sh.stop(tail + 0.05);
-  sh.onended = () => { for (const node of [o, o2, g2, filt, env, pan, dry, wet, sh, shEnv]) if (node) node.disconnect(); };
+  sh.onended = () => { sh.disconnect(); shEnv.disconnect(); };
 }
 
 // The sunfish's call: a warm low tone (a filtered saw over a sine) that glides up a fifth
@@ -5138,6 +5184,21 @@ function fillShape(cx, cy, rx, ry, angle, colour) {
   }
 }
 
+// One ring per sound, spreading from the singer and fading (dithered) over life s; comb jellies' rings shimmer
+function drawVoiceRings(now) {
+  const life = 1600, z = cam.zoom;
+  for (let i = voiceRings.length - 1; i >= 0; i--) {
+    const g = voiceRings[i], a = (now - g.t) / life;
+    if (a >= 1) { voiceRings.splice(i, 1); continue; }
+    const R = (g.r + 4 + a * (g.r * 0.6 + 10)) * z, cx = toSX(g.x), cy = toSY(g.y), fade = 1 - a, n = Math.ceil(R * 6.3);
+    for (let k = 0; k < n; k++) {
+      const ang = k / n * TAU, x = Math.round(cx + Math.cos(ang) * R), y = Math.round(cy + Math.sin(ang) * R);
+      if (x < 0 || y < 0 || x >= W || y >= H || bayer(x, y) >= fade * 0.8) continue;
+      put(x, y, g.ramp < 0 ? IRID_SET[(k + Math.floor(now / 90)) % IRID_SET.length] : rampBase(g.ramp) + (a < 0.3 ? BRIGHT : HIGHLIGHT));
+    }
+  }
+}
+
 function drawVisitors(w, ta) {
   for (const v of w.visitors) {
     if (v.kind === 'salps') drawSalps(v, ta);
@@ -5558,7 +5619,7 @@ function drawCopepods(w, ta) {
         const cx = (i + 0.5) * GRID_W + bx + hx, cy = (j + 0.5) * GRID_H + by + hy - L.sink * every * 0.5;
         if (cx < x0 || cx > x1 || cy < y0 || cy > y1) continue;
         const len = L.len * (0.8 + 0.4 * hash01(h + 6));
-        if (len * z < 3) { put(toSX(cx), toSY(cy), hash01(h + 7) < 0.3 ? amber + HIGHLIGHT : COL.SHAFT); continue; }
+        if (len * z < 6) { put(toSX(cx), toSY(cy), hash01(h + 7) < 0.3 ? amber + HIGHLIGHT : COL.SHAFT); continue; }   // zoomed out: a speck
         // heading: along the hop, head first; at rest it hangs head up, tilted its own way
         const hopping = e > 0 && e < 1, head = hopping ? ang : -Math.PI / 2 + (hash01(h + 8) - 0.5) * 1.2;
         const ux = Math.cos(head), uy = Math.sin(head), px = -uy, py = ux;
@@ -5871,6 +5932,7 @@ function drawHud(w, now) {
       }
     }
     if (catchup.rested > 0) drawText(Hd.x, Hd.y - Hd.line * 3, 'RESTED ' + duration(catchup.rested), rampBase(ROSE) + HIGHLIGHT, vis);
+    drawText(Hd.x + B.w + 6, by - 1, catchup.skip ? 'SKIPPING' : 'TAP TO SKIP', COL.FOAM, vis);
   }
   drawText(Hd.x, Hd.y, 'SEED ' + seedLabel, COL.FOAM, vis);
   drawText(Hd.x, Hd.y + Hd.line, 'T ' + clock(w.tick * TICK_DT), COL.FOAM, vis);
@@ -5948,6 +6010,7 @@ function composeFrame(w, now) {
   drawFlashes(w);
   drawSongs(w);
   drawVisitors(w, ta);
+  drawVoiceRings(now);
   updateBubbles(w, ta);
   updateRain(w, ta);
   drawBubbles();
@@ -7026,7 +7089,7 @@ function drawWaterPage(w, y) {
     { lines: [['SURFACE NUTRIENTS', at(cols.nutS, cols.kv), rampBase(GOLD) + HIGHLIGHT], ['SILICA', at(cols.siS, cols.kv), rampBase(LIGHTBLUE) + BRIGHT]],
       lo: 0, hi: deep, now: (v) => Math.round(v * 100) + '% OF DEEP' },
     { lines: [['BOTTOM OXYGEN', at(cols.o2, cols.kw), COL.FOAM]], lo: 0, hi: 1.2, mark: O.hypoxic, now: (v) => (v * mL).toFixed(1) + ' ML/L' },
-    { lines: [['SURFACE WARMTH', at(cols.temp, cols.kw), rampBase(AMBER) + HIGHLIGHT]], lo: 14, hi: 26, now: (v) => v.toFixed(1) + ' C' },
+    { lines: [['SURFACE TEMPERATURE', at(cols.temp, cols.kw), rampBase(AMBER) + HIGHLIGHT]], lo: 14, hi: 26, now: (v) => v.toFixed(1) + ' C' },
     { lines: [['SURFACE SALINITY', at(cols.salS, cols.kv), rampBase(VIOLET) + HIGHLIGHT]], lo: 31.5, hi: 35.5, now: (v) => v.toFixed(1) + ' PSU' },
     { lines: [['MIXED LAYER', at(cols.mld, cols.kv), rampBase(BLUE) + BRIGHT]], lo: 1, hi: 0, now: (v) => (v >= 1 ? 'TO THE FLOOR' : metres(v) + ' M DEEP') },
     { lines: [['GRAZERS', at(cols.graz), rampBase(ROSE) + HIGHLIGHT]], lo: 0, hi: grazTop, now: () => 'RELATIVE' },
@@ -7055,7 +7118,7 @@ function drawWaterPage(w, y) {
 // physics (warmth, salinity, oxygen, light) and the life (nutrients, silica, chlorophyll as a fluorometer sees it, a
 // shaded area), each property on its own fixed scale. Layers named by standard criteria; hypoxic depths shaded.
 const PROFILE = [
-  { key: 'temp', name: 'WARMTH 10-26 C', idx: rampBase(AMBER) + HIGHLIGHT, lo: 10, hi: 26, panel: 0 },
+  { key: 'temp', name: 'TEMPERATURE 10-26', idx: rampBase(AMBER) + HIGHLIGHT, lo: 10, hi: 26, panel: 0 },
   { key: 'sal', name: 'SALINITY 31-36', idx: rampBase(VIOLET) + HIGHLIGHT, lo: 31, hi: 36, panel: 0 },
   { key: 'o2', name: 'O2 0-12 ML/L', idx: COL.FOAM, lo: 0, hi: 12 / 5.83, panel: 0 },
   { key: 'light', name: 'LIGHT 0-100%', idx: rampBase(GOLD) + BRIGHT, lo: 0, hi: 1, panel: 0, rel: true },
@@ -7376,7 +7439,8 @@ function setupInput() {
     const d = input.down;
     const p = input.pointers.get(e.pointerId) || d;
     const tapped = d && d.id === e.pointerId && d.moved <= PARAMS.touch.tapMove && performance.now() - d.t < PARAMS.touch.tapMs;
-    if (tapped && onNewWater(p) && !notebook.open) { seedNewWater(); input.down = null; }
+    if (tapped && catchup.phase && !catchup.bench && !notebook.open) { skipCatchup(); input.down = null; }   // the recap: a tap skips it
+    else if (tapped && onNewWater(p) && !notebook.open) { seedNewWater(); input.down = null; }
     else if (tapped && onMusicGlyph(p) && (d.hud > 0 || notebook.open)) { setMuted(!audio.muted); input.down = null; }   // the music button
     else if (d && d.id === e.pointerId && notebook.open) { notebookRelease(d, p); input.down = null; }
     else if (d && d.id === e.pointerId) {
@@ -7643,42 +7707,41 @@ async function loadWorld(db) {
   for (let i = 0; i < rec.chunks; i++) keys.push('rows:' + i);
   const rows = await storeGet(db, keys);
   const chunks = keys.map((k) => rows[k] || new Float32Array(0));
-  const V4 = 46;   // a v4 row: everything up to the cyanobacteria (SYN, PRO), in the places they still hold
-  if (rec.v < 4) {   // older rows: seven forms (v3 also had hunted, lysed and silica; v2 five deaths and no silica)
-    const L = rec.v < 3 ? { DEPTH: 16, SD: 23, DEATHS: 30, deaths: 5, SILICA: -1, STRIDE: 35 } : { DEPTH: 16, SD: 23, DEATHS: 30, deaths: 7, SILICA: 37, STRIDE: 38 };
-    for (let k = 0; k < chunks.length; k++) {
-      const old = chunks[k], n = old.length / L.STRIDE, wide = new Float32Array(n * V4);
-      for (let i = 0; i < n; i++) {
-        const a = i * L.STRIDE, b = i * V4;
-        for (let j = 0; j < NB.N; j++) wide[b + j] = old[a + j];
-        for (let f = 0; f < 7; f++) {
-          wide[b + NB.N + f] = old[a + NB.N + f];
-          wide[b + NB.DEPTH + f] = old[a + L.DEPTH + f];
-          wide[b + NB.SD + f] = old[a + L.SD + f];
-        }
-        for (let d = 0; d < L.deaths; d++) wide[b + NB.DEATHS + d] = old[a + L.DEATHS + d];
-        if (L.SILICA >= 0) wide[b + NB.SILICA] = old[a + L.SILICA];
-      }
-      chunks[k] = wide;
-    }
-  }
-  const V5 = 50;   // a v5/v6 row: everything up to hypoxia deaths
-  if (rec.v < 5) {   // v4 rows had no Trichodesmium, oxygen, temperature or hypoxia: widened, those left empty
-    for (let k = 0; k < chunks.length; k++) {
-      const old = chunks[k], n = old.length / V4, wide = new Float32Array(n * V5);
-      for (let i = 0; i < n; i++) wide.set(old.subarray(i * V4, (i + 1) * V4), i * V5);
-      chunks[k] = wide;
-    }
-  }
-  if (rec.v < 7) {   // older rows hold no surface water, mixed layer or cyst counts: widened, those marked unknown (-1)
-    for (let k = 0; k < chunks.length; k++) {
-      const old = chunks[k], n = old.length / V5, wide = new Float32Array(n * NB.STRIDE).fill(-1);
-      for (let i = 0; i < n; i++) wide.set(old.subarray(i * V5, (i + 1) * V5), i * NB.STRIDE);
-      chunks[k] = wide;
-    }
-  }
+  // Each chunk is read by its own row width, not the record's version: a save after a format change rewrites only
+  // its newest chunks, so older chunks can still hold older rows (this misread a kept world's notebook once)
+  const R = PARAMS.persist.chunkRows, count = rec.notebook.count;
+  let converted = false;
+  chunks.forEach((old, k) => {
+    const rowsIn = Math.max(0, Math.min(R, count - k * R)), stride = rowsIn ? old.length / rowsIn : NB.STRIDE;
+    if (stride !== NB.STRIDE && NOTEBOOK_LAYOUTS[stride]) { chunks[k] = widenRows(old, stride); converted = true; }
+  });
   if (rec.v < 2) for (const c of chunks) for (let o = 0; o < c.length; o += NB.STRIDE) c[o + NB.TICK] /= PARAMS.time.tickRate;   // rows kept ticks before v2
-  return { rec, world: restoreWorld(rec.snap), rows: chunks };
+  return { rec, world: restoreWorld(rec.snap), rows: chunks, converted };
+}
+
+// The notebook's row layouts over the versions, by row width: v2 (35) and v3 (38) had seven forms; v4 (46) added the
+// cyanobacteria; v5/v6 (50) Trichodesmium, oxygen, temperature and hypoxia; v7 (56) the surface water, the mixed
+// layer and cysts. Older rows are widened into today's, what they never held left empty (or -1 where 0 is a value).
+const NOTEBOOK_LAYOUTS = {
+  35: { DEPTH: 16, SD: 23, DEATHS: 30, deaths: 5, SILICA: -1 }, 38: { DEPTH: 16, SD: 23, DEATHS: 30, deaths: 7, SILICA: 37 },
+  46: { keep: 46 }, 50: { keep: 50 },
+};
+function widenRows(old, stride) {
+  const L = NOTEBOOK_LAYOUTS[stride], n = old.length / stride, S = NB.STRIDE, wide = new Float32Array(n * S);
+  for (let i = 0; i < n; i++) {
+    const a = i * stride, b = i * S;
+    wide.fill(-1, b + NB.NUTS, b + NB.GERM + 1);   // never recorded: unknown
+    if (L.keep) { wide.set(old.subarray(a, a + L.keep), b); continue; }
+    for (let j = 0; j < NB.N; j++) wide[b + j] = old[a + j];
+    for (let f = 0; f < 7; f++) {
+      wide[b + NB.N + f] = old[a + NB.N + f];
+      wide[b + NB.DEPTH + f] = old[a + L.DEPTH + f];
+      wide[b + NB.SD + f] = old[a + L.SD + f];
+    }
+    for (let d = 0; d < L.deaths; d++) wide[b + NB.DEATHS + d] = old[a + L.DEATHS + d];
+    if (L.SILICA >= 0) wide[b + NB.SILICA] = old[a + L.SILICA];
+  }
+  return wide;
 }
 
 // After an extinction: the kept world is let go and new water is seeded on reload
@@ -7690,7 +7753,7 @@ function seedNewWater() {
 // ---- Catching up: the kept world lives the time it was away ----
 // phase: 'worker' (a worker lives the time out of sight; the page shows its frames), 'tail' (the page plays the
 // rest, slowing to real time), '' (live). The target keeps moving: real time goes on while it catches up.
-const catchup = { phase: '', base: 0, lived: 0, rested: 0, openedAt: 0, worker: null, bench: null };
+const catchup = { phase: '', base: 0, lived: 0, rested: 0, openedAt: 0, worker: null, bench: null, skip: false };
 const RENDER_KEYS = ['spr', 'tempo', 'vt', 'swimPh', 'ox', 'oy', 'along', 'glowTick', 'songAt', 'songAtk', 'songRel', 'songLast', 'songDrone', 'pluckAt'];
 
 const catchupTarget = () => catchup.base + Math.floor((catchup.lived + (Date.now() - catchup.openedAt) / 1000) * PARAMS.time.tickRate);   // wall clock: it runs on while the phone sleeps
@@ -7737,10 +7800,11 @@ function catchUp(away) {
       const m = e.data;
       if (catchup.phase !== 'worker') return;
       showWorld(m.snap);
-      if (m.kind === 'progress') { catchup.worker.postMessage({ target: catchupTarget() - tailTicks() }); return; }
+      if (m.kind === 'progress') { catchup.worker.postMessage({ target: catchup.skip ? 0 : catchupTarget() - tailTicks() }); return; }
       restoreNotebook(m.nb, [m.rows]);
       catchup.worker.terminate();
       catchup.phase = 'tail';
+      if (catchup.skip) skipRest();
     });
     catchup.worker.onerror = () => { catchup.worker.terminate(); restRemainder(); };
     catchup.phase = 'worker';
@@ -7779,6 +7843,25 @@ function restRemainder() {
     notebook.rests.push({ tick: world.tick, s: behind });
   }
   catchup.phase = 'tail';
+}
+
+// Skipping the recap (author: it can take too long): what was lived stays, the rest of the time away is rested, as
+// beyond the catch-up limit. The worker is asked to stop where it is first, so its notebook rows come back too.
+function skipCatchup() {
+  if (!catchup.phase || catchup.bench || catchup.skip) return;
+  catchup.skip = true;
+  if (catchup.phase === 'worker') catchup.worker.postMessage({ target: 0 });
+  else skipRest();
+}
+function skipRest() {
+  const behind = (catchupTarget() - world.tick) / PARAMS.time.tickRate;
+  if (behind > 0) {
+    catchup.lived -= behind;
+    catchup.rested += behind;
+    notebook.rests.push({ tick: world.tick, s: behind });
+  }
+  catchup.skip = false;
+  endCatchup();
 }
 
 function endCatchup() {
@@ -7831,7 +7914,7 @@ async function init() {
     world = found.world;
     seedLabel = found.rec.label;
     restoreNotebook(found.rec.notebook, found.rows);
-    keeper.saved = { count: found.rec.notebook.count, every: found.rec.notebook.every, chunks: found.rec.chunks };
+    keeper.saved = found.converted ? null : { count: found.rec.notebook.count, every: found.rec.notebook.every, chunks: found.rec.chunks };   // converted rows are all rewritten
     audio.muted = !!(found.rec.prefs && found.rec.prefs.muted);
     catchUp(Math.max(0, (Date.now() - found.rec.savedAt) / 1000));
   } else {

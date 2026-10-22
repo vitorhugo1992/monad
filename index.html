@@ -657,9 +657,9 @@ const PARAMS = {
     seaStates: [0.15, 0.35, 0.6], noonHour: 12, dialR: 32,
     // The music chapter (author, 2026-10-22; observation only, of what is heard: nothing when the music is off).
     // keep: notes remembered (the last minute or so); share: s the instruments' shares count over; staff: s of notes
-    // the listening staff shows; lit: s a visitor's voice stays lit; circleR: the pitch circle's radius (px); quiet:
-    // onsets/s below which the history counts the water near-silent; scope: the spectrum's band (Hz) and bars.
-    music: { keep: 480, share: 60, staff: 20, lit: 4, circleR: 30, quiet: 0.3, scope: { lo: 60, hi: 12000, bars: 39, fft: 1024, smooth: 0.7 } },
+    // the listening staff shows; lit: s a visitor's voice stays lit; circleR: the pitch circle's radius (px);
+    // scope: the spectrum's band (Hz) and bars.
+    music: { keep: 480, share: 60, staff: 20, lit: 4, circleR: 30, scope: { lo: 60, hi: 12000, bars: 39, fft: 1024, smooth: 0.7 } },
     surfaceRows: 4,   // the surface water the recorder and the day page read: the top grid rows (about a tenth of the column)
     // Real units (sources in the Notebook section). depthM: the column in metres (light falls to e^-atten at the
     // floor: Kd 0.067 per m for a clear stratified shelf); o2mL: oxygen saturation at 15 C and 35 psu in mL/L, the
@@ -683,7 +683,7 @@ const PARAMS = {
   // once until the camera zooms out again.
   curio: { first: 40, everyMin: 90, everyMax: 180, life: 25, r: 5, rise: 1.2, sway: 2.5, zoomFrom: 3, zoomDelay: 10,
            corners: [[16, 120], [164, 120], [16, 250], [164, 230]] },
-  persist: { db: 'monad', every: 30, chunkRows: 1024, version: 9,
+  persist: { db: 'monad', every: 30, chunkRows: 1024, version: 8,
     // Catching up: the time away is lived again, exactly, up to maxAway (s); beyond it the water rests. A worker runs
     // it out of sight and shows a frame every show s (a silent time-lapse); the last tail simulated s play on the page,
     // from tailSpeed x slowing to real time, so the recap glides into the live world. bench: s measured by ?bench.
@@ -3449,14 +3449,14 @@ function playNote(n) {
 // Drains the tick's note events. In time-lapse only a share of the phrases plays (about the real-time density),
 // whole phrases so tunes stay whole; the simulation is unchanged. Every note that plays is also seen: its cell
 // swells and sends out a ring (even when muted or before the first tap).
-// What was heard, for the music pages (page side only, never the world): the last notes played (when, pitch, depth,
+// What was heard, for the music pages (page side only, never the world): the last notes played (when, pitch,
 // the cell's pigment, form and instrument) and when each visitor's voice last sounded. Nothing when the music is off.
 const heard = { notes: [], voices: {} };
 function logHeard(n, at) {
   const mix = n.drone ? null : noteMix(n);
   let inst = 'drone', top = 0;
   if (mix) for (const k in mix) if (mix[k] > top) { top = mix[k]; inst = k; }
-  heard.notes.push({ t: at, end: at + (n.attack + n.release) * 1000, midi: n.midi, pc: n.pc, depth: clamp(n.y / (H - PARAMS.world.floor), 0, 1),
+  heard.notes.push({ t: at, end: at + (n.attack + n.release) * 1000, midi: n.midi, pc: n.pc,
                      ramp: hueRamp(n.c), form: n.c.kind, inst });
   if (heard.notes.length > PARAMS.notebook.music.keep) heard.notes.splice(0, heard.notes.length - PARAMS.notebook.music.keep);
 }
@@ -6180,7 +6180,7 @@ const VISITOR_INK = [
   { kind: 'sunfish', name: 'SUNFISH', ramp: GOLD }, { kind: 'jellies', name: 'JELLYFISH', ramp: ROSE },
   { kind: 'combs', name: 'COMB JELLIES', ramp: VIOLET },
 ];
-const PAGES = ['THE DAY', 'CENSUS', 'SPECIES', 'THE WATER', 'THE COLUMN', 'MIGRATION', 'LEDGER', 'THE MUSIC', 'LISTENING', 'MUSIC HISTORY'];   // the biology, then the music
+const PAGES = ['THE DAY', 'CENSUS', 'SPECIES', 'THE WATER', 'THE COLUMN', 'MIGRATION', 'LEDGER', 'THE MUSIC', 'LISTENING'];   // the biology, then the music
 const SEA_STATES = ['CALM', 'BREEZE', 'WINDY', 'STORM'];
 // The notebook glyph, an open book: o page, - a line of writing; the spine is the gap between the pages
 const GLYPH = ['ooooo...ooooo', 'oooooo.oooooo', 'o----o.o----o', 'oooooo.oooooo', 'o----o.o----o', 'oooooo.oooooo', 'o---oo.oo---o', 'oooooo.oooooo', '..oooo.oooo..'];
@@ -6190,12 +6190,9 @@ const PAGE_INK = 1;   // the page: one step above the darkest water
 // TICK holds simulated seconds (whole numbers, exact in a Float32 for ~194 days of life); rowTick turns it back.
 // SYN, PRO, TRI: cyanobacteria; O2: bottom water; TEMP: surface; NUTS, SIS, SALS: the surface water (nutrients,
 // silica, salinity); MLD: the mixed layer's depth as a share of the column (1: mixed to the floor); ENC, GERM: cysts
-// made and germinated so far; ROOT, SCALE: the key (root pitch class, scale by SCALE_NAMES); ONS: the onsets the
-// voice budget let through so far, modulo ONS_WRAP (exact in a Float32 however long the life). Each is filled from its
-// arrival; older rows hold -1 there (unknown).
+// made and germinated so far. Each is filled from its arrival; older rows hold -1 there (unknown).
 const NB = { TICK: 0, LIGHT: 1, WIND: 2, NUT: 3, GRAZ: 4, POP: 5, CYSTS: 6, CHAINED: 7, GLOW: 8, N: 9, DEPTH: 18, SD: 27, DEATHS: 36, SILICA: 43, SYN: 44, PRO: 45,
-             TRI: 46, O2: 47, TEMP: 48, HYPOXIA: 49, NUTS: 50, SIS: 51, SALS: 52, MLD: 53, ENC: 54, GERM: 55, ROOT: 56, SCALE: 57, ONS: 58, STRIDE: 59 };
-const ONS_WRAP = 1048576;
+             TRI: 46, O2: 47, TEMP: 48, HYPOXIA: 49, NUTS: 50, SIS: 51, SALS: 52, MLD: 53, ENC: 54, GERM: 55, STRIDE: 56 };
 
 const notebook = {
   open: false, page: 0, span: PARAMS.notebook.startSpan, solo: -1, guide: 0, hits: [],
@@ -6323,9 +6320,6 @@ function notebookSample(w) {
   r[o + NB.MLD] = lay.stratified ? lay.mixed / LAYER_ROWS : 1;
   r[o + NB.ENC] = w.encysted;
   r[o + NB.GERM] = w.germinated;
-  r[o + NB.ROOT] = w.music.root;
-  r[o + NB.SCALE] = SCALE_NAMES.indexOf(w.music.scaleName);
-  r[o + NB.ONS] = w.music.onsets % ONS_WRAP;
   let z = 0;
   for (let i = 0; i < graz.length; i++) z += graz[i];
   r[o + NB.GRAZ] = z / graz.length;
@@ -6419,7 +6413,6 @@ function notebookColumns() {
     o2: A(), temp: A(), kw: A(),                // bottom-water oxygen; surface temperature; rows holding them (saved since v5)
     nutS: A(), siS: A(), salS: A(), mld: A(), kv: A(),   // the surface water and the mixed layer; rows holding them (v7)
     lys: A(), deaths: new Float32Array(CW * NC),         // cells burst per minute; deaths per minute by cause
-    root: A(), scale: A(), ons: A(), km: A(),            // the key at the column's last row; onsets/s; rows holding them (v9)
     n: new Float32Array(CW * F), depth: new Float32Array(CW * F), sd: new Float32Array(CW * F),
   };
   for (let i = cols.first; i < n; i++) {
@@ -6429,7 +6422,6 @@ function notebookColumns() {
     cols.light[c] += r[o + NB.LIGHT]; cols.nut[c] += r[o + NB.NUT]; cols.graz[c] += r[o + NB.GRAZ]; cols.pop[c] += r[o + NB.POP]; cols.si[c] += r[o + NB.SILICA];
     cols.cyano[c] += r[o + NB.SYN] + r[o + NB.PRO]; cols.tri[c] += r[o + NB.TRI];
     if (r[o + NB.TEMP] > 0) { cols.o2[c] += r[o + NB.O2]; cols.temp[c] += r[o + NB.TEMP]; cols.kw[c]++; }
-    if (r[o + NB.ROOT] >= 0) { cols.root[c] = r[o + NB.ROOT]; cols.scale[c] = r[o + NB.SCALE]; cols.km[c] = 1; }
     if (r[o + NB.MLD] >= 0) { cols.nutS[c] += r[o + NB.NUTS]; cols.siS[c] += r[o + NB.SIS]; cols.salS[c] += r[o + NB.SALS]; cols.mld[c] += r[o + NB.MLD]; cols.kv[c]++; }
     for (let f = 0; f < F; f++) {
       const m = r[o + NB.N + f], d = r[o + NB.DEPTH + f], sd = r[o + NB.SD + f];
@@ -6447,10 +6439,9 @@ function notebookColumns() {
     if (dt <= 0) continue;
     cols.lys[c] = Math.max(0, r[i * S + LY] - r[j * S + LY]) / dt * 60;
     for (let q = 0; q < NC; q++) cols.deaths[c * NC + q] = Math.max(0, r[i * S + causeCol(q)] - r[j * S + causeCol(q)]) / dt * 60;
-    if (r[j * S + NB.ONS] >= 0 && r[i * S + NB.ONS] >= 0) cols.ons[c] = (r[i * S + NB.ONS] - r[j * S + NB.ONS] + ONS_WRAP) % ONS_WRAP / dt;
   }
   const scalars = [cols.light, cols.nut, cols.graz, cols.pop, cols.si, cols.cyano, cols.tri], perForm = [cols.n, cols.depth, cols.sd];
-  const kept = [cols.o2, cols.temp, cols.kw, cols.nutS, cols.siS, cols.salS, cols.mld, cols.kv, cols.lys, cols.root, cols.scale, cols.ons, cols.km];
+  const kept = [cols.o2, cols.temp, cols.kw, cols.nutS, cols.siS, cols.salS, cols.mld, cols.kv, cols.lys];
   for (let c = 0; c < CW; c++) {
     const k = cols.k[c];
     if (cols.kw[c]) { cols.o2[c] /= cols.kw[c]; cols.temp[c] /= cols.kw[c]; }
@@ -6910,7 +6901,7 @@ function drawNotebook(w) {
   }
   if (notebook.page !== PAGES.indexOf('LEDGER') || !notebook.open) notebook.confirm = false;   // a question left unanswered is withdrawn
   [drawDayPage, drawCensusPage, drawSpeciesPage, drawWaterPage, drawColumnPage, drawMigrationPage, drawLedgerPage,
-   drawMusicPage, drawListeningPage, drawMusicHistoryPage][notebook.page](w, P.y + 19);
+   drawMusicPage, drawListeningPage][notebook.page](w, P.y + 19);
 }
 const PAGE_END = () => PARAMS.notebook.page.y + PARAMS.notebook.page.h - 17;   // the lowest row a page's content may use, above the page turner
 
@@ -7465,12 +7456,11 @@ function drawNewWater(y) {
 }
 
 // ---- The music chapter (author, 2026-10-22): what the water plays, tied to who plays it. Only what is heard (the
-// heard log, page side): with the music off the pages stay drawn, but empty. The history reads the record. ----
+// heard log, page side): with the music off the pages stay drawn, but empty. ----
 const INSTRUMENTS = [['piano', 'FELT PIANO'], ['pad', 'PAD'], ['wood', 'MARIMBA'], ['string', 'PLUCKED STRING'], ['glock', 'GLOCKENSPIEL'],
   ['vibe', 'VIBRAPHONE'], ['celesta', 'CELESTA'], ['kalimba', 'KALIMBA'], ['drone', 'DRONE (ELDERS)']];
 const VOICES_HEARD = [['sardines', 'SARDINES: CHORD'], ['salps', 'SALPS: LINE'], ['sunfish', 'SUNFISH: CALL'], ['jellies', 'MOON JELLY: HARP'],
   ['combs', 'COMB JELLY: HARP'], ['grain', 'CYANOBACTERIA'], ['triGrain', 'FILAMENTOUS']];
-const SCALE_RAMP = [GOLD, EMERALD, BLUE, ROSE];   // by SCALE_NAMES: major, dorian, minor, hirajoshi
 const MUSIC_FROM = 7;                             // the chapter's first page
 const musicHeard = () => audio.started && !audio.muted;
 // A dotted line between two page points
@@ -7565,21 +7555,23 @@ function drawMusicPage(w, y) {
   if (!musicHeard()) musicSilence(ccy - 2);
 }
 
-// IX. Listening: the water column as a staff (register = depth: high at the surface, low at the floor), the notes
-// of the last staff s as strokes at the depth they were sung, the newest on the right; and the music's spectrum now
+// IX. Listening: a staff of the last staff s, each note a stroke at the pitch it sounded (C6 to C1: the drones at the
+// foot), ringing out to the right, the newest on the right; register follows depth, so surface cells sing high and
+// the deep low. Below it, the music's spectrum now
 function drawListeningPage(w, y) {
   const N = PARAMS.notebook, M = N.music, P = N.page, x1 = P.x + P.w, CX = N.chart.x, CW = N.chart.w, now = performance.now();
-  inkCentre(y, 'HIGH AT THE SURFACE, LOW AT THE FLOOR', COL.SLATE);
+  inkCentre(y, 'SURFACE CELLS SING HIGH, DEEP ONES LOW', COL.SLATE);
   const sy0 = y + 10, sh = 150, span = M.staff * 1000, xAt = (t) => CX + CW - 1 - Math.round((now - t) / span * (CW - 1));
-  for (let k = 0; k <= 4; k++) {   // C6 at the surface to C2 at the floor
-    const yy = sy0 + Math.round(k / 4 * (sh - 1));
+  const yAt = (midi) => sy0 + Math.round(clamp((84 - midi) / 60, 0, 1) * (sh - 1));   // C6 (midi 84) at the top to C1 (24)
+  for (let k = 6; k >= 1; k--) {
+    const yy = yAt(12 * (k + 1));
     dotted(CX, CX + CW - 1, yy, COL.SLATE);
-    ink(P.x + 6, yy - 2, 'C' + (6 - k), COL.SHAFT);
+    ink(P.x + 6, yy - 2, 'C' + k, COL.SHAFT);
   }
   for (let yy = sy0; yy < sy0 + sh; yy++) put(CX - 1, yy, COL.SLATE);
   for (const n of heard.notes) {
     if (n.t > now || now - n.t > span) continue;
-    const yy = sy0 + Math.round(n.depth * (sh - 1)), xa = xAt(n.t), xb = xAt(Math.min(now, n.end)), rb = rampBase(n.ramp), on = now < n.end;
+    const yy = yAt(n.midi), xa = xAt(n.t), xb = xAt(Math.min(now, n.end)), rb = rampBase(n.ramp), on = now < n.end;
     const vis = 1 - (now - n.t) / span;
     for (let x = xa + 1; x <= xb; x++) if (bayer(x, yy) < (on ? 1 : vis)) put(x, yy, rb + (n.inst === 'drone' ? SHADOW : BASE));   // how long it rings
     if (bayer(xa, yy) < Math.max(vis, 0.3)) { fillRect(xa, yy - 1, 2, 2, rb + (on ? BRIGHT : HIGHLIGHT)); }   // the strike
@@ -7612,69 +7604,6 @@ function drawListeningPage(w, y) {
     ink(lx - (textWidth(label) >> 1), base + 3, label, COL.SLATE);
   }
   if (!musicHeard()) musicSilence(g0 + (gh >> 1) - 2);
-}
-
-// X. The music over time, from the record: the key (its root's pitch class, coloured by its scale), the onsets the
-// voice budget let through per s, with near-silence marked, and the latest key changes
-function drawMusicHistoryPage(w, y) {
-  const N = PARAMS.notebook, M = N.music, P = N.page, x1 = P.x + P.w, CX = N.chart.x, CW = N.chart.w;
-  drawSpanRow(y);
-  const cols = notebookColumns(), lastC = (() => { for (let c = CW - 1; c >= 0; c--) if (cols.has[c] && cols.km[c]) return c; return -1; })();
-  let py = y + 11;
-  ink(P.x + 6, py, 'KEY', COL.SHAFT);
-  inkRight(x1 - 7, py, lastC >= 0 ? NOTE_NAMES[cols.root[lastC]] + ' ' + SCALE_NAMES[cols.scale[lastC]].toUpperCase() : 'NOT RECORDED', COL.SLATE);
-  const ky = py + 7, kh = 48;
-  chartBackground(cols, ky, kh);
-  for (const [pc, name] of [[0, 'C'], [6, 'F#'], [11, 'B']]) ink(P.x + 6, ky + kh - 4 - pc * 4 - 1, name, COL.SLATE);
-  for (let c = 0; c < CW; c++) {
-    if (!cols.has[c] || !cols.km[c]) continue;
-    const yy = ky + kh - 4 - cols.root[c] * 4, rb = rampBase(SCALE_RAMP[cols.scale[c]] ?? GOLD);
-    put(CX + c, yy, rb + BRIGHT); put(CX + c, yy + 1, rb + HIGHLIGHT); put(CX + c, yy + 2, rb + BASE);
-    if (c && cols.km[c - 1] && cols.root[c - 1] !== cols.root[c]) {   // a modulation: the old key to the new
-      const ya = ky + kh - 3 - cols.root[c - 1] * 4, yb = yy + 1;
-      for (let q = Math.min(ya, yb); q <= Math.max(ya, yb); q += 2) put(CX + c, q, COL.FOAM);
-    }
-  }
-  py = ky + kh + 3;
-  let lx = P.x + 6;
-  SCALE_NAMES.forEach((s, i) => { ink(lx, py, s.toUpperCase(), rampBase(SCALE_RAMP[i]) + HIGHLIGHT); lx += textWidth(s) + 8; });
-
-  // Onsets per s, the voice budget's rate at the top; near-silent stretches marked under the line
-  py += 11;
-  let quiet = 0, seen = 0;
-  for (let c = 0; c < CW; c++) if (cols.has[c] && cols.km[c]) { seen++; if (cols.ons[c] < M.quiet) quiet++; }
-  ink(P.x + 6, py, 'ONSETS /S', COL.SHAFT);
-  inkRight(x1 - 7, py, lastC >= 0 ? cols.ons[lastC].toFixed(1) + ' NOW' : 'NOT RECORDED', COL.SLATE);
-  const oy = py + 7, oh = 44, hi = PARAMS.voices.rate;
-  chartBackground(cols, oy, oh);
-  dotted(CX, CX + CW - 1, oy, rampBase(GOLD) + BASE);
-  chartLine(oy, (c) => (cols.has[c] && cols.km[c] ? oh - 1 - Math.round(clamp(cols.ons[c] / hi, 0, 1) * (oh - 1)) : -1), rampBase(LIGHTBLUE) + BRIGHT);
-  for (let c = 0; c < CW; c++) if (cols.has[c] && cols.km[c] && cols.ons[c] < M.quiet) put(CX + c, oy + oh + 1, rampBase(OLIVE) + HIGHLIGHT);
-  py = oy + oh + 4;
-  drawTimeAxis(cols, py);
-  py += 9;
-  ink(P.x + 6, py, 'NEAR-SILENCE', rampBase(OLIVE) + HIGHLIGHT);
-  inkRight(x1 - 7, py, seen ? Math.round(quiet / seen * 100) + '% OF THE WINDOW' : '-', COL.FOAM);
-
-  // The latest key changes in the window, newest first
-  py += 10;
-  dotted(P.x + 6, x1 - 7, py, COL.SLATE);
-  py += 5;
-  ink(P.x + 6, py, 'KEY CHANGES', COL.SHAFT);
-  py += 9;
-  const r = notebook.rows, S = NB.STRIDE, changes = [];
-  for (let i = Math.max(1, rowAt(cols.t0)); i < notebook.count; i++) {
-    const a = r[(i - 1) * S + NB.ROOT], b = r[i * S + NB.ROOT];
-    if (a >= 0 && b >= 0 && (a !== b || r[(i - 1) * S + NB.SCALE] !== r[i * S + NB.SCALE])) changes.push(i);
-  }
-  if (!changes.length) ink(P.x + 6, py, 'NONE IN THIS WINDOW', COL.SLATE);
-  for (const i of changes.slice(-Math.max(1, Math.floor((PAGE_END() - py) / 7))).reverse()) {
-    const o = i * S, ago = (cols.t1 - rowTick(r, i)) * TICK_DT;
-    ink(P.x + 6, py, '-' + clock(ago), COL.SLATE);
-    ink(P.x + 50, py, NOTE_NAMES[r[(i - 1) * S + NB.ROOT]] + ' TO ' + NOTE_NAMES[r[o + NB.ROOT]] + ' ' + SCALE_NAMES[r[o + NB.SCALE]].toUpperCase(),
-        rampBase(SCALE_RAMP[r[o + NB.SCALE]]) + HIGHLIGHT);
-    py += 7;
-  }
 }
 
 // ===== Input =====
@@ -8062,11 +7991,10 @@ async function loadWorld(db) {
 
 // The notebook's row layouts over the versions, by row width: v2 (35) and v3 (38) had seven forms; v4 (46) added the
 // cyanobacteria; v5/v6 (50) Trichodesmium, oxygen, temperature and hypoxia; v7 (56) the surface water, the mixed
-// layer and cysts; v9 (59) the key and the onsets. Older rows are widened into today's, what they never held left
-// empty (or -1 where 0 is a value).
+// layer and cysts. Older rows are widened into today's, what they never held left empty (or -1 where 0 is a value).
 const NOTEBOOK_LAYOUTS = {
   35: { DEPTH: 16, SD: 23, DEATHS: 30, deaths: 5, SILICA: -1 }, 38: { DEPTH: 16, SD: 23, DEATHS: 30, deaths: 7, SILICA: 37 },
-  46: { keep: 46 }, 50: { keep: 50 }, 56: { keep: 56 },
+  46: { keep: 46 }, 50: { keep: 50 },
 };
 function widenRows(old, stride) {
   const L = NOTEBOOK_LAYOUTS[stride], n = old.length / stride, S = NB.STRIDE, wide = new Float32Array(n * S);

@@ -115,7 +115,6 @@ newcomers, nitrogen fixation, stratification and tidal mixing, and hypoxia.
     chords) appear as shapes, and which species are playing which instrument.
   - **Listening:** the water column as a staff, high notes at the surface and low ones at the floor, with every note
     drawn where it was sung, and a live spectrum.
-  - **Music history:** the key changes and how busy or quiet the water has been over time.
 
   The **note** beside the book turns the music off and on.
 - Now and then a small **i in an air bubble** rises in a corner. Tap it for a curiosity about what you are looking at:

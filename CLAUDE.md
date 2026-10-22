@@ -204,7 +204,7 @@ References: the "bit_wonder" style on Instagram — dark backgrounds, chunky clu
 ---
 
 ## Curiosities (author, 2026-10-22)
-Now and then (first after 40 s, then every 90–180 real s; never with the notebook open or while catching up) a small **"i" in an air bubble** rises and sways in a corner. Ignored, it fades after 25 s. Tapped, it pops with a bubble chirp and opens a card in day colours: the topic, with the form's icon for a species, the fact, and its source. Any tap closes the card. Render and input only: it never touches the world.
+Now and then (first after 40 s, then every 90–180 real s; zooming in to 3× or more brings one about the cells in frame after 10 s, once until the camera zooms out (author, 2026-10-22: it had seemed never to appear when zoomed in); never with the notebook open or while catching up) a small **"i" in an air bubble** rises and sways in a corner. Ignored, it fades after 25 s. Tapped, it pops with a bubble chirp and opens a card in day colours: the topic, with the form's icon for a species, the fact, and its source. Any tap closes the card. Render and input only: it never touches the world.
 - **The fact follows what is in view:**
   - zoomed in (3× or more): the forms in frame, weighted by their numbers (a lone cell counts less);
   - the cyanobacteria or filamentous colonies on screen;

@@ -674,7 +674,9 @@ const PARAMS = {
   // everyMin..everyMax real s, never with the notebook open or while catching up); tapped, it opens a card with a fact
   // picked by what is in view (see curioTopic); ignored, it fades after life s. r: the bubble's radius in px; rise:
   // px/s. The facts live in facts.json (sourced; updated by reviewed pushes) and are cached offline.
-  curio: { first: 40, everyMin: 90, everyMax: 180, life: 25, r: 5, rise: 1.2, sway: 2.5,
+  // Zooming in to zoomFrom x or more on cells brings one bubble about the cells in frame after zoomDelay s (author),
+  // once until the camera zooms out again.
+  curio: { first: 40, everyMin: 90, everyMax: 180, life: 25, r: 5, rise: 1.2, sway: 2.5, zoomFrom: 3, zoomDelay: 10,
            corners: [[16, 120], [164, 120], [16, 250], [164, 230]] },
   persist: { db: 'monad', every: 30, chunkRows: 1024, version: 8,
     // Catching up: the time away is lived again, exactly, up to maxAway (s); beyond it the water rests. A worker runs
@@ -6710,8 +6712,9 @@ function tipTags(w) {
 }
 
 // The topic for what is in view: weights from the cells in frame (when zoomed in), the cyanobacteria and visitors on
-// screen, the depth the camera looks at, the zoom, and the water's state; drawn by weight among topics with facts
-function curioTopic(w) {
+// screen, the depth the camera looks at, the zoom, and the water's state; drawn by weight among topics with facts.
+// cellsOnly: only the cells in frame (the bubble a zoom-in brings)
+function curioTopic(w, cellsOnly) {
   const wt = new Map(), add = (t, v) => wt.set(t, (wt.get(t) || 0) + v), z = cam.zoom;
   const x0 = cam.x, y0 = cam.y, x1 = x0 + W / z, y1 = y0 + H / z, column = H - PARAMS.world.floor, mid = clamp((y0 + y1) / 2 / column, 0, 1);
   if (z >= 3) {   // close up: the forms in frame
@@ -6722,18 +6725,20 @@ function curioTopic(w) {
     if (counts[5] + counts[6]) add('diatoms', 1);
     if (counts[1] + counts[2] + counts[3] + counts[4]) add('dinos', 1);
   }
-  if (cyanoSeen > 30) add('cyano', z >= 2 ? 2 : 0.8);
-  if (triSeen > 10) add('tricho', z >= 2 ? 2.5 : 1);
-  for (const v of w.visitors) if (v.x > x0 - 20 && v.x < x1 + 20 && v.y > y0 - 20 && v.y < y1 + 20) add(v.kind, 4);
-  if (krillSeen.n > 0) add('grazers', 1.5);
-  if (mid > 0.75 || y1 > column - 10 && z >= 2) add('floor', 5);
-  if (mid < 0.2 && z >= 2) add('surface', 2.5);
-  if (z <= 1) { add('ocean', 2.5); add('column', 2.5); add('nutrients', 1); } else add('column', 0.6);
-  const tags = tipTags(w), T = (tag, topic, v) => { if (tags.has(tag)) add(topic, v); };
-  T('milky', 'cocco', 1.5); T('scum', 'tricho', 2); T('night', 'night', 1.5); T('glow', 'dinos', 1); T('storm', 'column', 1);
-  T('tide', 'tides', 1.5); T('upwelling', 'nutrients', 1.5); T('runoff', 'surface', 1.5); T('hypoxia', 'deadzone', mid > 0.6 ? 4 : 1.5);
-  T('bloom', 'ocean', 1); T('bloom', 'grazers', 0.5); T('crash', 'viruses', 1); T('cysts', 'floor', 0.5);
-  add('ocean', 0.4); add('viruses', 0.2); add('tides', 0.2);
+  if (!cellsOnly) {
+    if (cyanoSeen > 30) add('cyano', z >= 2 ? 2 : 0.8);
+    if (triSeen > 10) add('tricho', z >= 2 ? 2.5 : 1);
+    for (const v of w.visitors) if (v.x > x0 - 20 && v.x < x1 + 20 && v.y > y0 - 20 && v.y < y1 + 20) add(v.kind, 4);
+    if (krillSeen.n > 0) add('grazers', 1.5);
+    if (mid > 0.75 || y1 > column - 10 && z >= 2) add('floor', 5);
+    if (mid < 0.2 && z >= 2) add('surface', 2.5);
+    if (z <= 1) { add('ocean', 2.5); add('column', 2.5); add('nutrients', 1); } else add('column', 0.6);
+    const tags = tipTags(w), T = (tag, topic, v) => { if (tags.has(tag)) add(topic, v); };
+    T('milky', 'cocco', 1.5); T('scum', 'tricho', 2); T('night', 'night', 1.5); T('glow', 'dinos', 1); T('storm', 'column', 1);
+    T('tide', 'tides', 1.5); T('upwelling', 'nutrients', 1.5); T('runoff', 'surface', 1.5); T('hypoxia', 'deadzone', mid > 0.6 ? 4 : 1.5);
+    T('bloom', 'ocean', 1); T('bloom', 'grazers', 0.5); T('crash', 'viruses', 1); T('cysts', 'floor', 0.5);
+    add('ocean', 0.4); add('viruses', 0.2); add('tides', 0.2);
+  }
   const have = new Set(curio.facts.map((f) => f.topic)), pool = [...wt].filter(([t]) => have.has(t));
   let total = 0;
   for (const [, v] of pool) total += v;
@@ -6751,15 +6756,21 @@ function curioFact(topic) {
   return pool.length ? pool[Math.floor(hash01(curio.count * 104729 + 7) * pool.length)] : null;
 }
 
-// Now and then a bubble rises in a corner; ignored, it fades away
+// Now and then a bubble rises in a corner; ignored, it fades away. Zooming in on cells brings one about them soon.
 function updateCurio(w, now) {
   const C = PARAMS.curio;
   if (!curio.facts.length || notebook.open || catchup.phase) return;
   if (!curio.next) curio.next = now + C.first * 1000;
+  if (cam.zoom < C.zoomFrom) { curio.zoomed = false; curio.zoomAt = 0; }
+  else if (!curio.zoomed) { curio.zoomed = true; curio.zoomAt = now + C.zoomDelay * 1000; }
   const b = curio.bubble;
   if (b && !curio.card && now - b.born > C.life * 1000) curio.bubble = null;
-  if (curio.bubble || curio.card || now < curio.next) return;
-  const topic = curioTopic(w), fact = topic && curioFact(topic);
+  const zoomIn = curio.zoomAt && now >= curio.zoomAt;
+  if (curio.bubble || curio.card || (now < curio.next && !zoomIn)) return;
+  let topic = zoomIn ? curioTopic(w, true) : null;
+  curio.zoomAt = 0;
+  if (!topic) topic = curioTopic(w);
+  const fact = topic && curioFact(topic);
   curio.count++;
   curio.next = now + (C.everyMin + (C.everyMax - C.everyMin) * hash01(curio.count * 31 + 5)) * 1000;
   if (!fact) return;

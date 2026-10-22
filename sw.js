@@ -1,6 +1,6 @@
 // MONAD offline: the page, its manifest, icons and curiosity facts are kept. The network is asked first, so an update
 // arrives on the next opening; if it does not answer within a few seconds (or there is none), the kept copy opens instead.
-const CACHE = 'monad-4';
+const CACHE = 'monad-5';
 const FILES = ['./', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './facts.json'];
 const WAIT_MS = 3000;
 

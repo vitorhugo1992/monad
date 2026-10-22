@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/logo.png" width="128" alt="The MONAD logo: a coccolith seen from above, its spokes shimmering in rainbow colours"></p>
+
 # MONAD
 
 **A water column of living phytoplankton that plays its own ambient music. Nobody composes it.**

@@ -460,8 +460,8 @@ const PARAMS = {
     reverbSeconds: 4.5, reverbSend: 0.3, reverbDark: 0.6,
     delayTime: 0.43, delayFeedback: 0.3, delaySend: 0.1, delayCutoff: 1400,
     pan: 0.7, lookahead: 0.03, maxNodes: 20, muteRamp: 0.4,
-    comp: { threshold: -24, knee: 18, ratio: 3.5, attack: 0.05, release: 0.4 },
-    out: 1.4,                                                              // after the compressor: louder on phone speakers
+    comp: { threshold: -22, knee: 18, ratio: 3, attack: 0.05, release: 0.5 },   // gentle (author: it needs dynamics to breathe)
+    out: 1.65,                                                             // after the compressor: louder on phone speakers (raised a tad, author 2026-10-22)
     limit: { threshold: -3, knee: 4, ratio: 20, attack: 0.005, release: 0.25 },   // and a limiter so the peaks never clip (a soft knee and a 5 ms attack: a hard one crackled on the drones)
     air: { freq: 4500, gain: -6 },   // a gentle high shelf on the whole mix: the uppermost frequencies of shimmers and high notes were harsh (author)
   },
@@ -591,6 +591,7 @@ const PARAMS = {
   // Palette keyframes over the diel phase (0 = sunrise), crossfaded by dithering
   timeOfDay: {
     keys: [[0, 'dawn'], [0.1, 'day'], [0.5, 'day'], [0.6, 'evening'], [0.69, 'night'], [0.93, 'night'], [1, 'dawn']],
+    seasonBlend: 0.15,                  // the share of each step between seasonal colours that dithers into the next
     keysDay: 0.65,                      // the keys are placed for a sun up 0.65 of the cycle; other days stretch them
     moonLight: 0.3,                     // rays and caustics at night, as a fraction of noon
   },
@@ -670,8 +671,9 @@ const PARAMS = {
     seaStates: [0.15, 0.35, 0.6], noonHour: 12, dialR: 32,
     // The music chapter (author, 2026-10-22; observation only, of what is heard: nothing when the music is off).
     // keep: notes remembered (the last minute or so); share: s the instruments' shares count over; circleR: the pitch
-    // circle's radius (px); scope: the spectrum's band (Hz) and bars.
-    music: { keep: 480, share: 60, circleR: 30, scope: { lo: 60, hi: 12000, bars: 39, fft: 1024, smooth: 0.7 } },
+    // circle's radius (px); scope: the spectrum's band (Hz), bars, FFT size (fine enough for the low notes: 5.9 Hz per bin at
+    // 48 kHz) and the loudness it spans (dB).
+    music: { keep: 480, share: 60, circleR: 30, scope: { lo: 60, hi: 12000, bars: 39, fft: 8192, smooth: 0.6, minDb: -95, maxDb: -25 } },
     surfaceRows: 4,   // the surface water the recorder and the day page read: the top grid rows (about a tenth of the column)
     // Real units (sources in the Notebook section). depthM: the column in metres (light falls to e^-atten at the
     // floor: Kd 0.067 per m for a clear stratified shelf); o2mL: oxygen saturation at 15 C and 35 psu in mL/L, the
@@ -864,8 +866,29 @@ const TIME_PALETTES = {
     tones: [0, 0, 1, 2, 3],
   },
 };
-// Built after the ramp tables below
-const TIME_PAL32 = {};
+// Winter (author, 2026-10-22: seasonal colours): the same hours in a colder light, steel-blue water, paler rays and
+// greyer bloom water. The palettes above are summer's; spring and autumn lie between, in fixed steps (see SEASON_STEPS).
+const WINTER_ENV = {
+  day: ['#070a16', '#0b1426', '#101e34', '#142a42', '#19374f', '#1f465c', '#285768', '#346a76',
+        '#4e8494', '#b4d6dc', '#f2f4f0', '#34465a',
+        '#121f26', '#17292f', '#1e3638', '#284541', '#34544a', '#436452',
+        '#203e52', '#2a5062', '#386470', '#4c7a80'],
+  dawn: ['#070a18', '#0c1328', '#121c38', '#1a2647', '#243256', '#323e62', '#45506e', '#5d6680',
+         '#8e94a8', '#dcd6e2', '#f6f4f6', '#3a4460',
+         '#121e26', '#18282f', '#213338', '#2b3e40', '#384a48', '#465650',
+         '#2a3a5a', '#3a4868', '#4e5a74', '#666e82'],
+  evening: ['#080a14', '#0e1224', '#151a33', '#1d2340', '#282c4c', '#363756', '#4a4460', '#62546a',
+            '#9a7c74', '#e8cfa6', '#fbf3dc', '#383a54',
+            '#141a20', '#1b2328', '#242d2f', '#2f3836', '#3c443c', '#4b5042',
+            '#30385a', '#40445e', '#545468', '#6c6470'],
+  night: ['#04060e', '#060a17', '#080f20', '#0b1429', '#0e1a33', '#12223e', '#18294a', '#1e3356',
+          '#30486e', '#98aed0', '#c8f2ff', '#1e2a40',
+          '#0a1316', '#0d191d', '#102024', '#14282b', '#183032', '#1d393a',
+          '#10223a', '#152a44', '#1c344e', '#253f5a'],
+};
+const SEASON_STEPS = 4;   // winter, two steps between, summer: each a fixed set of colours
+// Built after the ramp tables below: TIME_PAL32 is summer's; SEASON_PAL32[step][name] from winter (0) to summer
+const TIME_PAL32 = {}, SEASON_PAL32 = [];
 
 // Each colour's next brighter step: light falling on anything is one lookup.
 const LIGHT_UP = new Uint8Array(PALETTE_HEX.length);
@@ -880,14 +903,20 @@ for (let r = 0; r < COL.RAMPS; r++) {
 for (let i = 0; i <= COL.BLOOM_TO - COL.BLOOM_FROM; i++) LIGHT_UP[COL.BLOOM + i] = i < COL.BLOOM_TO - COL.BLOOM_FROM ? COL.BLOOM + i + 1 : COL.SHAFT;
 for (let i = 0; i <= COL.MILKY_TO - COL.MILKY_FROM; i++) LIGHT_UP[COL.MILKY + i] = i < COL.MILKY_TO - COL.MILKY_FROM ? COL.MILKY + i + 1 : COL.FOAM;
 
-for (const name of Object.keys(TIME_PALETTES)) {
-  const P = TIME_PALETTES[name], pal = new Uint32Array(PAL32);
-  ENV_SLOTS.forEach((slot, k) => { pal[slot] = toPal32(P.env[k]); });
-  for (let r = 0; r < COL.RAMPS; r++) {
-    for (let t = 0; t < COL.TONES; t++) pal[rampBase(r) + t] = PAL32[rampBase(r) + P.tones[t]];
+const mixHex = (a, b, t) => '#' + [1, 3, 5].map((i) => Math.round(parseInt(a.slice(i, i + 2), 16) * (1 - t) + parseInt(b.slice(i, i + 2), 16) * t).toString(16).padStart(2, '0')).join('');
+for (let step = 0; step < SEASON_STEPS; step++) {
+  const t = step / (SEASON_STEPS - 1), set = {};
+  for (const name of Object.keys(TIME_PALETTES)) {
+    const P = TIME_PALETTES[name], pal = new Uint32Array(PAL32);
+    ENV_SLOTS.forEach((slot, k) => { pal[slot] = toPal32(mixHex(WINTER_ENV[name][k], P.env[k], t)); });
+    for (let r = 0; r < COL.RAMPS; r++) {
+      for (let q = 0; q < COL.TONES; q++) pal[rampBase(r) + q] = PAL32[rampBase(r) + P.tones[q]];
+    }
+    set[name] = pal;
   }
-  TIME_PAL32[name] = pal;
+  SEASON_PAL32.push(set);
 }
+Object.assign(TIME_PAL32, SEASON_PAL32[SEASON_STEPS - 1]);
 
 // ===== Fields =====
 const KINDS = 9;   // green algae, the four dinoflagellate forms, centric and pennate diatoms, coccolithophores, cryptophytes
@@ -3317,7 +3346,7 @@ function startAudio() {
   lp.type = 'lowpass'; lp.frequency.value = A.busCutoff; lp.Q.value = 0.5;
   bus.connect(lp); lp.connect(master); lp.connect(verbIn); lp.connect(delayIn);
   const Sc = PARAMS.notebook.music.scope, scope = ctx.createAnalyser();   // the music page's spectrum: the music only, after its switch
-  scope.fftSize = Sc.fft; scope.smoothingTimeConstant = Sc.smooth;
+  scope.fftSize = Sc.fft; scope.smoothingTimeConstant = Sc.smooth; scope.minDecibels = Sc.minDb; scope.maxDecibels = Sc.maxDb;
   lp.connect(scope);
   const wet = gain(audio.muted ? 0.0001 : 1);
   wet.connect(verb);
@@ -4497,21 +4526,25 @@ function drawRain(ta) {
   }
 }
 
-// Palette for this moment of the day: two keyframes and a world-anchored dither between them
+// Palette for this moment of the day and of the year: two keyframes and a world-anchored dither between them, in the
+// season's step of colours (winter to summer, following the air's warmth); from one step to the next the colours
+// dither over the last seasonBlend of the way, so most of the year is flat colour
 function blitTimeOfDay(w) {
-  const keys = PARAMS.timeOfDay.keys, K = PARAMS.timeOfDay.keysDay, p = dayPhase(w), f = w.dayFrac;
+  const T = PARAMS.timeOfDay, keys = T.keys, K = T.keysDay, p = dayPhase(w), f = w.dayFrac;
   const ph = p < f ? p / f * K : K + (p - f) / (1 - f) * (1 - K);   // the day stretched to the keys' day
   let k = 0;
   while (k < keys.length - 2 && ph >= keys[k + 1][0]) k++;
-  const a = TIME_PAL32[keys[k][1]], b = TIME_PAL32[keys[k + 1][1]];
-  const mix = a === b ? 0 : (ph - keys[k][0]) / (keys[k + 1][0] - keys[k][0]);
+  const sx = seasonWarmth(yearDay(w)) * (SEASON_STEPS - 1), si = Math.min(SEASON_STEPS - 2, Math.floor(sx));
+  const smix = smoothstep(1 - T.seasonBlend, 1, sx - si), S0 = SEASON_PAL32[si], S1 = SEASON_PAL32[si + 1];
+  const a = S0[keys[k][1]], b = S0[keys[k + 1][1]], a1 = S1[keys[k][1]], b1 = S1[keys[k + 1][1]];
+  const mix = keys[k][1] === keys[k + 1][1] ? 0 : (ph - keys[k][0]) / (keys[k + 1][0] - keys[k][0]);
   const ib = view.ibuf, buf = view.buf, bx0 = view.bx0, by0 = view.by0;
-  if (mix <= 0) { for (let i = 0; i < ib.length; i++) buf[i] = a[ib[i]]; return; }
+  if (mix <= 0 && smix <= 0) { for (let i = 0; i < ib.length; i++) buf[i] = a[ib[i]]; return; }
   for (let py = 0; py < H; py++) {
-    const row = py * W, brow = ((by0 + py) & 3) << 2;
+    const row = py * W, by = (by0 + py) & 3;
     for (let px = 0; px < W; px++) {
-      const i = row + px;
-      buf[i] = BAYER[brow | ((bx0 + px) & 3)] < mix ? b[ib[i]] : a[ib[i]];
+      const i = row + px, bx = (bx0 + px) & 3, later = BAYER[(bx << 2) | by] < smix;   // the season's dither runs across the day's
+      buf[i] = BAYER[(by << 2) | bx] < mix ? (later ? b1 : b)[ib[i]] : (later ? a1 : a)[ib[i]];
     }
   }
 }

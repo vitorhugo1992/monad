@@ -93,7 +93,12 @@ const PARAMS = {
   // (0.004) had eaten all their growth and they sat on the trace all year; grazers take them less readily than cells.
   cyano: {
     growth: 0.025, half: 0.04, max: 1.5, respire: 0.0025, grazed: 0.7, q: 0.65, phage: 0.04, phageHalf: 0.8, floor: 0.002, diffusion: 0.15,
-    syn: { dim: 0 }, pro: { dim: 1.5 },
+    // The two trade off (approved local rule, author, 2026-10-23: Prochlorococcus had been strictly better, so Synechococcus
+    // never bloomed): Prochlorococcus is the warm, poor-water specialist (Johnson et al. 2006: rare below ~15 C), growing
+    // only from warmFrom (fully at warmFull), with half x the half-saturation (it takes up nutrients better) and its
+    // dim-light edge; Synechococcus grows growth x faster and tolerates cold, the shelf's commoner one. Swept (4 seeds x
+    // 3 game-hours from spring and summer): it blooms in spring alone, and the two share warm summer water.
+    syn: { dim: 0, growth: 1.25, half: 1, warmFrom: -99, warmFull: -98 }, pro: { dim: 1.5, growth: 1, half: 0.5, warmFrom: 15, warmFull: 19 },
     speed: 1.2, windSpeed: 2.5, wave: 70, turn: 0.004, advectEvery: 15,
     grazedRecycled: 0.7, lysedRecycled: 0.9,
   },
@@ -1949,12 +1954,12 @@ function graze(w, dt, slowDt) {
 function cyanobacteria(w, dt) {
   const Cy = PARAMS.cyano, G = PARAMS.grazing, f = w.fields, K = G.halfB, h2 = Cy.phageHalf * Cy.phageHalf;
   for (const type of ['syn', 'pro']) {
-    const C = f[type], dim = Cy[type].dim;
+    const T = Cy[type], C = f[type], dim = T.dim, half = Cy.half * T.half;
     for (let k = 0; k < C.length; k++) {
       let c = C[k];
       if (c < Cy.floor) { w.imported += (Cy.floor - c) * Cy.q; c = Cy.floor; }   // a trace drifts in from the open ocean
       const L0 = f.light[k], L = dim ? L0 * (1 + dim) / (L0 + dim) : L0, N = f.nut[k];
-      const want = Cy.growth * L * N / (N + Cy.half) * f.warmCy[k] * c * (1 - c / Cy.max) * dt;
+      const want = Cy.growth * T.growth * L * N / (N + half) * f.warmCy[k] * smoothstep(T.warmFrom, T.warmFull, f.temp[k]) * c * (1 - c / Cy.max) * dt;
       const grow = want > 0 ? takeNode(f.nut, k, want * Cy.q) / Cy.q : 0;
       const B = f.bio[k], Z = f.graz[k];
       const resp = Cy.respire * c * dt;
@@ -7177,7 +7182,9 @@ function drawDayPage(w, y) {
   row('SEA ' + SEA_STATES[sea], (x, yy) => bar(x, yy + 1, N.bar.w, w.wind, EMERALD));
   row(w.spring > 1 + Td.range / 2 ? 'SPRING TIDE' : w.spring < 1 - Td.range / 2 ? 'NEAP TIDE' : 'TIDE', (x, yy) => bar(x, yy + 1, N.bar.w, Math.abs(w.tideU) / (1 + Td.range), BLUE));
   const toSprings = mod(-moon, 0.5) * PARAMS.tide.month;   // days to the next new or full moon
-  row('MOON', value(moonName(moon) + (toSprings > 1.5 && toSprings < 13.5 ? '  SPRINGS IN ' + Math.round(toSprings) + 'D' : '')));
+  const lit = moonLit(moon);   // in words (author: the short form was cryptic)
+  row('MOON', value(lit > 0.95 ? 'FULL' : lit < 0.05 ? 'NEW' : Math.round(lit * 100) + '% LIT, ' + (moon < 0.5 ? 'GROWING' : 'SHRINKING')));
+  if (toSprings > 1.5 && toSprings < 13.5) row('', value('STRONGEST TIDES IN ' + Math.round(toSprings) + ' DAYS', COL.SHAFT));
   row('UPWELLING', value(w.pulses.length ? 'A PLUME RISES' : 'NONE', w.pulses.length ? rampBase(GREEN) + HIGHLIGHT : COL.SLATE));
   row('RUNOFF', value(w.runoffs.length ? 'RAIN, MUD WASHES IN' : 'NONE', w.runoffs.length ? rampBase(AMBER) + HIGHLIGHT : COL.SLATE));
   divide();

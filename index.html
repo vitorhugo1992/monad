@@ -375,6 +375,12 @@ const PARAMS = {
     // Grazers muffle: where the grazer field is dense, notes are duller and shorter, so heavy grazing sounds
     // smothered before the die-off (field from..full; at full the cutoff and release shrink by these shares).
     muffle: { from: 0.3, full: 1.5, cutoff: 0.6, release: 0.5 },
+    // Mood (author, 2026-10-23: let the envelope follow the cell, experimental is welcome): how groggy a cell is, 0..1,
+    // from what it already has: growing poorly (its vigor), night (not for dinoflagellates, the night swimmers), cold
+    // water and low energy. A groggy note swells in (attack + swell x g^1.5 s, every instrument, the marimba too), rings
+    // longer and is darker; a thriving cell at noon strikes crisper and shorter (release x 1 - crisp .. 1 + longer;
+    // cutoff x 1 - dark x g). night/cold/weak: how much each adds; cold counts from warmth factor coldFrom down by coldSpan.
+    mood: { swell: 0.45, crisp: 0.15, longer: 0.8, dark: 0.45, night: 0.7, cold: 0.5, coldFrom: 1, coldSpan: 0.4, weak: 0.5 },
     // Drones of shade-acclimated cells: long low notes (MIDI low..high, C1..B1) when they flash, at most max at once; a
     // cell drones again once `again` of its last drone's release has passed. Soft cells singing within steady units
     // of a droning cell hold their notes longer (the pads), as if the deep layer steadies them.
@@ -518,6 +524,8 @@ const PARAMS = {
     chainForms: ['alexandrium', 'tripos'],
     stringForms: ['dinophysis', 'tripos'],   // these sound as plucked strings; Alexandrium and Prorocentrum as wood   // these build short chains; Dinophysis and Prorocentrum live single
     scale: 1.6,                         // drawn this much larger than the size gene's radius (dinoflagellates are big cells)
+    swim: 1.5,                          // and swim this much harder up to the light and down at night (author, 2026-10-23: they
+                                        // are the champion vertical migrators, 10-20 m a day), by how much of a dinoflagellate
     slow: 0.75,                         // they grow this much as fast as other cells (author, 2026-10-23: real dinoflagellates grow
                                         // 2-3x slower than diatoms their size, Tang 1995), by how much of a dinoflagellate the cell is
     detailR: 3, groove: 0.09, grooveMin: 0.5, spiral: 0.18, sulcus: 0.55,
@@ -1725,13 +1733,14 @@ function steer(w, c, dt) {
   // Brighter than preferred -> swim down (+y); dimmer -> swim up. Bounded ratio, no log.
   // Night descent is swimming: diatoms (glass) don't swim, they only regulate their buoyancy, so they hold their depth
   const night = (1 - smoothstep(D.darkLo, D.darkHi, w.surfaceLight)) * (1 - c.glassW) * (c.kind === 7 ? 0 : 1);   // diatoms and coccolithophores (the plated cells don't swim: Frada et al. 2008) hold their depth
+  const swim = 1 + (PARAMS.dino.swim - 1) * c.dinoW;   // dinoflagellates swim harder
   if (night < 1) {
     const L = sampleField(w.fields.light, c.x, c.y), T = c.targetLight * w.surfaceLight;
-    c.vy += (1 - night) * D.phototaxis * (L - T) / (L + T + 1e-9) * dt;
+    c.vy += (1 - night) * D.phototaxis * swim * (L - T) / (L + T + 1e-9) * dt;
   }
   if (night > 0) {
     const nd = sampleField(w.fields.nut, c.x, c.y + GRID_H), nu = sampleField(w.fields.nut, c.x, c.y - GRID_H);
-    c.vy += night * D.nutritaxis * clamp(D.gradientGain * (nd - nu) / (nd + nu + 1e-6), -1, 1) * dt;
+    c.vy += night * D.nutritaxis * swim * clamp(D.gradientGain * (nd - nu) / (nd + nu + 1e-6), -1, 1) * dt;
   }
 
   const ci = clamp(Math.floor(c.x / hs.s), 0, hs.cols - 1), cj = clamp(Math.floor(c.y / hs.s), 0, hs.rows - 1);
@@ -3091,6 +3100,21 @@ function bendStep(m, c, step) {
   return up < base ? step + 1 : step;
 }
 
+// How groggy a cell is (0 thriving at noon .. 1 drowsy): see voices.mood
+function moodOf(w, c) {
+  const Md = PARAMS.voices.mood, V = PARAMS.voices, Dr = PARAMS.drift;
+  const thrive = smoothstep(0, V.thriveFull, c.vigor), night = (1 - smoothstep(Dr.darkLo, Dr.darkHi, w.surfaceLight)) * (1 - c.dinoW);
+  const cold = clamp((Md.coldFrom - sampleField(w.fields.warm, c.x, c.y)) / Md.coldSpan, 0, 1), weak = 1 - smoothstep(V.minEnergy, 0.8, c.energy);
+  const lively = (0.3 + 0.7 * thrive) * (1 - Md.night * night) * (1 - Md.cold * cold) * (1 - Md.weak * weak);
+  return clamp(1 - lively, 0, 1);
+}
+// The mood on a note's envelope
+function moodShape(sh, g) {
+  const Md = PARAMS.voices.mood;
+  sh.attack += Md.swell * Math.pow(g, 1.5);
+  sh.release *= 1 - Md.crisp + (Md.crisp + Md.longer) * g;
+}
+
 function emitNote(w, c, step, last, final, phrase, startled, stretch) {
   const m = w.music, V = PARAMS.voices, Mu = V.muffle, sh = voiceShape(c, last, final);
   if (stretch) sh.release *= stretch;
@@ -3105,6 +3129,8 @@ function emitNote(w, c, step, last, final, phrase, startled, stretch) {
     sh.release *= 1 + V.drone.steadyHold * sh.soft;
     sh.attack *= 1 + V.drone.steadyAttack * sh.soft;
   }
+  const groggy = last || startled ? 0 : moodOf(w, c);   // (a startle is sharp; a last note keeps its own)
+  if (groggy) moodShape(sh, groggy);
   const muffle = smoothstep(Mu.from, Mu.full, sampleField(w.fields.graz, c.x, c.y));
   sh.release *= 1 - Mu.release * muffle;
   m.ends.push(w.tick + Math.ceil((sh.attack + sh.release) * PARAMS.time.tickRate));
@@ -3115,7 +3141,7 @@ function emitNote(w, c, step, last, final, phrase, startled, stretch) {
   m.notes.push({
     id: m.nextNote++, phrase, tick: w.tick, cell: c.id, c, midi, pc: midi % 12, x: c.x, y: c.y, timbre: c.g.timbre,
     attack: sh.attack, release: sh.release, soft: sh.soft, dino: sh.dino, glass: sh.glass, big: sh.big, string: sh.string, form: sh.form,
-    last, startled: !!startled, muffle, steady: !!sh.steady,
+    last, startled: !!startled, muffle, groggy, steady: !!sh.steady,
   });
 }
 
@@ -3477,7 +3503,7 @@ function playNote(n) {
   const t0 = ctx.currentTime + A.lookahead + ht * A.humanTime, end = t0 + n.attack + n.release;
   let level = 0, c0 = 0, c1 = 0, c2 = 0;
   for (const k in mixW) { const q = mixW[k], P = I[k]; level += q * P.level; c0 += q * P.cut[0]; c1 += q * P.cut[1]; c2 += q * P.cut[2]; }
-  const bright = (n.last ? 0.6 : 1) * (1 - PARAMS.voices.muffle.cutoff * n.muffle) * (n.startled ? A.startleBright : 1) * (1 + A.humanBright * hv);
+  const bright = (n.last ? 0.6 : 1) * (1 - PARAMS.voices.muffle.cutoff * n.muffle) * (1 - PARAMS.voices.mood.dark * (n.groggy || 0)) * (n.startled ? A.startleBright : 1) * (1 + A.humanBright * hv);
   const peak = A.voiceGain * (1 + A.humanGain * hv) * level * (1 - A.depthQuiet * depth) * (n.last ? A.lastGain : 1) * (n.startled ? A.startleGain : 1);
   const freq = 440 * Math.pow(2, (n.midi - 69) / 12);
 
@@ -3986,10 +4012,11 @@ function setPeak(reso, x, secs) {
 // A cell plucked by the finger sounds its own note at once, outside the budget (the caller caps the rate)
 let pluckId = 1;
 function pluck(w, c) {
-  const m = w.music, sh = voiceShape(c, false, true), midi = notePitch(m, c, 0);
+  const m = w.music, sh = voiceShape(c, false, true), midi = notePitch(m, c, 0), groggy = moodOf(w, c);
+  moodShape(sh, groggy);   // the hand plucks each cell in its own mood
   const n = { id: 0x40000000 + pluckId++, phrase: 0, c, midi, pc: midi % 12, x: c.x, y: c.y, timbre: c.g.timbre,
               attack: sh.attack, release: sh.release, soft: sh.soft, dino: sh.dino, glass: sh.glass, big: sh.big, string: sh.string, form: sh.form,
-              last: false, startled: false, muffle: 0 };
+              last: false, startled: false, muffle: 0, groggy };
   c.songAt = performance.now() + PARAMS.audio.lookahead * 1000; c.songAtk = n.attack; c.songRel = n.release; c.songLast = false; c.songDrone = false;
   c.glowTick = w.tick;
   if (audio.started && !audio.muted && audio.ctx.state === 'running') { playNote(n); logHeard(n, c.songAt); }
@@ -6450,7 +6477,7 @@ const NB = { TICK: 0, LIGHT: 1, WIND: 2, NUT: 3, GRAZ: 4, POP: 5, CYSTS: 6, CHAI
 
 const notebook = {
   open: false, page: 0, span: PARAMS.notebook.startSpan, solo: -1, guide: 0, hits: [],
-  niche: false, axis: -1, compare: -1,   // species page: its niche shown (not its description), the axis read, the form laid over it
+  niche: false, axis: -1, compare: [],   // species page: its niche shown (not its description), the axis read, the forms laid over it
   rows: new Float32Array(4096 * NB.STRIDE), count: 0, every: PARAMS.notebook.sampleEvery * PARAMS.time.tickRate, next: 0,
   visits: [], seenVisitor: 1, cols: null, colsKey: '', confirm: false,   // confirm: NEW WATER asked, waiting for YES or NO
   rests: [],   // the kept world resting while away beyond the catch-up limit: { tick, s }
@@ -7465,7 +7492,7 @@ const NICHE = [   // per guide entry: one shape (two for the cyanobacteria) and 
   { v: [[1, 4, 0, 4, 2, 3, 4, 3]], tags: ['FIXES N2'] },                    // filamentous
 ];
 const nicheRamp = (e, k) => (e < FORMS.length ? FORMS[e].ramp : e === FORMS.length ? (k ? EMERALD : ROSE) : TRI_RAMP);
-const nicheName = (e) => (e < FORMS.length ? FORMS[e].name : e === FORMS.length ? 'CYANOBACTERIA' : 'FILAMENTOUS');
+const NICHE_COMPARE = 3;   // forms that can be laid over the page's own (four shapes at most, so it never clutters)
 // One shape: filled with a dither of its pigment (a second shape in the other half of the dither, so both show), outlined;
 // a compared one only as a dashed outline
 function nicheShape(vals, cx, cy, R, ramp, k, compared) {
@@ -7491,11 +7518,16 @@ function nicheShape(vals, cx, cy, R, ramp, k, compared) {
   if (!compared) for (const [x, y] of pts) put(Math.round(x), Math.round(y), COL.GLOW);
 }
 // The niche view of the species page, from y down: the radar, the tapped axis's meaning, the tags, and a row of the
-// other entries to compare with (tap one to lay its shape over this one, again to take it off)
+// other entries to compare with (tap one to lay its shape over this one, again to take it off; up to NICHE_COMPARE, a
+// further one replaces the first laid)
 function drawNiche(e, y) {
-  const P = PARAMS.notebook.page, x1 = P.x + P.w, cx = P.x + (P.w >> 1), R = 30, cy = y + 16 + R, n = NICHE_AXES.length, cmp = notebook.compare;
+  const P = PARAMS.notebook.page, x1 = P.x + P.w, cx = P.x + (P.w >> 1), R = 30, cy = y + 16 + R, n = NICHE_AXES.length, cmp = notebook.compare.filter((k) => k !== e);
   ink(P.x + 6, y, 'ITS NICHE', COL.SHAFT);
-  if (cmp >= 0 && cmp !== e) inkRight(x1 - 7, y, 'VS ' + nicheName(cmp), rampBase(nicheRamp(cmp, 0)) + HIGHLIGHT);
+  if (cmp.length) {   // VS and the forms laid over it
+    const ix = x1 - 7 - cmp.length * 10 + 3;
+    inkRight(ix - 4, y, 'VS', COL.SLATE);
+    cmp.forEach((k, i) => guideIcon(k, ix + i * 10, y - 1, false));
+  }
   for (let lv = 1; lv <= 4; lv++) for (let a = 0; a < 96; a += 2) put(Math.round(cx + R * lv / 4 * dsin(TAU * a / 96)), Math.round(cy - R * lv / 4 * dsin(TAU * a / 96 + Math.PI / 2)), lv === 4 ? COL.SLATE : 2);
   for (let i = 0; i < n; i++) {
     const sx = dsin(TAU * i / n), sy = dsin(TAU * i / n + Math.PI / 2);
@@ -7506,7 +7538,7 @@ function drawNiche(e, y) {
     hit(ax - 2, ay - 3, tw + 4, 10, () => { notebook.axis = notebook.axis === i ? -1 : i; });
   }
   NICHE[e].v.forEach((v, k) => nicheShape(v, cx, cy, R, nicheRamp(e, k), k, false));
-  if (cmp >= 0 && cmp !== e) NICHE[cmp].v.forEach((v, k) => nicheShape(v, cx, cy, R, nicheRamp(cmp, k), k, true));   // over it, dashed
+  for (const c of cmp) NICHE[c].v.forEach((v, k) => nicheShape(v, cx, cy, R, nicheRamp(c, k), k, true));   // over it, dashed
   // what the tapped axis means (or how to read it)
   let ty = cy + R + 15;
   const text = notebook.axis >= 0 ? NICHE_AXES[notebook.axis][0] + ': ' + NICHE_AXES[notebook.axis][1] : 'A FINGERPRINT OF ITS WAYS, NOT A SCORE. TAP AN AXIS TO READ IT.';
@@ -7522,9 +7554,14 @@ function drawNiche(e, y) {
   for (let k = 0, slot = 0; k < NICHE.length; k++) {
     if (k === e) continue;
     const ix = gx + slot++ * gap, iy = ry + 9;
-    guideIcon(k, ix, iy, k !== cmp);
-    if (k === cmp) for (let i = -1; i < 8; i++) put(ix + i, iy + 9, rampBase(nicheRamp(k, 0)) + HIGHLIGHT);
-    hit(ix - 3, iy - 3, gap, 15, () => { notebook.compare = notebook.compare === k ? -1 : k; });
+    const on = cmp.includes(k);
+    guideIcon(k, ix, iy, !on);
+    if (on) for (let i = -1; i < 8; i++) put(ix + i, iy + 9, rampBase(nicheRamp(k, 0)) + HIGHLIGHT);
+    hit(ix - 3, iy - 3, gap, 15, () => {
+      const C = notebook.compare.filter((c) => c !== e), at = C.indexOf(k);
+      if (at >= 0) C.splice(at, 1); else { C.push(k); if (C.length > NICHE_COMPARE) C.shift(); }
+      notebook.compare = C;
+    });
   }
 }
 

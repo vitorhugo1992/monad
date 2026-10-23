@@ -1,7 +1,7 @@
 // MONAD offline: the page, its manifest, icons and curiosity facts are kept. The network is asked first, so an update
 // arrives on the next opening; if it does not answer within a few seconds (or there is none), the kept copy opens instead.
-const CACHE = 'monad-5';
-const FILES = ['./', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './facts.json'];
+const CACHE = 'monad-6';
+const FILES = ['./', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-320.png', './icons/icon-maskable-640.png', './facts.json'];
 const WAIT_MS = 3000;
 
 self.addEventListener('install', (e) => {

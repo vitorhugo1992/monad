@@ -4033,7 +4033,16 @@ const chl = new Float64Array(PARAMS.grid.cols * PARAMS.grid.rows);   // smoothed
 const chlNow = new Float64Array(chl.length);
 const milk = new Float64Array(chl.length), milkNow = new Float64Array(chl.length);   // coccolithophore biomass, smoothed slowly
 let chlTick = -1;
+// The screen's tints are read a third of the rows a frame (the slow water steps every 3rd tick), all of them when the
+// camera moved.
+// Those the background dithers by are kept as dither levels (n/16: the same pixels as the exact value), so the
+// background's still rows (below the rays and caustics) are drawn again only when their tint crosses a level or the
+// camera moves (bgGen).
+const TINT_STRIPES = 3, tintCam = { x: -1, y: -1, z: -1 }, bgRowGen = new Int32Array(H).fill(-1), bgCache = new Uint8Array(W * H);
+let bgGen = 0;
+const ditherLevel = (t) => clamp(Math.ceil(16 * t - 0.5), 0, 16) / 16;   // BAYER holds (k + 0.5)/16: b < t iff b < this
 const TINT_W = W >> 2, TINT_H = H >> 2;
+const seenRows = new Float64Array(TINT_H * 4);   // per tint row: cyanobacteria and filaments on screen, and where
 const bloomTint = new Float64Array(TINT_W * TINT_H);              // per 4x4 screen block
 const milkyTint = new Float64Array(TINT_W * TINT_H);              // coccolithophore water, per 4x4 screen block
 const synTint = new Float64Array(TINT_W * TINT_H), proTint = new Float64Array(TINT_W * TINT_H);   // cyanobacteria, per block
@@ -4227,6 +4236,7 @@ const shaftAt = rayAt;
 
 // Cellular caustics in world space; a third of the rows are refreshed each tick.
 function updateCaustics(t, tick) {
+  if (view.by0 / cam.zoom >= CAUSTIC_H) { causticReady = false; return; }   // the camera is below them: all again when it returns
   const cs = R.causticCell, gw = Math.ceil(W / cs) + 3, gh = Math.ceil(CAUSTIC_H / cs) + 3;
   for (let gj = 0; gj < gh; gj++) {
     for (let gi = 0; gi < gw; gi++) {
@@ -4325,23 +4335,30 @@ function updateBloom(w) {
     const k = 1 - Math.exp(-steps * TICK_DT / B.tau), km = 1 - Math.exp(-steps * TICK_DT / B.milkyTau);
     for (let i = 0; i < chl.length; i++) { chl[i] += (chlNow[i] - chl[i]) * k; milk[i] += (milkNow[i] - milk[i]) * km; }
   }
-  const z = cam.zoom;
-  cyanoSeen = 0; cyanoSeenX = 0; triSeen = 0; triSeenX = 0;
+  // A third of the rows each frame (all of them when the camera moves), so no frame does it all
+  const z = cam.zoom, moved = view.bx0 !== tintCam.x || view.by0 !== tintCam.y || z !== tintCam.z, phase = mod(w.tick, TINT_STRIPES);
+  tintCam.x = view.bx0; tintCam.y = view.by0; tintCam.z = z;
+  if (moved) bgGen++;
   const Lk = PARAMS.look, O = PARAMS.oxygen, f = w.fields;
   for (let j = 0; j < TINT_H; j++) {
+    if (!moved && j % TINT_STRIPES !== phase) continue;
+    let changed = false, cy = 0, cyX = 0, tri = 0, triX = 0;
+    const set = (a, k, v) => { if (a[k] !== v) { a[k] = v; changed = true; } };
     for (let i = 0; i < TINT_W; i++) {
-      const v = sampleField(chl, (view.bx0 + i * 4 + 2) / z, (view.by0 + j * 4 + 2) / z);
-      bloomTint[j * TINT_W + i] = clamp(v / B.full, 0, 1) * B.max;
-      milkyTint[j * TINT_W + i] = clamp(sampleField(milk, (view.bx0 + i * 4 + 2) / z, (view.by0 + j * 4 + 2) / z) / B.milkyFull, 0, 1) * B.milkyMax;
-      const wx = (view.bx0 + i * 4 + 2) / z, wy = (view.by0 + j * 4 + 2) / z, sy = sampleField(w.fields.syn, wx, wy), pr = sampleField(w.fields.pro, wx, wy);
-      synTint[j * TINT_W + i] = sy; proTint[j * TINT_W + i] = pr;
-      cyanoSeen += sy + pr; cyanoSeenX += (sy + pr) * (i * 4 + 2);
-      const tr = sampleField(f.tri, wx, wy);
-      triSeen += tr; triSeenX += tr * (i * 4 + 2);
-      mudTint[j * TINT_W + i] = clamp(sampleField(f.silt, wx, wy) / Lk.mud.full, 0, 1) * Lk.mud.max;
-      deadTint[j * TINT_W + i] = smoothstep(O.hypoxic, O.anoxic, sampleField(f.o2, wx, wy)) * Lk.dead.max;
+      const k = j * TINT_W + i, wx = (view.bx0 + i * 4 + 2) / z, wy = (view.by0 + j * 4 + 2) / z;
+      set(bloomTint, k, ditherLevel(clamp(sampleField(chl, wx, wy) / B.full, 0, 1) * B.max));
+      set(milkyTint, k, ditherLevel(clamp(sampleField(milk, wx, wy) / B.milkyFull, 0, 1) * B.milkyMax));
+      const sy = sampleField(f.syn, wx, wy), pr = sampleField(f.pro, wx, wy), tr = sampleField(f.tri, wx, wy);
+      synTint[k] = sy; proTint[k] = pr;
+      cy += sy + pr; cyX += (sy + pr) * (i * 4 + 2); tri += tr; triX += tr * (i * 4 + 2);
+      set(mudTint, k, ditherLevel(clamp(sampleField(f.silt, wx, wy) / Lk.mud.full, 0, 1) * Lk.mud.max));
+      set(deadTint, k, ditherLevel(smoothstep(O.hypoxic, O.anoxic, sampleField(f.o2, wx, wy)) * Lk.dead.max));
     }
+    seenRows[j * 4] = cy; seenRows[j * 4 + 1] = cyX; seenRows[j * 4 + 2] = tri; seenRows[j * 4 + 3] = triX;
+    if (changed) for (let r = j * 4; r < j * 4 + 4 && r < H; r++) bgRowGen[r] = -1;   // these background rows are drawn again
   }
+  cyanoSeen = 0; cyanoSeenX = 0; triSeen = 0; triSeenX = 0;
+  for (let j = 0; j < TINT_H; j++) { cyanoSeen += seenRows[j * 4]; cyanoSeenX += seenRows[j * 4 + 1]; triSeen += seenRows[j * 4 + 2]; triSeenX += seenRows[j * 4 + 3]; }
 }
 
 const surfaceLine = new Float64Array(W), floorLine = new Float64Array(W);   // per screen column, per frame
@@ -4364,6 +4381,8 @@ function drawBackground(t) {
     const u0 = (sun.x + (wx0 + shift - sun.x) * g + W) * R.rayRes, du = invz * g * R.rayRes;
     const cf = wy < CAUSTIC_H ? Math.pow(1 - wy / CAUSTIC_H, R.causticFade) * dayLight : 0;
     const nearSurface = wy < SURFACE_MAX, nearFloor = wy > FLOOR_MIN, tintRow = (py >> 2) * TINT_W;
+    const still = sf === 0 && cf === 0 && !nearSurface;   // nothing here moves: drawn again only when the tints or the camera change
+    if (still && bgRowGen[py] === bgGen) { ib.set(bgCache.subarray(row, row + W), row); continue; }
     for (let px = 0; px < W; px++) {
       const bx = bx0 + px, b = BAYER[brow | (bx & 3)];
       if (nearSurface) {
@@ -4395,6 +4414,7 @@ function drawBackground(t) {
       }
       ib[row + px] = i;
     }
+    if (still) { bgCache.set(ib.subarray(row, row + W), row); bgRowGen[py] = bgGen; }
   }
 }
 

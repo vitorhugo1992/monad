@@ -83,8 +83,8 @@ short list of local rules, and everything else comes out of how they interact:
 
 The music works through constraints rather than randomness: one tonal centre at a time, depth sets the
 register (the surface sings high, the deep sings low), and a strict voice budget means silence is allowed and
-expected. The oldest cells living in the deep become elders that drone, and the oldest elder holds the key;
-when it dies, the whole water may modulate.
+expected. Cells that live in the dim deep fill with pigment and drone, a bass bed under the music, and when
+another group takes the lead of the water the whole water modulates to the new leaders' note.
 
 The biology is meant to carry weight: size allometry, Margalef's mandala, a lagged grazer response, the biological pump, resting cysts, diel
 vertical migration, silica limitation, viral lysis and the viral shunt, kleptoplasty, a seed bank of

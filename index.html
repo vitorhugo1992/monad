@@ -287,11 +287,14 @@ const PARAMS = {
     habit: { glass: 0.6, coilChance: 0.5, starChance: 0.7, coilCells: 8, starCells: 8, starRest: 0.45 },   // glass: how far into diatom glass the form must be
   },
   mutation: { step: 0.08, jumpChance: 0.05, jump: 0.3 },
-  // Elders (local rule, dark acclimation): a cell that spends its days in deep, dim water (light profile below
-  // light) slowly becomes an elder (0..1): its uptake, upkeep, ageing, pulse and swimming slow (it settles where it is), it stores energy before dividing
-  // and grows (an elder barely divides). Judged by day only (at night every cell is in the dark); fades slowly in brighter water. Dividing
-  // halves it. Elders sing long, low drones; the oldest full elder holds the harmonic root.
-  elder: { light: 0.12, grow: 1 / 200, fade: 1 / 300, slowUpkeep: 0.8, slowAge: 0.95, slowPulse: 0.75, settle: 0.9, store: 2, size: 0.5, singFrom: 0.6 },   // light 0.12: deeper than ~half the column
+  // Shade acclimation (approved local rule, author, 2026-10-23, replacing the elders, whose growing big and ageing
+  // hardly at all had no ground in biology): days in dim water (light profile below light, about the lower half of the
+  // column; judged by day only, as at night every cell is in the dark) slowly fill a cell with pigment, shade 0..1 (grow
+  // per s; it fades at fade per s in brighter water). The pigment catches dim light (light felt as L(1 + k)/(L + k),
+  // k = catch / shade: up to (1 + catch)/catch as much in the dimmest water) and its upkeep slows (by slowUpkeep x
+  // shade: low-light cells respire less); it looks darker. Daughters keep their mother's pigment. From singFrom a cell
+  // drones instead of singing tunes, so a deep chlorophyll layer is heard as a bass bed.
+  shade: { light: 0.12, grow: 1 / 200, fade: 1 / 300, catch: 2, slowUpkeep: 0.5, singFrom: 0.6 },   // light 0.12: deeper than ~half the column
   // Bioluminescence: an inherited trait of Alexandrium-form dinoflagellates only. At division a daughter may
   // gain it or lose it, so glowing clades arise now and then, spread among kin and fade (about 1 in 6 at balance).
   // Seen only at night; it changes nothing else.
@@ -311,7 +314,7 @@ const PARAMS = {
   harmony: {
     scales: { major: [0, 2, 4, 7, 9], dorian: [0, 2, 3, 7, 9], minor: [0, 3, 5, 7, 10], hirajoshi: [0, 2, 3, 7, 8] },
     // The season's mode (author, 2026-10-22: a probability, not a rule): a world is born in a mode drawn from its
-    // season's weights, and each key change (an elder's event) draws the mode again from the weights of the season it
+    // season's weights, and each key change (a turn of the succession) draws the mode again from the weights of the season it
     // happens in. By SEASONS: winter, spring, summer, autumn; weights in the order of scales.
     seasonScales: [
       { major: 0.05, dorian: 0.15, minor: 0.3, hirajoshi: 0.5 },    // winter: stark
@@ -327,7 +330,13 @@ const PARAMS = {
     choirUnison: 0,                     // against a neighbour flashing in phase (or a chain mate) a unison only doubles: spread out
     stay: 0.05,                         // per neighbour heard: a cell keeps its degree unless a step sounds clearly better
     drift: 0.25,                        // chance a daughter starts one degree from her mother
-    rootRest: 180,                      // s a new key holds before another elder can move it
+    rootRest: 180,                      // s a new key holds before the water can modulate again
+    // Key changes (approved local rule, author, 2026-10-23, replacing the oldest elder's): when another group takes the
+    // lead of the water (most living cells, the cyanobacteria by biomass, as the notebook counts it) and holds it hold
+    // s (judged every every s, from min of them in all), the water modulates to the pitch the new leaders sang most over
+    // about the last listen s (anyone's, if they have not sung), never the root it leaves, in a mode drawn from the
+    // season's weights. So keys turn with the succession.
+    lead: { hold: 120, every: 5, min: 10, listen: 90 },
     // A free colony sings melody over chord: the cell that starts plays its tune, neighbours who join hold one long
     // chord tone each (release x hold). A chain plays its chord as an arpeggio instead: its cells' notes from low to
     // high, and back down for a straight chain, round and round for rings and stars, over one period of its pulse.
@@ -366,9 +375,9 @@ const PARAMS = {
     // Grazers muffle: where the grazer field is dense, notes are duller and shorter, so heavy grazing sounds
     // smothered before the die-off (field from..full; at full the cutoff and release shrink by these shares).
     muffle: { from: 0.3, full: 1.5, cutoff: 0.6, release: 0.5 },
-    // Elder drones: long low notes (MIDI low..high, C1..B1) on the elder's slow pulse, at most max at once; an elder
-    // sings again once `again` of its last drone's release has passed. Soft cells singing within steady units
-    // of a droning elder hold their notes longer (the pads), as if the elder steadies them.
+    // Drones of shade-acclimated cells: long low notes (MIDI low..high, C1..B1) when they flash, at most max at once; a
+    // cell drones again once `again` of its last drone's release has passed. Soft cells singing within steady units
+    // of a droning cell hold their notes longer (the pads), as if the deep layer steadies them.
     drone: { max: 3, attack: [6, 10], release: [16, 28], low: 24, high: 35, again: 0.6, steady: 30, steadyHold: 2.5, steadyAttack: 1.5 },
   },
 
@@ -378,7 +387,7 @@ const PARAMS = {
     master: 1.5, voiceGain: 0.085, lastGain: 0.6, depthQuiet: 0.5, wetMin: 0.2, wetMax: 0.7,
     busCutoff: 3400,
     // Instruments, blended by form as the sprites are: soft flagellates a felt piano (small) melting into a breathing
-    // pad (big, or steadied by an elder); dinoflagellates wood (marimba) or a plucked string, by lineage form; diatom
+    // pad (big, or steadied by the deep drones); dinoflagellates wood (marimba) or a plucked string, by lineage form; diatom
     // glass a glockenspiel (small) or a vibraphone with its slow tremolo (big). Each is a few partials
     // [frequency ratio, gain, share of the release it lasts]: higher partials fade first, as in struck and plucked things.
     // level: loudness; cut: lowpass at the strike, at the top of the swell, at the end.
@@ -395,7 +404,7 @@ const PARAMS = {
     padTwin: 1.006, padTwinGain: 0.6, partialMaxHz: 12000, steadyPad: 0.8,   // steadied soft notes lean this far toward the pad
     waves: 12, harmonics: 16, softEven: 0.15, glassBright: 0.25,   // wave table along the timbre gene, built once
     startleGain: 0.7, startleDry: 0.5, startleBright: 1.3,
-    // Elder drones: a sine sub with two soft pad partials (octave and twelfth, detuned apart) under a filter that
+    // Deep drones (shade-acclimated cells): a sine sub with two soft pad partials (octave and twelfth, detuned apart) under a filter that
     // opens through the swell and closes through the long fade
     // Ambience: the ocean itself, built from filtered noise and short tones, every sound a discrete event that
     // swells and fades (overlapping, so the bed never stops). Each layer follows the world: the surface wash with
@@ -544,7 +553,7 @@ const PARAMS = {
   // = full) whose frequency follows the finger across the water; it fades when the finger lifts.
   touch: { tapMs: 300, tapMove: 4, touch: 2.5, pluckRest: 0.4, plucksPerSecond: 16, trail: 1.5, trailSpacing: 2, bendSpan: 0.6, resoSpan: 0.5,
            ripple: 1.6, rippleRings: 3, rippleGap: 0.28 },   // a tap's ripple: s for a ring to reach the scatter radius; rings, s apart
-  elderLook: { darken: 0.55, ringSlow: 3.5, ringBig: 2.5, haloBig: 2 },   // elders: darker pigment; slow, wide rings and halo while droning
+  shadeLook: { darken: 0.55, ringSlow: 3.5, ringBig: 2.5, haloBig: 2 },   // shade-acclimated cells: darker pigment; slow, wide rings and halo while droning
   song: { ringPx: 9, ringZoom: 0.6, ringTime: 1.6, ringStart: 1.5, swell: 0.35, lift: 0.9,
           haloRadius: 2.5, haloMinPx: 3, haloMaxPx: 16, haloStrength: 0.45 },
   // Lineage threads: only while the sisters are still close (maxDist x their radii), fading with age and distance;
@@ -714,7 +723,7 @@ const PARAMS = {
   // facts come first whyFirst of the time.
   curio: { first: 30, everyMin: 50, everyMax: 100, life: 30, r: 5, rise: 1.2, sway: 2.5, zoomFrom: 3, zoomDelay: 10, now: 0.5, whyFirst: 0.7,
            corners: [[16, 120], [164, 120], [16, 250], [164, 230]] },
-  persist: { db: 'monad', every: 30, chunkRows: 1024, version: 8,
+  persist: { db: 'monad', every: 30, chunkRows: 1024, version: 9,
     // Catching up: the time away is lived again, exactly, up to maxAway (s); beyond it the water rests. A worker runs
     // it out of sight and shows a frame every show s (a silent time-lapse); the last tail simulated s play on the page,
     // from tailSpeed x slowing to real time, so the recap glides into the live world. bench: s measured by ?bench.
@@ -1298,7 +1307,7 @@ function deriveTraits(c) {
   else if (c.kind === 8) { c.gainK *= Fm.crypto.fast; c.grazeK = Fm.crypto.exposed; c.dimLight = Fm.crypto.dim; }
   const ds = c.kind === 3 ? PARAMS.dino.tripos.scale : PARAMS.dino.scale;
   c.rvBase = c.r * PARAMS.cell.drawScale * (1 + (ds - 1) * c.dinoW);   // drawn radius (and register)
-  c.rv = c.rvBase * (1 + PARAMS.elder.size * c.elder);                                  // elders grow
+  c.rv = c.rvBase;
   if (!c.la && !c.lb) chainHabit(c);   // a colony keeps the habit it was founded with
 }
 
@@ -1413,7 +1422,7 @@ function cellObject(id, parentId, x, y, g, energy, theta, spriteSeed) {
     theta, flashTick: -1000, dying: 0, grazed: false, eaten: null,
     pull: 0, nbrs: 0, locked: 0,                       // Kuramoto: sum of sin(theta_j - theta_i), neighbours, those in phase
     deg: 0, noteTick: -1000, startleTick: -1000, motif: null, bout: 0,
-    elder: 0, elderAge: 0, droneNext: 0, droneEnd: 0, rvBase: 0, arpTick: -1e9,   // elder (0..1), time as a full elder; drones     // scale degree (rule 7); last phrase began; lineage tune; flashes left to sing
+    shade: 0, droneNext: 0, droneEnd: 0, rvBase: 0, arpTick: -1e9,   // shade acclimation (0..1); drones     // scale degree (rule 7); last phrase began; lineage tune; flashes left to sing
     lum: false,                                        // bioluminescent (Alexandrium only; inherited)
     hunter: false, klepto: 0, plastids: null, pv: 0, kind: 0, grazeK: 1, sinkV: 0, dimLight: 0,   // form and its niche   // Dinophysis: stolen chloroplasts (0..1), their prey colours, a version for the sprite
     la: null, lb: null, chainLen: 1, chainId: 0,       // chain links toward the head (la) and the tail (lb)
@@ -1631,8 +1640,8 @@ function stepWorld(w) {
     if (c.dying) continue;
     metabolise(w, c, dt, pace);
     advancePhase(w, c, dt);
-    ageElder(w, c, dt);
-    c.age += dt * pace * (1 - PARAMS.elder.slowAge * c.elder);
+    acclimate(w, c, dt);
+    c.age += dt * pace;
   }
   singAndListen(w);
   updateChains(w, dt);
@@ -1712,14 +1721,14 @@ function steer(w, c, dt) {
 
   // Brighter than preferred -> swim down (+y); dimmer -> swim up. Bounded ratio, no log.
   // Night descent is swimming: diatoms (glass) don't swim, they only regulate their buoyancy, so they hold their depth
-  const night = (1 - smoothstep(D.darkLo, D.darkHi, w.surfaceLight)) * (1 - c.glassW), settle = 1 - PARAMS.elder.settle * c.elder;   // elders barely swim
+  const night = (1 - smoothstep(D.darkLo, D.darkHi, w.surfaceLight)) * (1 - c.glassW);
   if (night < 1) {
     const L = sampleField(w.fields.light, c.x, c.y), T = c.targetLight * w.surfaceLight;
-    c.vy += (1 - night) * D.phototaxis * (L - T) / (L + T + 1e-9) * settle * dt;
+    c.vy += (1 - night) * D.phototaxis * (L - T) / (L + T + 1e-9) * dt;
   }
   if (night > 0) {
     const nd = sampleField(w.fields.nut, c.x, c.y + GRID_H), nu = sampleField(w.fields.nut, c.x, c.y - GRID_H);
-    c.vy += night * D.nutritaxis * clamp(D.gradientGain * (nd - nu) / (nd + nu + 1e-6), -1, 1) * settle * dt;
+    c.vy += night * D.nutritaxis * clamp(D.gradientGain * (nd - nu) / (nd + nu + 1e-6), -1, 1) * dt;
   }
 
   const ci = clamp(Math.floor(c.x / hs.s), 0, hs.cols - 1), cj = clamp(Math.floor(c.y / hs.s), 0, hs.rows - 1);
@@ -1783,15 +1792,11 @@ function move(c, dt) {
   else if (c.y > bottom) { c.y = bottom; c.vy = -Math.abs(c.vy) * D.wallBounce; }
 }
 
-// Elders: dark acclimation. Days spent in deep, dim water slowly make a cell an elder; brighter water undoes it.
-function ageElder(w, c, dt) {
-  const E = PARAMS.elder;
-  if (w.surfaceLight >= PARAMS.drift.darkHi) {   // judged by day: at night every cell is in the dark
-    const was = c.elder;
-    c.elder = clamp(c.elder + (dexp(-PARAMS.light.atten * c.y / H) < E.light ? E.grow : -E.fade) * dt, 0, 1);
-    if (c.elder !== was) c.rv = c.rvBase * (1 + E.size * c.elder);
-  }
-  c.elderAge = c.elder >= 1 ? c.elderAge + dt : 0;
+// Shade acclimation: days spent in deep, dim water slowly fill a cell with pigment; brighter water undoes it
+function acclimate(w, c, dt) {
+  const S = PARAMS.shade;
+  if (w.surfaceLight >= PARAMS.drift.darkHi)   // judged by day: at night every cell is in the dark
+    c.shade = clamp(c.shade + (dexp(-PARAMS.light.atten * c.y / H) < S.light ? S.grow : -S.fade) * dt, 0, 1);
 }
 
 // Rule 2: energy += light x nutrients x efficiency - maintenance. Uptake removes nutrients locally.
@@ -1801,14 +1806,15 @@ const KLEPTO_K = dexp(-TICK_DT / PARAMS.hunt.fade);   // stolen plastids fade, p
 function metabolise(w, c, dt, pace) {
   const f = w.fields;
   const L0 = sampleField(f.light, c.x, c.y), N = sampleField(f.nut, c.x, c.y), T = PARAMS.turbulence;
-  const L = c.dimLight ? L0 * (1 + c.dimLight) / (L0 + c.dimLight) : L0;   // cryptophytes: phycobilins catch dim light
+  const L1 = c.dimLight ? L0 * (1 + c.dimLight) / (L0 + c.dimLight) : L0;   // cryptophytes: phycobilins catch dim light
+  const k = c.shade > 0 ? PARAMS.shade.catch / c.shade : 0, L = k ? L1 * (1 + k) / (L1 + k) : L1;   // and so does a shade cell's pigment
   const calm = c.dinoW > 0 ? Math.max(0, 1 - T.inhibit * c.dinoW * sampleField(TURB, c.x, c.y)) : 1;   // Margalef
   const Si = PARAMS.silica, glass = c.glassW, S = glass > 0 ? sampleField(f.si, c.x, c.y) : 0;
   const siLim = (1 - glass + glass * S / (S + Si.half))   // diatoms slow as silica runs low
     * (c.hunter ? PARAMS.hunt.dark + (1 - PARAMS.hunt.dark) * c.klepto : 1);   // Dinophysis photosynthesises with stolen plastids
   if (c.hunter) c.klepto *= KLEPTO_K;
-  const gain = c.gainK * L * N / (N + c.halfSat) * calm * siLim * (1 - PARAMS.elder.slowUpkeep * c.elder)   // elders: slow metabolism
-    * sampleField(f.warm, c.x, c.y) * dt;                                                                     // faster in warm water
+  const gain = c.gainK * L * N / (N + c.halfSat) * calm * siLim
+    * sampleField(f.warm, c.x, c.y) * dt;   // faster in warm water
   const want = gain * PARAMS.metabolism.uptake * c.biomass;
   const got = want > 0 ? takeField(f.nut, c.x, c.y, want) : 0;
   if (got > 0) addField(f.o2, c.x, c.y, got * PARAMS.oxygen.per);   // photosynthesis gives oxygen off
@@ -1818,7 +1824,7 @@ function metabolise(w, c, dt, pace) {
     c.si += siGot;
     if (siGot < siWant) share *= siGot / siWant;
   }
-  c.energy += gain * share - c.maintK * pace * (1 - PARAMS.elder.slowUpkeep * c.elder) * dt;
+  c.energy += gain * share - c.maintK * pace * (1 - PARAMS.shade.slowUpkeep * c.shade) * dt;   // shade cells respire less
   c.vigor += (L * N / (N + c.halfSat) - c.vigor) * dt / PARAMS.metabolism.vigorTau;   // recorded, never read by the rules (swimming, singing)
   c.fed += (N / (N + c.halfSat) * (1 - glass + glass * S / (S + Si.half)) - c.fed) * dt / PARAMS.cyst.hungerTau;   // nutrients and silica: read by encystment
   c.held += got;
@@ -1828,7 +1834,7 @@ function metabolise(w, c, dt, pace) {
 // Wrapping past 2pi is a flash. Synchronised colonies come out of this; nothing else groups them.
 function advancePhase(w, c, dt) {
   const pull = c.nbrs ? c.g.coupling * PARAMS.phase.K * c.pull / c.nbrs : 0;
-  c.theta += (TAU * c.g.omega * (1 - PARAMS.elder.slowPulse * c.elder) + pull) * dt;
+  c.theta += (TAU * c.g.omega + pull) * dt;
   if (c.theta >= TAU) { c.theta -= TAU; c.flashTick = w.tick; }
   else if (c.theta < 0) c.theta += TAU;
 }
@@ -2493,7 +2499,7 @@ function lifeAndDeath(w) {
     if (c.dying) { if (++c.dying > fade) removed++; continue; }
     const starved = c.energy < 0;
     if (starved || c.age > c.lifespan) { die(w, c, starved); alive--; }
-    else if (c.energy >= Dv.threshold * (1 + PARAMS.elder.store * c.elder)) {   // elders store before dividing
+    else if (c.energy >= Dv.threshold) {
       if (alive < Dv.maxCells) { cells.push(divide(w, c)); alive++; }
       else c.energy = Dv.threshold;   // the water is full: the cell waits at the threshold
     }
@@ -2532,6 +2538,7 @@ function divide(w, c) {
   b.vx = c.vx; b.vy = c.vy;
   b.theta = c.theta;
   b.vigor = c.vigor;
+  b.shade = c.shade;   // the daughters keep the pigment
   b.deg = driftDegree(w, c.deg);
   b.motif = inheritMotif(w, c.motif);
   c.motif = inheritMotif(w, c.motif);
@@ -2543,8 +2550,6 @@ function divide(w, c) {
   c.si *= 0.5;
   c.age = 0;
   c.parentId = null;
-  c.elder *= 0.5;
-  c.elderAge = 0;
   c.gen++;
   deriveTraits(c);
   if (link) copyHabit(b, c);
@@ -2666,12 +2671,13 @@ const RV_MAX = PARAMS.cell.rMax * PARAMS.cell.drawScale * PARAMS.dino.scale;
 const SINGERS = [];
 const SCORE = new Float64Array(3);
 
-// The key is chosen by the seed; the root stays fixed until elders move it (phase 5)
+// The key is chosen by the seed; the root stays until the succession moves it
 function createMusic(seed) {
   const k = hash32(seed ^ 0x5bd1e995), name = SCALE_NAMES[(k >>> 8) % SCALE_NAMES.length];
   return {
     rng: makeRng(hash32(seed + 0x9e3779b9)), root: k % 12, scaleName: name, scale: PARAMS.harmony.scales[name],
-    rootCell: 0, rootChanges: 0, rootTick: -1e9, elders: [], droneEnds: [],
+    rootChanges: 0, rootTick: -1e9, droners: [], droneEnds: [],
+    lead: -1, cand: -1, candTick: 0, sung: new Float64Array(LEAD_GROUPS * 12),   // who leads the water; what each group sang
     tokens: PARAMS.voices.burst, ends: [], sounding: [], notes: [], pending: [], recent: [], onsets: 0, nextNote: 1, nextPhrase: 1,
   };
 }
@@ -2827,18 +2833,18 @@ function singAndListen(w) {
   for (let i = 0; i < m.recent.length; i++) if (w.tick - m.recent[i] < 10 * PARAMS.time.tickRate) m.recent[k++] = m.recent[i];
   m.recent.length = k;
 
-  updateElders(w);
+  updateKey(w);
   SINGERS.length = 0;
   for (let i = 0; i < cells.length; i++) if (!cells[i].dying && cells[i].flashTick === w.tick) SINGERS.push(cells[i]);
   if (SINGERS.length) {
     for (const c of SINGERS) c.nextDeg = attractDegree(w, c);
-    for (const c of SINGERS) if (c.id !== m.rootCell) c.deg = c.nextDeg;   // the root holder keeps singing the root
+    for (const c of SINGERS) c.deg = c.nextDeg;
 
     // The most locked-in cells first: colonies are heard over loners
     SINGERS.sort((a, b) => b.locked - a.locked || a.id - b.id);
     const Dr = PARAMS.drift, dark = w.surfaceLight < Dr.darkHi;
     for (const c of SINGERS) {
-      if (c.elder >= PARAMS.elder.singFrom) { drone(w, c); continue; }   // elders drone instead of singing tunes
+      if (c.shade >= PARAMS.shade.singFrom) { drone(w, c); continue; }   // shade cells drone instead of singing tunes
       if (c.energy < V.minEnergy) { c.bout = 0; continue; }
       const len = c.motif.slots.length;
       let sing, hold = false;
@@ -2860,40 +2866,52 @@ function singAndListen(w) {
   playPending(w);
 }
 
-// Phase 5: the oldest full elder holds the root. When it dies (or stops being an elder) the next oldest takes the
-// root and its own note becomes the new tonal centre: the whole water modulates, announced by the new holder's drone.
-// With no elder left the root stays where it was. A new key holds for rootRest s: a holder appointed sooner adopts it.
-function updateElders(w) {
-  const m = w.music, E = PARAMS.elder;
+// Key changes follow the succession (see harmony.lead): when another group takes the lead of the water and holds
+// it, the water modulates to the pitch the new leaders sang most. Also keeps the list of droning cells.
+const LEAD_GROUPS = 7, GROUP_OF_KIND = [2, 1, 1, 1, 1, 0, 0, 3, 4];   // diatoms, dinoflagellates, green, cocco, crypto, cyano, filamentous
+const LEAD_COUNT = new Float64Array(LEAD_GROUPS);
+function updateKey(w) {
+  const m = w.music, S = PARAMS.shade, Ld = PARAMS.harmony.lead, rate = PARAMS.time.tickRate;
   let k = 0;
   for (let i = 0; i < m.droneEnds.length; i++) if (m.droneEnds[i] > w.tick) m.droneEnds[k++] = m.droneEnds[i];
   m.droneEnds.length = k;
-  m.elders.length = 0;
-  let holder = null, oldest = null;
-  for (const c of w.cells) {
-    if (c.dying || c.elder < E.singFrom) continue;
-    m.elders.push(c);
-    if (c.id === m.rootCell) holder = c;   // the holder keeps the root while it is still an elder
-    if (c.elder < 1) continue;
-    if (!oldest || c.elderAge > oldest.elderAge || (c.elderAge === oldest.elderAge && c.id < oldest.id)) oldest = c;
-  }
-  if (holder || !oldest) return;
-  const pc = (m.root + m.scale[oldest.deg]) % 12;
-  if (w.tick - m.rootTick >= PARAMS.harmony.rootRest * PARAMS.time.tickRate) {   // a fresh key holds a while
-    const mode = seasonMode(w);   // a mode the season makes likely
-    if (pc !== m.root || mode !== m.scaleName) {
-      m.rootChanges++;
-      m.rootTick = w.tick;
-      m.root = pc;
-      setScale(m, mode);
+  m.droners.length = 0;
+  for (const c of w.cells) if (!c.dying && c.shade >= S.singFrom) m.droners.push(c);
+  if (w.tick % (Ld.every * rate)) return;
+  const decay = dexp(-Ld.every / Ld.listen);
+  for (let i = 0; i < m.sung.length; i++) m.sung[i] *= decay;
+  LEAD_COUNT.fill(0);
+  for (const c of w.cells) if (!c.dying) LEAD_COUNT[GROUP_OF_KIND[c.kind]]++;
+  const cy = cyanoTotal(w);
+  LEAD_COUNT[5] = cy.syn + cy.pro;   // biomass, about a cell's worth per unit
+  LEAD_COUNT[6] = cy.tri;
+  let lead = 0, all = 0;
+  for (let g = 0; g < LEAD_GROUPS; g++) { all += LEAD_COUNT[g]; if (LEAD_COUNT[g] > LEAD_COUNT[lead]) lead = g; }
+  if (all < Ld.min) return;
+  if (m.lead < 0 || lead === m.lead) { m.lead = lead; m.cand = -1; return; }
+  if (lead !== m.cand) { m.cand = lead; m.candTick = w.tick; return; }   // a new leader must hold the lead a while
+  if (w.tick - m.candTick < Ld.hold * rate || w.tick - m.rootTick < PARAMS.harmony.rootRest * rate) return;
+  m.lead = lead;
+  m.cand = -1;
+  let pc = -1, best = 0;   // the new leaders' own note (anyone's, if they have not sung: the cyanobacteria never do)
+  for (let p = 0; p < 12; p++) if (p !== m.root && m.sung[lead * 12 + p] > best) { best = m.sung[lead * 12 + p]; pc = p; }
+  if (pc < 0) {
+    for (let p = 0; p < 12; p++) {
+      if (p === m.root) continue;
+      let t = 0;
+      for (let g = 0; g < LEAD_GROUPS; g++) t += m.sung[g * 12 + p];
+      if (t > best) { best = t; pc = p; }
     }
   }
-  m.rootCell = oldest.id;
-  oldest.deg = 0;
-  oldest.droneNext = 0;   // the new holder announces the key
+  if (pc < 0) return;
+  m.rootChanges++;
+  m.rootTick = w.tick;
+  m.root = pc;
+  setScale(m, seasonMode(w));   // a mode the season makes likely
+  for (const c of m.droners) c.droneNext = 0;   // the deep layer sounds the new key
 }
 
-// An elder drones on its slow pulse, if a drone voice is free and its last drone has mostly faded
+// A shade-acclimated cell drones when it flashes, if a drone voice is free and its last drone has mostly faded
 function drone(w, c) {
   const m = w.music, D = PARAMS.voices.drone, b = looksBig(c);
   if (w.tick < c.droneNext || m.droneEnds.length >= D.max) return;
@@ -2906,14 +2924,14 @@ function drone(w, c) {
   m.onsets++;
   m.notes.push({
     id: m.nextNote++, phrase: m.nextPhrase++, tick: w.tick, cell: c.id, c, midi, pc, x: c.x, y: c.y, timbre: c.g.timbre,
-    attack, release, soft: 1, dino: 0, glass: 0, last: false, startled: false, muffle: 0, drone: true, level: c.elder,
+    attack, release, soft: 1, dino: 0, glass: 0, last: false, startled: false, muffle: 0, drone: true, level: c.shade,
   });
 }
 
-// Pads: a soft cell singing near a droning elder holds its notes longer, as if the elder steadies it
+// Pads: a soft cell singing near a droning cell holds its notes longer, as if the deep layer steadies it
 function steadied(w, c) {
   const D = PARAMS.voices.drone, r2 = D.steady * D.steady;
-  for (const e of w.music.elders) {
+  for (const e of w.music.droners) {
     if (e === c || e.droneEnd <= w.tick) continue;
     const dx = e.x - c.x, dy = e.y - c.y;
     if (dx * dx + dy * dy < r2) return true;
@@ -3079,7 +3097,7 @@ function emitNote(w, c, step, last, final, phrase, startled, stretch) {
     sh.attack = V.startle.attack;
     sh.release = V.startle.release;
   }
-  if (!last && !startled && sh.soft > 0 && w.music.elders.length && steadied(w, c)) {
+  if (!last && !startled && sh.soft > 0 && w.music.droners.length && steadied(w, c)) {
     sh.steady = true;
     sh.release *= 1 + V.drone.steadyHold * sh.soft;
     sh.attack *= 1 + V.drone.steadyAttack * sh.soft;
@@ -3088,6 +3106,7 @@ function emitNote(w, c, step, last, final, phrase, startled, stretch) {
   sh.release *= 1 - Mu.release * muffle;
   m.ends.push(w.tick + Math.ceil((sh.attack + sh.release) * PARAMS.time.tickRate));
   m.sounding.push(midi % 12);
+  m.sung[GROUP_OF_KIND[c.kind] * 12 + midi % 12]++;   // what each group sings (the key follows the leaders)
   m.recent.push(w.tick);
   m.onsets++;
   m.notes.push({
@@ -3180,6 +3199,7 @@ function snapshotWorld(w) {
 // Restored objects come back with shapes of their own, and the hot loops run at half speed over them; cells and
 // genomes are rebuilt in their usual shapes and every reference is pointed at the rebuilt ones. Fields a newer
 // version added to cells keep their fresh defaults.
+const RETIRED = new Set(['elder', 'elderAge']);   // cell fields of older versions, left behind
 function reshape(w) {
   const swap = new Map(), genomes = new Map();
   const genome = (g) => { if (!genomes.has(g)) { const n = {}; for (const k of GENE_KEYS) n[k] = g[k]; genomes.set(g, n); } return genomes.get(g); };
@@ -3188,7 +3208,8 @@ function reshape(w) {
     seen.add(v);
     if (v.spriteSeed !== undefined && v.g && !swap.has(v)) {   // a cell, living or still referred to
       const n = cellObject(v.id, v.parentId, v.x, v.y, genome(v.g), v.energy, v.theta, v.spriteSeed);
-      for (const k of Object.keys(v)) if (k !== 'g') n[k] = v[k];
+      for (const k of Object.keys(v)) if (k !== 'g' && !RETIRED.has(k)) n[k] = v[k];   // (cysts keep their own fields too)
+      if (v.shade === undefined && v.elder !== undefined) n.shade = v.elder;   // saved with elders: their dark acclimation
       if (v.glassW === undefined) n.glassW = smoothstep(PARAMS.dino.fade, PARAMS.dino.gone, n.g.timbre);   // saved before silica
       if (v.grazeK === undefined) deriveTraits(n);   // saved before coccolithophores and cryptophytes: re-derive form and niche
       if (v.hunter === undefined) {   // saved before Dinophysis hunted
@@ -3223,7 +3244,8 @@ function restoreWorld(snap) {
   }
   const fresh = createWorld(w.seed, 1, w.dayLength, w.yearStart);
   reshape(w);
-  const fields = Object.assign(fresh.fields, w.fields), music = Object.assign(fresh.music, w.music), deaths = Object.assign(fresh.deaths, w.deaths);
+  const fields = Object.assign(fresh.fields, w.fields), deaths = Object.assign(fresh.deaths, w.deaths), music = fresh.music;
+  for (const k of Object.keys(w.music)) if (k in music) music[k] = w.music[k];   // (retired fields, like the elders', stay behind)
   Object.assign(fresh, w);
   fresh.fields = fields;
   fresh.music = music;
@@ -3390,7 +3412,7 @@ function startAudio() {
 // One note: the main wave and a partner oscillator through a lowpass and one envelope, panned by x.
 // The partner is the family's colour: a slightly detuned twin that breathes (soft), the wood's high partial that
 // dies fast (dinoflagellates), the glass's inharmonic ring (diatoms).
-// An elder's drone: a sine sub and two soft pad partials, one swell and one long fade under a filter that opens and closes
+// A deep drone: a sine sub and two soft pad partials, one swell and one long fade under a filter that opens and closes
 function playDrone(n) {
   const A = PARAMS.audio, Dr = A.drone, ctx = audio.ctx;
   if (audio.drones >= Dr.maxNodes) return;
@@ -5027,7 +5049,7 @@ function buildSprite(c, rpx, angle, z, key) {
 // Rebuilds are rationed per frame; past the budget a cell keeps its previous sprite for a moment, but never one built
 // for another zoom (it would be drawn at that zoom's size): until it is rebuilt, it is a speck.
 function spriteFor(c, rpx, step) {
-  const key = (((c.pv * 5 + Math.ceil(c.klepto * 4)) * 4096 + c.gen * 9 + Math.round(c.elder * 8)) * ZOOMS.length + cam.level) * PARAMS.sprite.tumbleSteps + step;   // elders grow, plastids are stolen and fade: rebuild
+  const key = (((c.pv * 5 + Math.ceil(c.klepto * 4)) * 4096 + c.gen * 9 + Math.round(c.shade * 8)) * ZOOMS.length + cam.level) * PARAMS.sprite.tumbleSteps + step;   // shade darkens, plastids are stolen and fade: rebuild
   const s = c.spr;
   if (s && s.key === key) return s;
   if (s && builds >= PARAMS.sprite.minBuilds && performance.now() > buildDeadline) return s.level === cam.level ? s : SPECK;
@@ -5144,7 +5166,7 @@ function drawCell(c, tick, t) {
   const frame = (Math.floor(tick * S.wobbleFps / PARAMS.time.tickRate) + c.id) % S.frames;
   const tones = spr.frames[frame], size = spr.size, x0 = cx - spr.half, y0 = cy - spr.half;
   const lum = glowing(c), pulse = Math.max(flashLevel(c, tick) * (lum ? glowNight : PARAMS.flash.cellLift), sung * PARAMS.song.lift);
-  const fade = c.dying ? c.dying / PARAMS.death.fadeTicks : 0, old = c.elder * PARAMS.elderLook.darken;
+  const fade = c.dying ? c.dying / PARAMS.death.fadeTicks : 0, old = c.shade * PARAMS.shadeLook.darken;
   const depth = c.y / H, dark = depth > R.deepFrom ? (depth - R.deepFrom) / (1 - R.deepFrom) * R.deepDarken : 0;
   const ib = view.ibuf, bx0 = view.bx0, by0 = view.by0, cw = 2 * R.causticWidth / z;
   for (let py = 0; py < size; py++) {
@@ -5171,7 +5193,7 @@ function drawCell(c, tick, t) {
         const slot = t0 >= ALT ? Math.floor(t0 / ALT) : 0;   // 0 own, 1 the neighbouring colour, 2.. stolen plastids
         let tt = t0 - slot * ALT;
         if (muted && tt > 0) tt--;
-        if (old > 0 && tt > 0 && BAYER[(((by + 1) & 3) << 2) | ((bx + 2) & 3)] < old) tt--;   // elders darken
+        if (old > 0 && tt > 0 && BAYER[(((by + 1) & 3) << 2) | ((bx + 2) & 3)] < old) tt--;   // shade cells darken
         idx = (slot === 0 ? base : slot === 1 ? base2 : stolen && stolen[slot - 2] !== undefined ? rampBase(stolen[slot - 2]) : base) + tt;
       }
       if (pulse > 0) {
@@ -5266,7 +5288,7 @@ function drawSongs(w) {
     const level = songLevel(c);
     if (level <= 0.002) continue;
     const cx = toSX(c.x + c.ox), cy = toSY(c.y + c.oy), rpx = c.rv * z;
-    const El = PARAMS.elderLook, big = c.songDrone ? El.haloBig : 1;
+    const El = PARAMS.shadeLook, big = c.songDrone ? El.haloBig : 1;
     const rh = clamp(rpx * Sg.haloRadius * big, Sg.haloMinPx * big, Sg.haloMaxPx * big), strength = Sg.haloStrength * level;
     if (cx > -rh && cy > -rh && cx < W + rh && cy < H + rh) {
       const y0 = Math.max(0, Math.floor(cy - rh)), y1 = Math.min(H - 1, Math.ceil(cy + rh));
@@ -7676,7 +7698,7 @@ function drawNewWater(y) {
 // ---- The music chapter (author, 2026-10-22): what the water plays, tied to who plays it. Only what is heard (the
 // heard log, page side): with the music off the pages stay drawn, but empty. ----
 const INSTRUMENTS = [['piano', 'FELT PIANO'], ['pad', 'PAD'], ['wood', 'MARIMBA'], ['string', 'PLUCKED STRING'], ['glock', 'GLOCKENSPIEL'],
-  ['vibe', 'VIBRAPHONE'], ['celesta', 'CELESTA'], ['kalimba', 'KALIMBA'], ['drone', 'DRONE (ELDERS)']];
+  ['vibe', 'VIBRAPHONE'], ['celesta', 'CELESTA'], ['kalimba', 'KALIMBA'], ['drone', 'DEEP DRONE']];
 // The visitors' voices (author: predators belong beside the instruments): sardines' chord, the sunfish's call, the
 // salps' line, the jellies' harp
 const VISITOR_VOICES = [['school', 'SARDINES', LIGHTBLUE], ['sunfish', 'SUNFISH', GOLD], ['salp', 'SALPS', EMERALD], ['harp', 'JELLY HARP', ROSE]];
@@ -8045,7 +8067,7 @@ function drawDebug(w) {
     'CK ' + ck,
     'DAY ' + dayPhase(w).toFixed(2) + ' SUN ' + w.surfaceLight.toFixed(2) + ' WIND ' + w.wind.toFixed(2) + ' PL ' + w.pulses.length,
     'DIED S ' + w.deaths.starved + ' O ' + w.deaths.old + ' G ' + w.deaths.grazed + ' F ' + w.deaths.sardines + ' SP ' + w.deaths.salps,
-    'ELD ' + w.music.elders.length + ' FULL ' + w.cells.filter((c) => !c.dying && c.elder >= 1).length + '  DRONE ' + (audio.started ? audio.drones : w.music.droneEnds.length) + '  ROOT CHG ' + w.music.rootChanges,
+    'SHADE ' + w.music.droners.length + '  LEAD ' + w.music.lead + '  DRONE ' + (audio.started ? audio.drones : w.music.droneEnds.length) + '  ROOT CHG ' + w.music.rootChanges,
     'VISIT ' + (w.visitors.map((v) => v.kind.slice(0, 3).toUpperCase()).join(' ') || '-'),
   ];
   for (let i = 0; i < lines.length; i++) drawText(3, 6 + i * 7, lines[i], COL.FOAM, 1);

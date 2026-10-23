@@ -41,11 +41,11 @@ for (const a of args.filter((s) => s.includes('='))) {
 const [seeds = 30, minutes = 30, firstSeed = 1] = args.filter((s) => !s.includes('=') && !s.startsWith('--')).map(Number);
 const FIXTURES = new URL('./fixtures/', import.meta.url), FIXTURE_MINUTES = 5;
 
-// A fixture: a lived-in world (chains, elders, cysts, visitors in the water) saved as this version saves it, with
+// A fixture: a lived-in world (chains, shade cells, cysts, visitors in the water) saved as this version saves it, with
 // the checksum it reached FIXTURE_MINUTES later, so a later version can tell whether its rules still grow the same world
 if (args.includes('--save-fixture')) {
   const rate = sim.PARAMS.time.tickRate;
-  const rich = (w) => w.visitors.length && w.cysts.length && w.cells.some((c) => c.chainLen > 1) && w.cells.some((c) => c.elder >= 1);
+  const rich = (w) => w.visitors.length && w.cysts.length && w.cells.some((c) => c.chainLen > 1) && w.cells.some((c) => c.shade >= 1);
   let w;
   for (let seed = 1; seed <= 20; seed++) {
     w = sim.createWorld(seed);
@@ -174,7 +174,7 @@ function run(seed) {
   let longest = 0, quiet = 0, prev = 0;
   for (const o of [...onsetTicks, total]) { const g = (o - prev) / rate; longest = Math.max(longest, g); if (g >= 6) quiet += g; prev = o; }
   const music = { ons: onsetTicks.length / (total / rate), longest, quiet: quiet / (total / rate), chords2: chords2 / minutes, chords3: chords3 / minutes,
-                  harsh: pairs ? harsh / pairs : 0, seconds: pairs ? seconds / pairs : 0, lastNotes, maxVox, key: sim.keyName(w.music) };
+                  harsh: pairs ? harsh / pairs : 0, seconds: pairs ? seconds / pairs : 0, lastNotes, maxVox, key: sim.keyName(w.music), keysPerHour: w.music.rootChanges / (w.tick / rate / 3600) };
   const drift = sim.nutrientInventory(w) - (w.initialInventory + w.upwelled - w.carried + w.imported);
   const siDrift = sim.silicaInventory(w) - (w.initialSilica + w.siUpwelled + w.siWashed);
   Object.assign(water, { tMean: water.tSum / (water.n || 1), oMean: water.oSum / (water.n || 1), hypoxic: water.hypoxic / (water.n || 1),
@@ -226,7 +226,7 @@ for (let s = firstSeed; s < firstSeed + seeds; s++) {
     ` | chains ${r.sync.chains.toFixed(1)} in ${Math.round(r.sync.chained * 100)}% max ${r.longest} rings ${r.sync.coils.toFixed(1)} stars ${r.sync.stars.toFixed(1)}` +
     ` | dino ${Math.round(r.dino.share * 100)}% peak ${r.dino.peak} >=50 ${Math.round(r.dino.over50 * 100)}%` +
     ` | late diat/dino/green/cocco/crypto/cyano/tricho ${r.groups.share.map((x) => Math.round(x * 100)).join('/')}% mono ${Math.round(r.groups.mono * 100)}% lead ${r.groups.lead.map((x) => Math.round(x * 100)).join('/')}%` +
-    ` | music ${r.music.key} ons ${r.music.ons.toFixed(2)}/s vox<=${r.music.maxVox} quiet ${Math.round(r.music.quiet * 100)}% longest ${r.music.longest.toFixed(0)} s` +
+    ` | music ${r.music.key} keys ${r.music.keysPerHour.toFixed(1)}/h ons ${r.music.ons.toFixed(2)}/s vox<=${r.music.maxVox} quiet ${Math.round(r.music.quiet * 100)}% longest ${r.music.longest.toFixed(0)} s` +
     ` chords/min ${r.music.chords2.toFixed(1)} (3+ ${r.music.chords3.toFixed(1)}) clash ${(r.music.harsh * 100).toFixed(1)}% 2nds ${(r.music.seconds * 100).toFixed(0)}% last ${r.music.lastNotes}\n`);
   for (const [q, se] of r.seasons.entries()) {
     if (!se.n) continue;
@@ -299,7 +299,7 @@ for (const f of fast ? [] : (() => { try { return readdirSync(FIXTURES).filter((
   try {
     const fx = deserialize(readFileSync(new URL(f, FIXTURES))), w = sim.restoreWorld(fx.snap), rate = sim.PARAMS.time.tickRate;
     for (let t = 0; t < fx.minutes * 60 * rate; t++) { sim.stepWorld(w); w.music.notes.length = 0; }
-    const bad = w.cells.find((c) => ![c.x, c.y, c.vx, c.vy, c.energy, c.held, c.theta, c.age, c.elder].every(Number.isFinite));
+    const bad = w.cells.find((c) => ![c.x, c.y, c.vx, c.vy, c.energy, c.held, c.theta, c.age, c.shade].every(Number.isFinite));
     if (bad || !Number.isFinite(sim.nutrientInventory(w)) || !Number.isFinite(w.wind)) throw new Error(bad ? 'cell ' + bad.id + ' has a non-finite field' : 'non-finite world');
     fixtureLines.push(`${f}: loads and lives on (${sim.aliveCount(w)} cells after ${fx.minutes} min, ${sim.worldChecksum(w) === fx.checksum ? 'the same world as when saved' : 'the rules have changed since it was saved'})`);
   } catch (e) {

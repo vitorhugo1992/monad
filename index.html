@@ -4400,10 +4400,10 @@ function drawBackground(t) {
 
 // ---- Cyanobacteria: single-pixel specks where they are dense, twinkling slowly; the plumes drift with the fields ----
 // Smooth value noise on a lattice (render only): the plumes' texture
+const vnHash = (a, b) => hash01((a * 374761393) ^ (b * 668265263));
 function valueNoise(x, y) {
   const i = Math.floor(x), j = Math.floor(y), fx = x - i, fy = y - j, sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
-  const h = (a, b) => hash01((a * 374761393) ^ (b * 668265263));
-  return (h(i, j) * (1 - sx) + h(i + 1, j) * sx) * (1 - sy) + (h(i, j + 1) * (1 - sx) + h(i + 1, j + 1) * sx) * sy;
+  return (vnHash(i, j) * (1 - sx) + vnHash(i + 1, j) * sx) * (1 - sy) + (vnHash(i, j + 1) * (1 - sx) + vnHash(i + 1, j + 1) * sx) * sy;
 }
 const cyDrift = { x: 0, y: 0, t: -1 }, CUR_R = { u: 0, v: 0 };
 
@@ -4419,12 +4419,13 @@ function drawCyano(w, t) {
       if (i > COL.SHAFT && !(i >= COL.BLOOM && i < COL.BLOOM + 6) && !(i >= COL.MILKY && i < COL.MILKY + 4)) continue;   // water only
       const k = tintRow + (px >> 2), a = synTint[k], b = proTint[k];
       if (a + b < L.from) continue;
+      const ka = clamp((a - L.from) / L.full, 0, 1), kb = clamp((b - L.from) / L.full, 0, 1);
       const bx = view.bx0 + px, h = hash01((bx * 73856093) ^ (by * 19349663) ^ (slot + (bx & 7)) * 83492791);
+      if (h >= (ka * ka + kb * kb) * L.density / z) continue;   // no speck here even in a full patch: skip the noise (cheap first)
       const wx = (bx + 0.5) / z - cyDrift.x, wy = (by + 0.5) / z - cyDrift.y;
       const n = (1 - L.fine) * valueNoise(wx / L.grainX, wy / L.grainY) + L.fine * valueNoise(wx / (L.grainX * 0.4), wy / (L.grainY * 0.5));
       const patch = smoothstep(L.patchFrom, L.patchTo, n);
       if (patch <= 0) continue;
-      const ka = clamp((a - L.from) / L.full, 0, 1), kb = clamp((b - L.from) / L.full, 0, 1);
       const pa = ka * ka * patch * L.density / z, pb = kb * kb * patch * L.density / z;   // dense water shows far more than thin
       if (h < pa) ib[row + px] = syn + (h < pa * L.bright ? BRIGHT : HIGHLIGHT);
       else if (h < pa + pb) ib[row + px] = pro + (h < pa + pb * L.bright ? BRIGHT : HIGHLIGHT);
@@ -6295,27 +6296,36 @@ function composeFrame(w, now) {
   updateCaustics(waterT, w.tick);
   updateSwim(w, ta);
   updateGlow(w);
+  stage('PREP');
   drawBackground(waterT);
+  stage('BG');
   drawParticles(P.far, 1000, ta, false);
   drawParticles(P.mid, 2000, ta, false);
   drawPlumes(w);
+  stage('SPECK');
   drawCyano(w, waterT);
+  stage('CYANO');
   drawTricho(w, waterT);
   drawScum(w, waterT);
+  stage('TRICHO');
   drawSnow(w, t);
   drawDeposit(w);
   drawPebbles();
   drawCysts(w);
   updateCrawlers(w);
   drawCrawlers(t);
+  stage('FLOOR');
   drawCopepods(w, ta);
   drawKrill(w, ta);
+  stage('GRAZE');
   drawThreads(w);
   drawCells(w, t);
   drawFlashes(w);
   drawSongs(w);
+  stage('CELLS');
   drawVisitors(w, ta);
   drawVoiceRings(now);
+  stage('VISIT');
   updateBubbles(w, ta);
   updateRain(w, ta);
   drawBubbles();
@@ -6323,18 +6333,21 @@ function composeFrame(w, now) {
   drawTrail(now);
   drawRipples(now);
   drawParticles(P.near, 3000, ta, true);
+  stage('FX');
   drawHud(w, now);
   drawListenHint();
   let overlayMs = 0;
-  if (debug.on) { const t0 = performance.now(); drawDebug(w); overlayMs = performance.now() - t0; }
+  if (debug.on) { stage('HUD'); const t0 = performance.now(); drawDebug(w); overlayMs = performance.now() - t0; stage(null); }
   drawNotebookGlyph(now);
   drawMusicGlyph(now);
   updateCurio(w, now);
   drawCurio(now);
   if (notebook.open) drawNotebook(w);
+  stage('UI');
   blitTimeOfDay(w);
   inkCurio();
   if (notebook.open) inkNotebook();
+  stage('TINT');
   return overlayMs;
 }
 
@@ -6342,6 +6355,7 @@ function render(w, now) {
   const overlayMs = composeFrame(w, now);
   view.offCtx.putImageData(view.img, 0, 0);
   view.ctx.drawImage(view.off, view.ox, view.oy, W * view.scale, H * view.scale);
+  stage('BLIT');
   return overlayMs;
 }
 
@@ -7999,10 +8013,26 @@ function debugSample(w) {
   if (w.tick % minute === 0) debug.checksum = { minute: w.tick / minute, hash: worldChecksum(w) };
 }
 
+// Where a frame's time goes, per stage, smoothed (ms; measured only while the overlay is on)
+const stageMs = {};
+let stageAt = 0;
+function stage(name) {
+  if (!debug.on) return;
+  const n = performance.now();
+  if (name) stageMs[name] = (stageMs[name] || 0) * 0.95 + (n - stageAt) * 0.05;
+  stageAt = n;
+}
+
 function recordFrame(ms) {
   debug.frameMs[debug.frameIdx] = ms;
   debug.frameIdx = (debug.frameIdx + 1) % debug.frameMs.length;
   debug.frameCount++;
+}
+
+// The costliest stages of a frame, two lines of them
+function stageLines() {
+  const top = Object.entries(stageMs).sort((a, b) => b[1] - a[1]).map(([k, v]) => k + ' ' + v.toFixed(1));
+  return [top.slice(0, 4).join(' '), top.slice(4, 8).join(' ')];
 }
 
 // Mini-maps in the top-right corner: nutrients (green) with cells as dots, light (gold) beside it,
@@ -8063,6 +8093,7 @@ function drawDebug(w) {
     'CHAIN ' + sy.chains + ' MAX ' + sy.longest + ' IN ' + Math.round(sy.chained * 100) + '%',
     'VOX ' + (audio.started ? audio.active : w.music.ends.length) + '  ONS ' + (w.music.recent.length / 10).toFixed(1) + '  KEY ' + keyName(w.music),
     'MS ' + avg.toFixed(1) + '  P95 ' + p95.toFixed(1),
+    ...stageLines(),
     'DROP ' + debug.droppedTicks,
     'CK ' + ck,
     'DAY ' + dayPhase(w).toFixed(2) + ' SUN ' + w.surfaceLight.toFixed(2) + ' WIND ' + w.wind.toFixed(2) + ' PL ' + w.pulses.length,
@@ -8125,7 +8156,9 @@ function advance(now) {
 
 function frame(now) {
   requestAnimationFrame(frame);
+  stage(null);
   const t0 = performance.now(), ticks = advance(now);
+  stage('SIM');
   // Everything visible is tied to simulation ticks or the camera, so other frames would be identical.
   if (ticks > 0 || needsRender) {
     const overlayMs = render(world, now);
@@ -8133,6 +8166,7 @@ function frame(now) {
     audioAmbience(world);
     audioVisitors(world);
     audioCyano(world);
+    stage('AUDIO');
     needsRender = false;
     recordFrame(performance.now() - t0 - overlayMs);
   }

@@ -33,8 +33,10 @@ short list of local rules, and everything else comes out of how they interact:
   dinoflagellates, green algae, yellow-to-green coccolithophores, red-to-blue cryptophytes.
 - **Cyanobacteria.** The most abundant photosynthesisers on Earth, far too small to see one by one: they live as
   a drifting cloud in the water, carried by slow currents, and show only when they bloom, as plumes of tiny
-  pink-orange and blue-green specks with a faint, sparkling shimmer of sound. They win in poor, calm water, feed
-  the grazers, and have their own viruses.
+  pink-orange and blue-green specks (close up, little clumps of cells) with a faint, sparkling shimmer of sound.
+  The two kinds trade off as in a real shelf sea: pink *Synechococcus* grows fast and tolerates cold, so it
+  blooms in spring; blue-green *Prochlorococcus* needs warm water but takes up scarce nutrients better and copes
+  with dim light, so it shares the summer. They feed the grazers and have their own viruses.
 - **Filamentous cyanobacteria** (like *Trichodesmium*, "sea sawdust"): golden-brown tufts and puffs of
   filaments that fix their own nitrogen from the air, so they thrive in warm, nutrient-poor water and fertilise it
   when they die. Gas vesicles float them up, so in calm, warm spells they gather into a scum at the surface that
@@ -71,6 +73,8 @@ short list of local rules, and everything else comes out of how they interact:
     so it slowly becomes a patchwork of its prey's colours. Stolen chloroplasts wear out, so it must keep
     hunting, and it meets the commonest prey most.
   - **Shade:** a dense bloom near the surface dims the water beneath it, so dim-light specialists live below.
+    Cells that spend days in the dim deep fill with pigment (shade acclimation): they catch dim light better and
+    need less, and form a dark deep chlorophyll layer.
   - **Coccolithophores' own virus** ends their blooms, as it does in the real ocean.
   - **Immigration:** "everything is everywhere, but the environment selects." Now and then a single newcomer
     drifts in from the open ocean. Most vanish; when the water turns their way, their kind is already there.
@@ -88,7 +92,7 @@ another group takes the lead of the water the whole water modulates to the new l
 
 The biology is meant to carry weight: size allometry, Margalef's mandala, a lagged grazer response, the biological pump, resting cysts, diel
 vertical migration, silica limitation, viral lysis and the viral shunt, kleptoplasty, a seed bank of
-newcomers, nitrogen fixation, stratification and tidal mixing, and hypoxia.
+newcomers, nitrogen fixation, stratification and tidal mixing, shade acclimation, and hypoxia.
 
 ## Playing
 
@@ -110,8 +114,10 @@ newcomers, nitrogen fixation, stratification and tidal mixing, and hypoxia.
   - **Migration:** where each form spends the day and the night.
   - **The ledger:** deaths (grazed, eaten by fish, hunted, lysed by viruses, suffocated...), cysts and visitors.
 
-  - **The music:** the key (its mode follows the season), a pitch circle where the notes sounding now (and a colony's
-    chords) appear as shapes, which species are playing which instrument, and a live spectrum.
+  - **The music:** the key (its mode follows the season, and it changes when a new group takes the lead of the
+    water), a pitch circle of the notes sounding now (C at the top, low notes near the centre; notes sounding
+    together are joined, so a colony's chord appears as a shape), which species play which instrument, the visitors'
+    voices and the prey they startle, and a live spectrum.
 
   The **note** beside the book turns the music off and on.
 - Now and then a small **i in an air bubble** rises in a corner. Tap it for a curiosity about what you are looking at:
@@ -129,7 +135,7 @@ newcomers, nitrogen fixation, stratification and tidal mixing, and hypoxia.
   <img src="docs/seafloor-amphipod.png" width="150" alt="At 4x on the seabed: an amphipod picks over the fallen marine snow">
 </p>
 <p align="center">
-  <img src="docs/moon-jellies.png" width="150" alt="At 3x: moon jellies pulse through the sunlit water, their gonad rings glowing rose and violet">
+  <img src="docs/moon-jellies.png" width="150" alt="At 3x: moon jellies pulse through the sunlit water, their horseshoe gonads glowing rose and violet, tentacles trailing as they drift">
   <img src="docs/curiosity-alexandrium.png" width="150" alt="At 8x: a curiosity card explains why Alexandrium thrives, above the cell itself">
   <img src="docs/notebook-day.png" width="150" alt="The field notebook's day page: the sun's arc, a summer's day of the year, the tide, the moon and the water">
   <img src="docs/notebook-census.png" width="150" alt="The field notebook's census: each form counted, with the population stacked by form over time">
@@ -150,13 +156,14 @@ notebook's ledger ends with **NEW WATER**, which asks before it lets the old wor
 ## Install it on your phone
 
 On Android, open **[vitorhugo1992.github.io/monad](https://vitorhugo1992.github.io/monad/)** in Chrome,
-then choose **⋮ → Install app**. It runs full screen and offline, and updates itself.
+then choose **⋮ → Install app**. It runs full screen and offline, updates itself, and keeps the screen on
+while you watch.
 
 ## Under the hood
 
 - **One file.** The whole app is `index.html`: vanilla JavaScript, Canvas 2D and the Web Audio API, with no
-  frameworks and no build step. The other files (`manifest.webmanifest`, `sw.js`, `icons/`) are only what
-  installing needs.
+  frameworks and no build step. The other files are what installing needs
+  (`manifest.webmanifest`, `sw.js`, `icons/`) and `facts.json`, the sourced curiosity facts.
 - **Pixel art from a fixed palette.** Everything renders at 180 × 320 pixels from a palette of 72 colours,
   with ordered dithering instead of gradients, and is scaled up by whole numbers.
 - **Deterministic.** All randomness comes from one seeded generator, the simulation runs at a fixed 30 ticks
@@ -166,7 +173,7 @@ then choose **⋮ → Install app**. It runs full screen and offline, and update
   browser and reports population cycles, migration, synchrony, chains, the music the voice budget lets
   through, nutrient conservation, determinism and the save/restore round trip.
 
-Options for exploring (these start a separate scratch world that is never saved):
-`?seed=` a number or word · `?speed=2|4|8` time-lapse · `?day=5|10|30` minutes per day ·
-`?zoom=1..8&at=x,y` · `?debug` (or `D`) the fields, population and voice overlay · `?bench` how fast your
-device lives a world out of sight.
+Options for exploring: `?seed=` a number or word, `?day=5|10|30` minutes per day and `?season=winter|spring|summer|autumn`
+start a separate scratch world that is never saved; `?speed=2|4|8` time-lapse, `?zoom=1..8&at=x,y` and `?debug`
+(or `D`: the fields, population, frame time and voice overlay) work on your own world too; `?bench` measures how
+fast your device lives a world out of sight.

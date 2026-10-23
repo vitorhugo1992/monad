@@ -7872,8 +7872,6 @@ function drawNewWater(y) {
 
 // ---- The music chapter (author, 2026-10-22): what the water plays, tied to who plays it. Only what is heard (the
 // heard log, page side): with the music off the pages stay drawn, but empty. ----
-const INSTRUMENTS = [['piano', 'FELT PIANO'], ['pad', 'PAD'], ['wood', 'MARIMBA'], ['string', 'PLUCKED STRING'], ['glock', 'GLOCKENSPIEL'],
-  ['vibe', 'VIBRAPHONE'], ['celesta', 'CELESTA'], ['kalimba', 'KALIMBA'], ['drone', 'DEEP DRONE']];
 // The visitors' voices (author: predators belong beside the instruments): sardines' chord, the sunfish's call, the
 // salps' line, the jellies' harp
 const VISITOR_VOICES = [['school', 'SARDINES', LIGHTBLUE], ['sunfish', 'SUNFISH', GOLD], ['salp', 'SALPS', EMERALD], ['harp', 'JELLY HARP', ROSE]];
@@ -7939,22 +7937,22 @@ function drawMusicPage(w, y) {
   dotted(P.x + 6, x1 - 7, vy, COL.SLATE);
   vy += 5;
 
-  // Who plays what: each instrument, the forms heard playing it in the last minute (most first), and its share
-  const since = now - M.share * 1000, count = {}, forms = {};
+  // Who sings: each form, lit while it sounds, and its share of the notes heard in the last minute (author, 2026-10-23:
+  // the instruments are only guidelines, so the cells are shown, not their instruments' names)
+  const since = now - M.share * 1000, count = {}, forms = {}, byForm = new Array(FORMS.length).fill(0);
   let total = 0;
   for (const n of heard.notes) {
     if (n.t <= since || n.t > now) continue;
     count[n.inst] = (count[n.inst] || 0) + 1;
-    if (n.form >= 0) (forms[n.inst] = forms[n.inst] || new Array(FORMS.length).fill(0))[n.form]++;
+    if (n.form >= 0) byForm[n.form]++;
     if (n.startled) { count.startled = (count.startled || 0) + 1; (forms.startled = forms.startled || new Array(FORMS.length).fill(0))[n.form]++; }
     total++;
   }
-  for (const [k, name] of INSTRUMENTS) {
-    const lit = heard.notes.some((n) => n.inst === k && n.t <= now && now < n.end), c = count[k] || 0;
-    ink(P.x + 6, vy, name, lit ? COL.FOAM : c ? COL.SHAFT : COL.SLATE);
-    if (forms[k]) forms[k].map((v, f) => [v, f]).filter(([v]) => v).sort((a, b) => b[0] - a[0]).slice(0, 3)
-      .forEach(([, f], i) => drawIcon(P.x + 66 + i * 9, vy - 1, f, !lit));
-    bar(P.x + 96, vy + 1, x1 - 7 - (P.x + 96), total ? c / total : 0, GOLD);
+  for (let f = 0; f < FORMS.length; f++) {
+    const lit = heard.notes.some((n) => n.form === f && n.t <= now && now < n.end), c = byForm[f];
+    drawIcon(P.x + 6, vy - 1, f, !lit && !c);
+    ink(P.x + 16, vy, FORMS[f].name, lit ? COL.FOAM : c ? COL.SHAFT : COL.SLATE);
+    bar(P.x + 96, vy + 1, x1 - 7 - (P.x + 96), total ? c / total : 0, FORMS[f].ramp);
     vy += 8;
   }
   // The visitors' own voices, in their colours, and the prey they startle (startle notes, also counted above)

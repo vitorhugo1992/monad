@@ -116,7 +116,7 @@ newcomers, nitrogen fixation, stratification and tidal mixing, shade acclimation
 
   - **The music:** the key (its mode follows the season, and it changes when a new group takes the lead of the
     water), a pitch circle of the notes sounding now (C at the top, low notes near the centre; notes sounding
-    together are joined, so a colony's chord appears as a shape), which species play which instrument, the visitors'
+    together are joined, so a colony's chord appears as a shape), which species are singing, the visitors'
     voices and the prey they startle, and a live spectrum.
 
   The **note** beside the book turns the music off and on.

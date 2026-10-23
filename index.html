@@ -518,6 +518,8 @@ const PARAMS = {
     chainForms: ['alexandrium', 'tripos'],
     stringForms: ['dinophysis', 'tripos'],   // these sound as plucked strings; Alexandrium and Prorocentrum as wood   // these build short chains; Dinophysis and Prorocentrum live single
     scale: 1.6,                         // drawn this much larger than the size gene's radius (dinoflagellates are big cells)
+    slow: 0.75,                         // they grow this much as fast as other cells (author, 2026-10-23: real dinoflagellates grow
+                                        // 2-3x slower than diatoms their size, Tang 1995), by how much of a dinoflagellate the cell is
     detailR: 3, groove: 0.09, grooveMin: 0.5, spiral: 0.18, sulcus: 0.55,
     alexandrium: { a: 1.0, b: 0.95, cingulum: 0, plates: 0.05, platesFromR: 6 },
     dinophysis: { a: 1.05, b: 0.8, cingulum: -0.7, listsFromR: 6, collarFrom: 0.75, collarReach: 1.3, collarBase: 0.45, collarFlare: 0.7, sailFrom: 0.5, sailTo: 0.55, sailDepth: 0.5 },
@@ -1296,6 +1298,7 @@ function deriveTraits(c) {
   c.maintK = M.maintenance / rs;             // per-biomass upkeep ~ size^-1/2: big cells endure the dark
   c.targetLight = PARAMS.light.surface * dexp(-PARAMS.light.atten * c.g.depthPref);
   c.dinoW = dinoWeight(c.g.timbre);
+  c.gainK *= 1 - (1 - PARAMS.dino.slow) * c.dinoW;   // dinoflagellates grow slower
   c.glassW = smoothstep(PARAMS.dino.fade, PARAMS.dino.gone, c.g.timbre);   // how much of a diatom it is: its need for silica
   c.hunter = c.dinoW > 0.5 && lineageDinoForm(c.spriteSeed) === 'dinophysis';   // steals chloroplasts
   c.kind = kindOf(c);
@@ -1721,7 +1724,7 @@ function steer(w, c, dt) {
 
   // Brighter than preferred -> swim down (+y); dimmer -> swim up. Bounded ratio, no log.
   // Night descent is swimming: diatoms (glass) don't swim, they only regulate their buoyancy, so they hold their depth
-  const night = (1 - smoothstep(D.darkLo, D.darkHi, w.surfaceLight)) * (1 - c.glassW);
+  const night = (1 - smoothstep(D.darkLo, D.darkHi, w.surfaceLight)) * (1 - c.glassW) * (c.kind === 7 ? 0 : 1);   // diatoms and coccolithophores (the plated cells don't swim: Frada et al. 2008) hold their depth
   if (night < 1) {
     const L = sampleField(w.fields.light, c.x, c.y), T = c.targetLight * w.surfaceLight;
     c.vy += (1 - night) * D.phototaxis * (L - T) / (L + T + 1e-9) * dt;
@@ -6447,6 +6450,7 @@ const NB = { TICK: 0, LIGHT: 1, WIND: 2, NUT: 3, GRAZ: 4, POP: 5, CYSTS: 6, CHAI
 
 const notebook = {
   open: false, page: 0, span: PARAMS.notebook.startSpan, solo: -1, guide: 0, hits: [],
+  niche: false, axis: -1, compare: -1,   // species page: its niche shown (not its description), the axis read, the form laid over it
   rows: new Float32Array(4096 * NB.STRIDE), count: 0, every: PARAMS.notebook.sampleEvery * PARAMS.time.tickRate, next: 0,
   visits: [], seenVisitor: 1, cols: null, colsKey: '', confirm: false,   // confirm: NEW WATER asked, waiting for YES or NO
   rests: [],   // the kept world resting while away beyond the catch-up limit: { tick, s }
@@ -7433,6 +7437,97 @@ function drawTrichoSpecimen(cx, cy, tick) {
     }
   }
 }
+// The niche (author, 2026-10-23; reviewed against the model and the literature: Litchman & Klausmeier 2008): eight traits,
+// the same for every entry so they compare, each scored 0..4 from the form's own rules in the model and true of the
+// real organism. Every axis reads "more of the trait as named": a fingerprint, not a score. Traits a form has or has
+// not are tags under it. Cyanobacteria are two shapes, Synechococcus and Prochlorococcus.
+const NICHE_AXES = [
+  ['GROWTH', 'FASTEST GROWTH IN GOOD LIGHT AND RICH WATER'],
+  ['POOR WATER', 'GROWS WHERE NUTRIENTS ARE SCARCE: ITS NUTRIENT AFFINITY'],
+  ['DIM LIGHT', 'GROWS IN DEEP, DIM WATER: EXTRA PIGMENTS, SHADE ACCLIMATION'],
+  ['WARM WATER', 'HOW WARM THE WATER MUST BE FOR IT TO GROW WELL. LOW: IT GROWS IN COLD WATER TOO'],
+  ['TURBULENCE', 'GROWS ON IN WATER STIRRED BY WIND AND TIDE (MARGALEF)'],
+  ['MIGRATION', 'MOVES ITSELF UP AND DOWN: FLAGELLA, OR FLOATS AND BALLAST'],
+  ['DEFENCE', 'ESCAPES GRAZERS: CHAINS, PLATES, SMALLNESS, TOXINS'],
+  ['VIRUS RISK', 'HOW HARD ITS OWN VIRUSES HIT WHEN ITS KIND IS CROWDED'],
+];
+const NICHE = [   // per guide entry: one shape (two for the cyanobacteria) and its tags
+  { v: [[4, 1, 2, 1, 4, 3, 1, 1]], tags: ['CYSTS'] },                       // green algae
+  { v: [[3, 1, 2, 1, 1, 4, 3, 1]], tags: ['CYSTS', 'CHAINS', 'GLOWS'] },    // Alexandrium
+  { v: [[2, 1, 2, 1, 1, 3, 1, 1]], tags: ['HUNTS'] },                       // Dinophysis (photosynthesis from stolen plastids)
+  { v: [[3, 1, 2, 1, 1, 4, 3, 1]], tags: ['CHAINS'] },                      // Tripos
+  { v: [[3, 1, 2, 1, 1, 4, 1, 1]], tags: [] },                              // Prorocentrum
+  { v: [[4, 1, 2, 1, 4, 1, 3, 1]], tags: ['SILICA', 'CYSTS', 'CHAINS'] },   // centric diatom
+  { v: [[4, 1, 2, 1, 4, 1, 3, 1]], tags: ['SILICA', 'CHAINS'] },            // pennate diatom
+  { v: [[3, 2, 2, 1, 3, 1, 2, 3]], tags: [] },                              // coccolithophore
+  { v: [[4, 1, 4, 1, 4, 3, 0, 1]], tags: [] },                              // cryptophyte
+  { v: [[2, 3, 0, 1, 4, 0, 2, 4], [1, 4, 3, 3, 4, 0, 2, 4]], tags: [] },    // Synechococcus, Prochlorococcus
+  { v: [[1, 4, 0, 4, 2, 3, 4, 3]], tags: ['FIXES N2'] },                    // filamentous
+];
+const nicheRamp = (e, k) => (e < FORMS.length ? FORMS[e].ramp : e === FORMS.length ? (k ? EMERALD : ROSE) : TRI_RAMP);
+const nicheName = (e) => (e < FORMS.length ? FORMS[e].name : e === FORMS.length ? 'CYANOBACTERIA' : 'FILAMENTOUS');
+// One shape: filled with a dither of its pigment (a second shape in the other half of the dither, so both show), outlined;
+// a compared one only as a dashed outline
+function nicheShape(vals, cx, cy, R, ramp, k, compared) {
+  const n = vals.length, pts = vals.map((v, i) => [cx + R * Math.max(v, 0.3) / 4 * dsin(TAU * i / n), cy - R * Math.max(v, 0.3) / 4 * dsin(TAU * i / n + Math.PI / 2)]);
+  if (!compared) {
+    for (let y = Math.floor(cy - R); y <= cy + R; y++) {
+      for (let x = Math.floor(cx - R); x <= cx + R; x++) {
+        const b = bayer(x, y);
+        if (k ? b < 0.5 || b >= 0.85 : b >= 0.4) continue;
+        let inside = false;
+        for (let i = 0, j = n - 1; i < n; j = i++) {
+          const [xi, yi] = pts[i], [xj, yj] = pts[j];
+          if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+        }
+        if (inside) put(x, y, rampBase(ramp) + BASE);
+      }
+    }
+  }
+  for (let i = 0; i < n; i++) {
+    const [x0, y0] = pts[i], [x1, y1] = pts[(i + 1) % n], m = Math.ceil(Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0)));
+    for (let s = 0; s <= m; s++) if (!compared || (s >> 1) % 2 === 0) put(Math.round(x0 + (x1 - x0) * s / (m || 1)), Math.round(y0 + (y1 - y0) * s / (m || 1)), rampBase(ramp) + (compared ? HIGHLIGHT : BRIGHT));
+  }
+  if (!compared) for (const [x, y] of pts) put(Math.round(x), Math.round(y), COL.GLOW);
+}
+// The niche view of the species page, from y down: the radar, the tapped axis's meaning, the tags, and a row of the
+// other entries to compare with (tap one to lay its shape over this one, again to take it off)
+function drawNiche(e, y) {
+  const P = PARAMS.notebook.page, x1 = P.x + P.w, cx = P.x + (P.w >> 1), R = 30, cy = y + 16 + R, n = NICHE_AXES.length, cmp = notebook.compare;
+  ink(P.x + 6, y, 'ITS NICHE', COL.SHAFT);
+  if (cmp >= 0 && cmp !== e) inkRight(x1 - 7, y, 'VS ' + nicheName(cmp), rampBase(nicheRamp(cmp, 0)) + HIGHLIGHT);
+  for (let lv = 1; lv <= 4; lv++) for (let a = 0; a < 96; a += 2) put(Math.round(cx + R * lv / 4 * dsin(TAU * a / 96)), Math.round(cy - R * lv / 4 * dsin(TAU * a / 96 + Math.PI / 2)), lv === 4 ? COL.SLATE : 2);
+  for (let i = 0; i < n; i++) {
+    const sx = dsin(TAU * i / n), sy = dsin(TAU * i / n + Math.PI / 2);
+    for (let s = 3; s < R; s += 2) put(Math.round(cx + sx * s), Math.round(cy - sy * s), 2);
+    const [name] = NICHE_AXES[i], tw = textWidth(name), lx = cx + (R + 5) * sx, ly = cy - (R + 5) * sy;
+    const ax = Math.round(sx > 0.2 ? lx : sx < -0.2 ? lx - tw : lx - (tw >> 1)), ay = Math.round(ly - 2 - (sy > 0.9 ? 2 : sy < -0.9 ? -2 : 0));
+    ink(ax, ay, name, i === notebook.axis ? COL.FOAM : COL.SLATE);
+    hit(ax - 2, ay - 3, tw + 4, 10, () => { notebook.axis = notebook.axis === i ? -1 : i; });
+  }
+  NICHE[e].v.forEach((v, k) => nicheShape(v, cx, cy, R, nicheRamp(e, k), k, false));
+  if (cmp >= 0 && cmp !== e) NICHE[cmp].v.forEach((v, k) => nicheShape(v, cx, cy, R, nicheRamp(cmp, k), k, true));   // over it, dashed
+  // what the tapped axis means (or how to read it)
+  let ty = cy + R + 15;
+  const text = notebook.axis >= 0 ? NICHE_AXES[notebook.axis][0] + ': ' + NICHE_AXES[notebook.axis][1] : 'A FINGERPRINT OF ITS WAYS, NOT A SCORE. TAP AN AXIS TO READ IT.';
+  for (const line of wrap(text, 38).slice(0, 3)) { ink(P.x + 6, ty, line, notebook.axis >= 0 ? COL.SHAFT : COL.SLATE); ty += 7; }
+  ty = cy + R + 38;
+  // tags: what it has that the others have not (the cyanobacteria: which shape is which)
+  const tags = e === FORMS.length ? [['SYNECHOCOCCUS', ROSE], ['PROCHLOROCOCCUS', EMERALD]] : NICHE[e].tags.map((t) => [t, nicheRamp(e, 0)]);
+  let tx = P.x + 6;
+  for (const [t, ramp] of tags) { ink(tx, ty, t, rampBase(ramp) + HIGHLIGHT); tx += textWidth(t) + 8; }
+  // compare with
+  const ry = ty + 11, gap = 13, gx = P.x + Math.floor((P.w - (10 * gap + 7)) / 2);
+  ink(P.x + 6, ry, 'COMPARE WITH', COL.SLATE);
+  for (let k = 0, slot = 0; k < NICHE.length; k++) {
+    if (k === e) continue;
+    const ix = gx + slot++ * gap, iy = ry + 9;
+    guideIcon(k, ix, iy, k !== cmp);
+    if (k === cmp) for (let i = -1; i < 8; i++) put(ix + i, iy + 9, rampBase(nicheRamp(k, 0)) + HIGHLIGHT);
+    hit(ix - 3, iy - 3, gap, 15, () => { notebook.compare = notebook.compare === k ? -1 : k; });
+  }
+}
+
 function drawSpeciesPage(w, y) {
   const N = PARAMS.notebook, P = N.page, F = FORMS.length, nE = F + 2, e = notebook.guide;
   const counts = new Array(F).fill(0), cyT = cyanoTotal(w);
@@ -7457,7 +7552,16 @@ function drawSpeciesPage(w, y) {
   let ty = by + bh + 5;
   ink(P.x + 6, ty, name, COL.FOAM);
   ink(P.x + 6, ty + 7, GUIDE[e].sub, COL.SLATE);
+  // ABOUT or NICHE: the description or the niche diagram in the same room (a tap on the description turns to the niche)
+  const x1 = P.x + P.w, nw = textWidth('NICHE'), aw = textWidth('ABOUT');
+  ink(x1 - 7 - nw, ty, 'NICHE', notebook.niche ? COL.FOAM : COL.SLATE);
+  ink(x1 - 7 - nw - 6 - aw, ty, 'ABOUT', notebook.niche ? COL.SLATE : COL.FOAM);
+  for (let i = -1; i <= nw; i++) put(x1 - 7 - (notebook.niche ? nw : nw + 6 + aw) + i, ty + 6, COL.FOAM);
+  hit(x1 - 7 - nw - 3, ty - 4, nw + 6, 13, () => { notebook.niche = true; });
+  hit(x1 - 7 - nw - 6 - aw - 3, ty - 4, aw + 6, 13, () => { notebook.niche = false; });
   ty += 17;
+  if (notebook.niche) { drawNiche(e, ty); return; }
+  hit(P.x, ty - 3, P.w, PAGE_END() - ty, () => { notebook.niche = true; });
   for (const line of wrap(GUIDE[e].text, 38)) { ink(P.x + 6, ty, line, COL.SHAFT); ty += 7; }
   const now = e < F ? counts[e] + (counts[e] === 1 ? ' CELL' : ' CELLS') : 'ABOUT ' + Math.round(e === F ? cyT.syn + cyT.pro : cyT.tri) + " CELLS' WORTH";
   ink(P.x + 6, Math.min(ty + 3, PAGE_END() - 5), 'IN THIS WATER NOW: ' + now, seen(e) ? rampBase(e < F ? FORMS[e].ramp : e === F ? CYANO_RAMP : TRI_RAMP) + BRIGHT : COL.SLATE);

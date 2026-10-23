@@ -135,7 +135,7 @@ newcomers, nitrogen fixation, stratification and tidal mixing, shade acclimation
   <img src="docs/seafloor-amphipod.png" width="150" alt="At 4x on the seabed: an amphipod picks over the fallen marine snow">
 </p>
 <p align="center">
-  <img src="docs/moon-jellies.png" width="150" alt="At 3x: moon jellies pulse through the sunlit water, their horseshoe gonads glowing rose and violet, tentacles trailing as they drift">
+  <img src="docs/moon-jellies.png" width="150" alt="At 3x: moon jellies pulse through the sunlit water, their gonad rings glowing rose and violet">
   <img src="docs/curiosity-alexandrium.png" width="150" alt="At 8x: a curiosity card explains why Alexandrium thrives, above the cell itself">
   <img src="docs/notebook-day.png" width="150" alt="The field notebook's day page: the sun's arc, a summer's day of the year, the tide, the moon and the water">
   <img src="docs/notebook-census.png" width="150" alt="The field notebook's census: each form counted, with the population stacked by form over time">
